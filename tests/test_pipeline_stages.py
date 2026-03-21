@@ -3,6 +3,9 @@
 Tests probe, audio extraction, and frame extraction against the
 real test video file. Does NOT test model inference stages
 (source_separation, transcribe) as those require model downloads.
+
+Uses module-scoped fixtures so that expensive FFmpeg operations
+(probe, audio extract, frame extract) run only once per module.
 """
 
 from __future__ import annotations
@@ -32,21 +35,42 @@ from clipcannon.pipeline.source_resolution import resolve_source_path
 TEST_VIDEO = Path("/home/cabdru/clipcannon/testdata/2026-03-20 14-43-20.mp4")
 
 
-@pytest.fixture
-def project_setup(tmp_path: Path):
-    """Set up a temporary project for testing."""
+# ============================================================
+# MODULE-SCOPED FIXTURES: expensive operations run once
+# ============================================================
+
+
+@pytest.fixture(scope="module")
+def shared_project_dir(tmp_path_factory) -> Path:
+    """Create a single temp directory shared across the entire module."""
+    return tmp_path_factory.mktemp("pipeline_stages")
+
+
+@pytest.fixture(scope="module")
+def shared_config() -> ClipCannonConfig:
+    """Load config once for the module."""
+    return ClipCannonConfig.load()
+
+
+@pytest.fixture(scope="module")
+def probed_project(shared_project_dir: Path, shared_config: ClipCannonConfig):
+    """Run probe once and share the result across all tests that need it.
+
+    Returns:
+        Tuple of (project_id, db_path, project_dir, config, probe_result).
+    """
+    if not TEST_VIDEO.exists():
+        pytest.skip(f"Test video not found at {TEST_VIDEO}")
+
     project_id = f"test_{uuid.uuid4().hex[:8]}"
-    project_dir = tmp_path / project_id
+    project_dir = shared_project_dir / project_id
     project_dir.mkdir(parents=True)
 
-    # Create project database
-    db_path = create_project_db(project_id, base_dir=tmp_path)
+    db_path = create_project_db(project_id, base_dir=shared_project_dir)
 
-    # Create subdirectories
     for subdir in ["source", "stems", "frames", "storyboards"]:
         (project_dir / subdir).mkdir(exist_ok=True)
 
-    # Insert initial project row
     conn = get_connection(db_path, enable_vec=False, dict_rows=True)
     try:
         execute(
@@ -71,9 +95,41 @@ def project_setup(tmp_path: Path):
     finally:
         conn.close()
 
-    config = ClipCannonConfig.load()
+    result = asyncio.run(run_probe(project_id, db_path, project_dir, shared_config))
+    return project_id, db_path, project_dir, shared_config, result
 
-    return project_id, db_path, project_dir, config
+
+@pytest.fixture(scope="module")
+def audio_extracted_project(probed_project):
+    """Run audio extraction once (depends on probe), share the result.
+
+    Returns:
+        Tuple of (project_id, db_path, project_dir, config, audio_result).
+    """
+    project_id, db_path, project_dir, config, probe_result = probed_project
+    assert probe_result.success, f"Probe must succeed first: {probe_result.error_message}"
+
+    result = asyncio.run(run_audio_extract(project_id, db_path, project_dir, config))
+    return project_id, db_path, project_dir, config, result
+
+
+@pytest.fixture(scope="module")
+def frames_extracted_project(probed_project):
+    """Run frame extraction once (depends on probe), share the result.
+
+    Returns:
+        Tuple of (project_id, db_path, project_dir, config, frame_result).
+    """
+    project_id, db_path, project_dir, config, probe_result = probed_project
+    assert probe_result.success, f"Probe must succeed first: {probe_result.error_message}"
+
+    result = asyncio.run(run_frame_extract(project_id, db_path, project_dir, config))
+    return project_id, db_path, project_dir, config, result
+
+
+# ============================================================
+# PROBE TESTS (use shared probed_project)
+# ============================================================
 
 
 @pytest.mark.skipif(
@@ -83,16 +139,14 @@ def project_setup(tmp_path: Path):
 class TestProbeStage:
     """Tests for the probe pipeline stage."""
 
-    def test_probe_extracts_metadata(self, project_setup):
+    def test_probe_extracts_metadata(self, probed_project):
         """Probe should extract correct metadata from the test video."""
-        project_id, db_path, project_dir, config = project_setup
-        result = asyncio.run(run_probe(project_id, db_path, project_dir, config))
+        project_id, db_path, project_dir, config, result = probed_project
 
         assert result.success is True
         assert result.operation == "probe"
         assert result.provenance_record_id is not None
 
-        # Verify project table was updated
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
             row = fetch_one(
@@ -111,16 +165,15 @@ class TestProbeStage:
         assert row["source_sha256"] != "pending"
         assert row["status"] == "probed"
 
-    def test_probe_writes_provenance(self, project_setup):
+    def test_probe_writes_provenance(self, probed_project):
         """Probe should write a provenance record."""
-        project_id, db_path, project_dir, config = project_setup
-        result = asyncio.run(run_probe(project_id, db_path, project_dir, config))
+        project_id, db_path, project_dir, config, result = probed_project
 
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
             rows = fetch_all(
                 conn,
-                "SELECT * FROM provenance WHERE project_id = ?",
+                "SELECT * FROM provenance WHERE project_id = ? AND operation = 'probe'",
                 (project_id,),
             )
         finally:
@@ -133,6 +186,11 @@ class TestProbeStage:
         assert prov["chain_hash"] is not None
 
 
+# ============================================================
+# AUDIO EXTRACT TESTS (use shared audio_extracted_project)
+# ============================================================
+
+
 @pytest.mark.skipif(
     not TEST_VIDEO.exists(),
     reason=f"Test video not found at {TEST_VIDEO}",
@@ -140,14 +198,9 @@ class TestProbeStage:
 class TestAudioExtractStage:
     """Tests for the audio extraction pipeline stage."""
 
-    def test_audio_extract_produces_files(self, project_setup):
+    def test_audio_extract_produces_files(self, audio_extracted_project):
         """Audio extract should produce 16k and original WAV files."""
-        project_id, db_path, project_dir, config = project_setup
-
-        # Must probe first
-        asyncio.run(run_probe(project_id, db_path, project_dir, config))
-
-        result = asyncio.run(run_audio_extract(project_id, db_path, project_dir, config))
+        project_id, db_path, project_dir, config, result = audio_extracted_project
 
         assert result.success is True
         assert result.operation == "audio_extract"
@@ -161,11 +214,9 @@ class TestAudioExtractStage:
         assert audio_16k.stat().st_size > 0
         assert audio_orig.stat().st_size > 0
 
-    def test_audio_extract_writes_provenance(self, project_setup):
+    def test_audio_extract_writes_provenance(self, audio_extracted_project):
         """Audio extract should write a provenance record."""
-        project_id, db_path, project_dir, config = project_setup
-        asyncio.run(run_probe(project_id, db_path, project_dir, config))
-        result = asyncio.run(run_audio_extract(project_id, db_path, project_dir, config))
+        project_id, db_path, project_dir, config, result = audio_extracted_project
 
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
@@ -181,6 +232,11 @@ class TestAudioExtractStage:
         assert rows[0]["output_sha256"] is not None
 
 
+# ============================================================
+# FRAME EXTRACT TESTS (use shared frames_extracted_project)
+# ============================================================
+
+
 @pytest.mark.skipif(
     not TEST_VIDEO.exists(),
     reason=f"Test video not found at {TEST_VIDEO}",
@@ -188,14 +244,9 @@ class TestAudioExtractStage:
 class TestFrameExtractStage:
     """Tests for the frame extraction pipeline stage."""
 
-    def test_frame_extract_produces_frames(self, project_setup):
+    def test_frame_extract_produces_frames(self, frames_extracted_project):
         """Frame extract should produce approximately duration*2 frames."""
-        project_id, db_path, project_dir, config = project_setup
-
-        # Must probe first
-        asyncio.run(run_probe(project_id, db_path, project_dir, config))
-
-        result = asyncio.run(run_frame_extract(project_id, db_path, project_dir, config))
+        project_id, db_path, project_dir, config, result = frames_extracted_project
 
         assert result.success is True
         assert result.operation == "frame_extract"
@@ -207,11 +258,9 @@ class TestFrameExtractStage:
         assert frame_count > 400
         assert frame_count < 440
 
-    def test_frame_extract_writes_provenance(self, project_setup):
+    def test_frame_extract_writes_provenance(self, frames_extracted_project):
         """Frame extract should write a provenance record."""
-        project_id, db_path, project_dir, config = project_setup
-        asyncio.run(run_probe(project_id, db_path, project_dir, config))
-        result = asyncio.run(run_frame_extract(project_id, db_path, project_dir, config))
+        project_id, db_path, project_dir, config, result = frames_extracted_project
 
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
@@ -225,6 +274,32 @@ class TestFrameExtractStage:
 
         assert len(rows) == 1
         assert int(rows[0]["output_record_count"]) > 400
+
+
+# ============================================================
+# SOURCE RESOLUTION (uses probed_project)
+# ============================================================
+
+
+@pytest.mark.skipif(
+    not TEST_VIDEO.exists(),
+    reason=f"Test video not found at {TEST_VIDEO}",
+)
+class TestSourceResolution:
+    """Tests for source file resolution."""
+
+    def test_resolves_to_original(self, probed_project):
+        """Should resolve to original when no VFR normalization."""
+        project_id, db_path, project_dir, config, result = probed_project
+        assert result.success is True
+
+        resolved = asyncio.run(resolve_source_path(project_id, db_path))
+        assert resolved == TEST_VIDEO
+
+
+# ============================================================
+# PURE UNIT TESTS (no FFmpeg, no shared fixtures needed)
+# ============================================================
 
 
 class TestTopologicalSort:
@@ -304,19 +379,3 @@ class TestOrchestratorRegistration:
             orch.register_stage(PipelineStage(
                 name="stage_a", operation="op_a2", required=True,
             ))
-
-
-@pytest.mark.skipif(
-    not TEST_VIDEO.exists(),
-    reason=f"Test video not found at {TEST_VIDEO}",
-)
-class TestSourceResolution:
-    """Tests for source file resolution."""
-
-    def test_resolves_to_original(self, project_setup):
-        """Should resolve to original when no VFR normalization."""
-        project_id, db_path, project_dir, config = project_setup
-        asyncio.run(run_probe(project_id, db_path, project_dir, config))
-
-        resolved = asyncio.run(resolve_source_path(project_id, db_path))
-        assert resolved == TEST_VIDEO

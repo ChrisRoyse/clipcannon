@@ -420,37 +420,83 @@ clipcannon/
   <coverage_minimum>80% line coverage for src/clipcannon/ (excluding dashboard templates)</coverage_minimum>
 
   <required_tests>
-    <test_type scope="pipeline">Unit test for every pipeline stage — isolated with fixture inputs, mocked model inference</test_type>
-    <test_type scope="provenance">Unit test for hash computation, chain verification, and tamper detection</test_type>
-    <test_type scope="billing">Unit test for credit charge, refund, insufficient balance, HMAC verification</test_type>
-    <test_type scope="mcp_tools">Unit test for every MCP tool — verify response format, token count, error handling</test_type>
-    <test_type scope="db">Unit test for schema creation, query helpers, sqlite-vec operations</test_type>
-    <test_type scope="integration">Integration test: 10s fixture video through full pipeline → 19 provenance records</test_type>
-    <test_type scope="integration">Integration test: render workflow (Phase 2) — EDL → FFmpeg → output validation</test_type>
+    <test_type scope="pipeline">Test for every pipeline stage — use real video for required stages, synthetic data for derived stages</test_type>
+    <test_type scope="provenance">Test hash computation, chain verification, and tamper detection with real chain records</test_type>
+    <test_type scope="billing">Test credit charge, refund, insufficient balance, HMAC sign/verify/tamper, idempotency keys</test_type>
+    <test_type scope="mcp_tools">Test every MCP tool — verify response format, error handling, DB state after operation</test_type>
+    <test_type scope="db">Test schema creation, query helpers, sqlite-vec vector operations (correct + wrong dimensions)</test_type>
+    <test_type scope="integration">Integration test: real video through full pipeline → verify every DB table + file on disk</test_type>
     <test_type scope="integration">Integration test: billing workflow — charge → process → verify OR charge → fail → refund</test_type>
     <test_type scope="e2e">E2E test: full workflow from ingest to VUD delivery via MCP tools</test_type>
     <test_type scope="performance">Benchmark: pipeline time, VRAM peak, MCP response sizes, sqlite-vec search time</test_type>
   </required_tests>
 
+  <test_data_policy>
+    <rule>NO mock data — use real video files or synthetic data (PIL-generated frames, programmatic DB inserts)</rule>
+    <rule>NO mock.patch on core logic — only mock external services (Stripe, Cloudflare D1) and unavailable ML models</rule>
+    <rule>Tests must verify Sources of Truth directly — open the database with raw sqlite3 or check files with os.path.exists</rule>
+    <rule>Do NOT rely solely on function return values — independently verify the side effects (DB rows, files, HMAC state)</rule>
+    <rule>For edge cases, print BEFORE and AFTER state to prove the outcome</rule>
+  </test_data_policy>
+
+  <fixture_optimization>
+    <!-- CRITICAL: These rules prevent the test suite from becoming slow -->
+    <rule id="TEST-OPT-01">NEVER re-run FFmpeg operations in function-scoped fixtures — use module scope for probe, audio extract, frame extract</rule>
+    <rule id="TEST-OPT-02">NEVER reload ML models between tests — load once per module or session, share across tests</rule>
+    <rule id="TEST-OPT-03">Use module-scoped fixtures for any operation taking more than 1 second</rule>
+    <rule id="TEST-OPT-04">Use function-scoped fixtures only for lightweight setup (empty DB creation, synthetic data insertion)</rule>
+    <rule id="TEST-OPT-05">Create PIL Images programmatically instead of extracting real frames when testing non-FFmpeg logic</rule>
+    <rule id="TEST-OPT-06">Share DB state across tests in the same module when tests are read-only (assertions only, no mutations)</rule>
+    <rule id="TEST-OPT-07">Use tmp_path_factory.mktemp() in module-scoped fixtures (not tmp_path which is function-scoped)</rule>
+    <rule id="TEST-OPT-08">Chain expensive fixtures: probed_project → audio_extracted_project → frames_extracted_project — each runs once, downstream tests share the result</rule>
+  </fixture_optimization>
+
+  <fixture_scope_guide>
+    <!-- When to use each scope -->
+    <scope name="session">ML model loading, GPU initialization — load once for entire test run</scope>
+    <scope name="module">FFmpeg operations (probe, audio extract, frame extract), full pipeline runs — shared by all tests in one file</scope>
+    <scope name="function">Fresh databases, synthetic data, isolated mutation tests — each test gets its own</scope>
+  </fixture_scope_guide>
+
   <test_patterns>
     <rule>Tests ship WITH implementation, not as separate tasks</rule>
-    <rule>Use pytest as test runner</rule>
-    <rule>Use pytest-asyncio for async test functions</rule>
+    <rule>Use pytest as test runner with pytest-asyncio (asyncio_mode = "auto")</rule>
     <rule>Fixture data stored in tests/fixtures/ — never inline in test files</rule>
-    <rule>Mock GPU model inference in unit tests — integration tests use real models on CI with GPU</rule>
-    <rule>MCP tool tests must assert response token count is under 25K</rule>
-    <rule>Provenance tests must include tamper-then-verify scenarios</rule>
+    <rule>MCP tool tests must assert response format matches spec (error codes, JSON structure)</rule>
+    <rule>Provenance tests must include tamper-then-verify scenarios (modify field → verify_chain detects exact record)</rule>
+    <rule>Billing tests must verify physical DB state after every charge/refund (not just API response)</rule>
+    <rule>Pipeline stage tests must verify: StageResult.success, provenance record written, DB rows inserted, files created</rule>
+    <rule>Break monolithic test methods into focused assertions — one test per verification concern</rule>
   </test_patterns>
+
+  <test_structure>
+    <!-- Actual test file layout -->
+    tests/
+    ├── test_pipeline_stages.py      # Module-scoped: real video, FFmpeg ops run once
+    ├── test_visual_pipeline.py      # Function-scoped: synthetic PIL frames, no FFmpeg
+    ├── test_derived_stages.py       # Function-scoped: synthetic DB data, no models
+    ├── test_understanding_tools.py  # Function-scoped: synthetic DB data, tool response format
+    ├── test_provenance_integration.py  # Function-scoped: fresh DB per chain test
+    ├── test_billing.py              # Function-scoped: FastAPI TestClient, HMAC tests
+    ├── dashboard/
+    │   └── test_dashboard.py        # Function-scoped: FastAPI TestClient, API endpoints
+    └── integration/
+        ├── test_full_pipeline.py    # Module-scoped: full pipeline on real video, 15+ assertions
+        └── manual_verify.py         # Standalone: prints physical proof of every table and file
+  </test_structure>
 
   <test_commands>
     <command purpose="all_tests">pytest tests/ -v</command>
-    <command purpose="unit_only">pytest tests/unit/ -v</command>
-    <command purpose="integration">pytest tests/integration/ -v --gpu-required</command>
+    <command purpose="quick_check">pytest tests/ -q --tb=short</command>
+    <command purpose="integration">pytest tests/integration/ -v</command>
     <command purpose="coverage">pytest tests/ --cov=src/clipcannon --cov-report=term-missing</command>
     <command purpose="type_check">pyright src/</command>
     <command purpose="lint">ruff check src/ tests/</command>
     <command purpose="format">ruff format src/ tests/</command>
+    <command purpose="manual_verify">python tests/integration/manual_verify.py</command>
   </test_commands>
+
+  <full_guide>See docs2/Testing_Guide.md for the complete testing guide with code examples, templates, and cookbook recipes.</full_guide>
 
 </testing_requirements>
 
