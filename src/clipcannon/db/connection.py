@@ -13,9 +13,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator
 
 from clipcannon.exceptions import DatabaseError
 
@@ -136,34 +134,3 @@ def get_connection(
 
     logger.info("Connected to database: %s", path)
     return conn
-
-
-@contextmanager
-def transaction(conn: sqlite3.Connection) -> Generator[sqlite3.Connection, None, None]:
-    """Context manager for SQLite transactions.
-
-    Commits on successful exit, rolls back on exception.
-
-    Args:
-        conn: SQLite connection to manage.
-
-    Yields:
-        The connection within a transaction.
-
-    Raises:
-        DatabaseError: If commit or rollback fails.
-    """
-    try:
-        yield conn
-        conn.commit()
-    except Exception as exc:
-        try:
-            conn.rollback()
-        except sqlite3.Error as rollback_exc:
-            logger.error("Rollback failed: %s", rollback_exc)
-        if isinstance(exc, DatabaseError):
-            raise
-        raise DatabaseError(
-            f"Transaction failed: {exc}",
-            details={"error": str(exc)},
-        ) from exc

@@ -14,19 +14,14 @@ authors = [
 ]
 
 dependencies = [
-    # Core
-    "fastmcp>=0.1.0",
+    # Core MCP
+    "mcp>=1.0.0",
     "pydantic>=2.0",
     "httpx>=0.25.0",
     "uvicorn>=0.30.0",
     "fastapi>=0.110.0",
     "python-jose[cryptography]>=3.3.0",
-    # ML
-    "torch>=2.3.0",
-    "faster-whisper>=1.0.0",
-    "transformers>=4.40.0",
-    "sentence-transformers>=3.0.0",
-    "demucs>=4.0.0",
+    # Image processing
     "Pillow>=10.0.0",
     # Processing
     "numpy>=1.26.0",
@@ -38,6 +33,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ml = [
+    # ML models - install separately as they are large
+    "torch>=2.3.0",
+    "faster-whisper>=1.0.0",
+    "transformers>=4.40.0",
+    "sentence-transformers>=3.0.0",
+    "demucs>=4.0.0",
+    "librosa>=0.10.0",
+]
+
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23.0",

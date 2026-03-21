@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  clipcannon:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: clipcannon
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+      - CLIPCANNON_DEV_MODE=true
+      - HF_TOKEN=${HF_TOKEN:-}
+      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:-}
+    ports:
+      - "3100:3100"   # License server
+      - "3200:3200"   # Dashboard
+    volumes:
+      - clipcannon-data:/root/.clipcannon
+      - ${VIDEO_DIR:-./videos}:/videos:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3200/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  clipcannon-data:

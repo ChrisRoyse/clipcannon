@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClipCannon Dashboard</title>
+    <style>
+        :root {
+            --bg-primary: #0f1117;
+            --bg-secondary: #1a1d28;
+            --bg-card: #21252f;
+            --border: #2d3140;
+            --text-primary: #e8eaf0;
+            --text-secondary: #9298a8;
+            --text-muted: #5f6575;
+            --accent: #4f8ff7;
+            --accent-hover: #3a7de8;
+            --success: #34c759;
+            --warning: #ff9f0a;
+            --danger: #ff453a;
+            --radius: 8px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 32px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo {
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+
+        .logo span { color: var(--accent); }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .balance-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .balance-amount { color: var(--accent); font-weight: 700; }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .status-dot.online { background: var(--success); }
+        .status-dot.offline { background: var(--danger); }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px 32px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .card-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .card-badge {
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: var(--bg-secondary);
+            color: var(--text-muted);
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .stat-row:last-child { border-bottom: none; }
+
+        .stat-row-label { color: var(--text-secondary); font-size: 13px; }
+        .stat-row-value { font-weight: 500; font-size: 13px; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            text-align: left;
+            padding: 10px 12px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        td {
+            padding: 10px 12px;
+            font-size: 13px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        tr:hover td { background: var(--bg-secondary); }
+
+        .status-pill {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-pill.ready { background: rgba(52, 199, 89, 0.15); color: var(--success); }
+        .status-pill.processing { background: rgba(79, 143, 247, 0.15); color: var(--accent); }
+        .status-pill.created { background: rgba(146, 152, 168, 0.15); color: var(--text-secondary); }
+        .status-pill.error { background: rgba(255, 69, 58, 0.15); color: var(--danger); }
+
+        .progress-bar {
+            height: 6px;
+            background: var(--bg-secondary);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+
+        .timeline-item {
+            display: flex;
+            gap: 12px;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .timeline-item:last-child { border-bottom: none; }
+
+        .timeline-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--accent);
+            margin-top: 6px;
+            flex-shrink: 0;
+        }
+
+        .timeline-content { flex: 1; }
+
+        .timeline-op {
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        .timeline-detail {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+
+        .timeline-hash {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state p { font-size: 14px; margin-top: 8px; }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: var(--text-primary);
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--bg-card);
+            color: var(--text-primary);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .btn:hover { background: var(--bg-secondary); }
+
+        .btn-primary {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .btn-primary:hover { background: var(--accent-hover); }
+
+        .provenance-input {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .provenance-input input {
+            flex: 1;
+            padding: 8px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text-primary);
+            font-size: 13px;
+        }
+
+        .provenance-input input::placeholder { color: var(--text-muted); }
+        .provenance-input input:focus { outline: none; border-color: var(--accent); }
+
+        .packages-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .package-card {
+            padding: 16px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            text-align: center;
+        }
+
+        .package-name {
+            font-weight: 600;
+            font-size: 14px;
+            text-transform: capitalize;
+            margin-bottom: 8px;
+        }
+
+        .package-credits {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .package-price {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .tab-bar {
+            display: flex;
+            gap: 0;
+            margin-bottom: 24px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tab {
+            padding: 10px 20px;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.15s;
+        }
+
+        .tab:hover { color: var(--text-primary); }
+        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .loading { color: var(--text-muted); font-size: 13px; padding: 20px; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">Clip<span>Cannon</span></div>
+        <div class="header-right">
+            <div class="balance-badge">
+                Credits: <span class="balance-amount" id="header-balance">--</span>
+            </div>
+            <div>
+                <span class="status-dot" id="health-dot"></span>
+                <span id="health-text" style="font-size:12px;color:var(--text-secondary)">checking...</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="tab-bar">
+            <div class="tab active" data-tab="overview">Overview</div>
+            <div class="tab" data-tab="projects">Projects</div>
+            <div class="tab" data-tab="credits">Credits</div>
+            <div class="tab" data-tab="provenance">Provenance</div>
+        </div>
+
+        <!-- OVERVIEW TAB -->
+        <div id="tab-overview" class="tab-content active">
+            <div class="grid">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Credit Balance</span>
+                    </div>
+                    <div class="stat-value" id="credit-balance">--</div>
+                    <div class="stat-label">credits remaining</div>
+                    <div style="margin-top:12px">
+                        <div class="stat-row">
+                            <span class="stat-row-label">Spent this month</span>
+                            <span class="stat-row-value" id="credit-spent">--</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-row-label">Monthly limit</span>
+                            <span class="stat-row-value" id="credit-limit">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">GPU Status</span>
+                    </div>
+                    <div id="gpu-info">
+                        <div class="loading">Loading GPU info...</div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">System Health</span>
+                    </div>
+                    <div id="health-info">
+                        <div class="loading">Loading health info...</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Recent Projects</span>
+                    <span class="card-badge" id="project-count">0 projects</span>
+                </div>
+                <div id="recent-projects">
+                    <div class="loading">Loading projects...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PROJECTS TAB -->
+        <div id="tab-projects" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">All Projects</span>
+                </div>
+                <div id="all-projects">
+                    <div class="loading">Loading projects...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CREDITS TAB -->
+        <div id="tab-credits" class="tab-content">
+            <div class="grid">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Balance</span>
+                    </div>
+                    <div class="stat-value" id="credits-detail-balance">--</div>
+                    <div class="stat-label">credits remaining</div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Credit Rates</span>
+                    </div>
+                    <div id="credit-rates"></div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Available Packages</span>
+                </div>
+                <div id="credit-packages" class="packages-grid"></div>
+            </div>
+            <div class="card" style="margin-top:20px">
+                <div class="card-header">
+                    <span class="card-title">Transaction History</span>
+                </div>
+                <div id="credit-history">
+                    <div class="loading">Loading history...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PROVENANCE TAB -->
+        <div id="tab-provenance" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Provenance Chain Viewer</span>
+                </div>
+                <div class="provenance-input">
+                    <input type="text" id="prov-project-id" placeholder="Enter project ID...">
+                    <button class="btn btn-primary" onclick="loadProvenance()">Load</button>
+                    <button class="btn" onclick="verifyProvenance()">Verify Chain</button>
+                </div>
+                <div id="prov-status"></div>
+                <div id="prov-timeline">
+                    <div class="empty-state">
+                        <p>Enter a project ID to view its provenance chain.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const API_BASE = '';
+
+    // Tab switching
+    document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            tab.classList.add('active');
+            document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            if (tab.dataset.tab === 'credits') loadCreditsTab();
+            if (tab.dataset.tab === 'projects') loadAllProjects();
+        });
+    });
+
+    async function api(path) {
+        try {
+            const r = await fetch(API_BASE + path);
+            return await r.json();
+        } catch(e) {
+            console.error('API error:', path, e);
+            return null;
+        }
+    }
+
+    // Health check
+    async function checkHealth() {
+        const d = await api('/health');
+        const dot = document.getElementById('health-dot');
+        const txt = document.getElementById('health-text');
+        if (d && d.status === 'ok') {
+            dot.className = 'status-dot online';
+            txt.textContent = 'v' + d.version;
+        } else {
+            dot.className = 'status-dot offline';
+            txt.textContent = 'offline';
+        }
+    }
+
+    // Overview data
+    async function loadOverview() {
+        const d = await api('/api/overview');
+        if (!d) return;
+
+        // GPU
+        const gpu = document.getElementById('gpu-info');
+        if (d.gpu && d.gpu.available) {
+            gpu.innerHTML = `
+                <div class="stat-value" style="font-size:18px">${d.gpu.device}</div>
+                <div style="margin-top:12px">
+                    <div class="stat-row">
+                        <span class="stat-row-label">VRAM Total</span>
+                        <span class="stat-row-value">${d.gpu.vram_total_gb} GB</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-row-label">VRAM Used</span>
+                        <span class="stat-row-value">${d.gpu.vram_used_gb} GB</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-row-label">CUDA</span>
+                        <span class="stat-row-value">${d.gpu.cuda_version}</span>
+                    </div>
+                </div>`;
+        } else {
+            gpu.innerHTML = '<div class="empty-state"><p>No GPU detected</p></div>';
+        }
+
+        // System health
+        const health = document.getElementById('health-info');
+        if (d.system_health && d.system_health.disk) {
+            const disk = d.system_health.disk;
+            health.innerHTML = `
+                <div class="stat-row">
+                    <span class="stat-row-label">Disk Used</span>
+                    <span class="stat-row-value">${disk.used_gb} / ${disk.total_gb} GB (${disk.usage_pct}%)</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width:${disk.usage_pct}%"></div>
+                </div>
+                <div class="stat-row" style="margin-top:8px">
+                    <span class="stat-row-label">Free Space</span>
+                    <span class="stat-row-value">${disk.free_gb} GB</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-row-label">Status</span>
+                    <span class="stat-row-value" style="color:var(--success)">${d.system_health.status}</span>
+                </div>`;
+        }
+
+        // Recent projects
+        renderProjectTable('recent-projects', d.recent_projects || [], true);
+        document.getElementById('project-count').textContent =
+            (d.recent_projects ? d.recent_projects.length : 0) + ' projects';
+    }
+
+    // Credits
+    async function loadCredits() {
+        const d = await api('/api/credits/balance');
+        if (!d) return;
+
+        const bal = d.balance >= 0 ? d.balance : '--';
+        document.getElementById('header-balance').textContent = bal;
+        document.getElementById('credit-balance').textContent = bal;
+        document.getElementById('credit-spent').textContent = d.spending_this_month || 0;
+        document.getElementById('credit-limit').textContent = d.spending_limit || 200;
+
+        if (d.balance < 0) {
+            document.getElementById('credit-balance').style.color = 'var(--text-muted)';
+        }
+    }
+
+    async function loadCreditsTab() {
+        const bal = await api('/api/credits/balance');
+        if (bal) {
+            document.getElementById('credits-detail-balance').textContent =
+                bal.balance >= 0 ? bal.balance : '--';
+        }
+
+        const pkg = await api('/api/credits/packages');
+        if (pkg) {
+            const ratesEl = document.getElementById('credit-rates');
+            let ratesHtml = '';
+            for (const [op, cost] of Object.entries(pkg.credit_rates || {})) {
+                ratesHtml += `<div class="stat-row">
+                    <span class="stat-row-label">${op}</span>
+                    <span class="stat-row-value">${cost} credits</span>
+                </div>`;
+            }
+            ratesEl.innerHTML = ratesHtml;
+
+            const pkgEl = document.getElementById('credit-packages');
+            pkgEl.innerHTML = (pkg.packages || []).map(p => `
+                <div class="package-card">
+                    <div class="package-name">${p.name}</div>
+                    <div class="package-credits">${p.credits}</div>
+                    <div class="package-price">${p.price_display}</div>
+                </div>`).join('');
+        }
+
+        const hist = await api('/api/credits/history');
+        const histEl = document.getElementById('credit-history');
+        if (hist && hist.transactions && hist.transactions.length > 0) {
+            histEl.innerHTML = `<table>
+                <thead><tr><th>ID</th><th>Operation</th><th>Credits</th><th>Project</th><th>Date</th></tr></thead>
+                <tbody>${hist.transactions.map(t => `<tr>
+                    <td style="font-family:monospace;font-size:11px">${t.transaction_id.substring(0,12)}</td>
+                    <td>${t.operation}</td>
+                    <td>${t.credits}</td>
+                    <td>${t.project_id || '-'}</td>
+                    <td>${t.created_at || '-'}</td>
+                </tr>`).join('')}</tbody></table>`;
+        } else {
+            histEl.innerHTML = '<div class="empty-state"><p>No transactions yet.</p></div>';
+        }
+    }
+
+    // Projects
+    function renderProjectTable(elId, projects, compact) {
+        const el = document.getElementById(elId);
+        if (!projects || projects.length === 0) {
+            el.innerHTML = '<div class="empty-state"><p>No projects found.</p></div>';
+            return;
+        }
+        el.innerHTML = `<table>
+            <thead><tr>
+                <th>Project</th>
+                <th>Status</th>
+                ${compact ? '' : '<th>Resolution</th><th>Duration</th>'}
+                <th>Modified</th>
+            </tr></thead>
+            <tbody>${projects.map(p => {
+                const modified = p.modified_at ? new Date(p.modified_at).toLocaleDateString() : '-';
+                const status = p.status || 'created';
+                const duration = p.duration_ms ? (p.duration_ms / 1000).toFixed(1) + 's' : '-';
+                return `<tr>
+                    <td style="font-weight:500">${p.name || p.project_id}</td>
+                    <td><span class="status-pill ${status}">${status}</span></td>
+                    ${compact ? '' : `<td>${p.resolution || '-'}</td><td>${duration}</td>`}
+                    <td style="color:var(--text-secondary)">${modified}</td>
+                </tr>`;
+            }).join('')}</tbody></table>`;
+    }
+
+    async function loadAllProjects() {
+        const d = await api('/api/projects');
+        renderProjectTable('all-projects', d ? d.projects : [], false);
+    }
+
+    // Provenance
+    async function loadProvenance() {
+        const pid = document.getElementById('prov-project-id').value.trim();
+        if (!pid) return;
+        const el = document.getElementById('prov-timeline');
+        el.innerHTML = '<div class="loading">Loading provenance...</div>';
+
+        const d = await api('/api/provenance/' + encodeURIComponent(pid) + '/timeline');
+        if (!d || !d.timeline || d.timeline.length === 0) {
+            el.innerHTML = `<div class="empty-state"><p>${d && d.error ? d.error : 'No provenance records found.'}</p></div>`;
+            return;
+        }
+
+        el.innerHTML = d.timeline.map(t => `
+            <div class="timeline-item">
+                <div class="timeline-dot"></div>
+                <div class="timeline-content">
+                    <div class="timeline-op">${t.operation} / ${t.stage}</div>
+                    <div class="timeline-detail">${t.description || ''} ${t.duration_ms ? '(' + t.duration_ms + 'ms)' : ''}</div>
+                    <div class="timeline-hash">chain: ${t.chain_hash_prefix || '-'}... | parent: ${t.parent_id || 'genesis'}</div>
+                </div>
+            </div>`).join('');
+    }
+
+    async function verifyProvenance() {
+        const pid = document.getElementById('prov-project-id').value.trim();
+        if (!pid) return;
+        const el = document.getElementById('prov-status');
+
+        const d = await api('/api/provenance/' + encodeURIComponent(pid) + '/verify');
+        if (!d) {
+            el.innerHTML = '<span style="color:var(--danger)">Verification request failed.</span>';
+            return;
+        }
+
+        if (d.verified) {
+            el.innerHTML = `<span style="color:var(--success)">Chain verified: ${d.total_records} records, all hashes match.</span>`;
+        } else {
+            el.innerHTML = `<span style="color:var(--danger)">Chain BROKEN at ${d.broken_at || 'unknown'}: ${d.issue || d.error || 'unknown error'}</span>`;
+        }
+    }
+
+    // Init
+    checkHealth();
+    loadOverview();
+    loadCredits();
+    </script>
+</body>
+</html>

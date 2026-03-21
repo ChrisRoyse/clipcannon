@@ -1,36 +1,170 @@
 """ClipCannon MCP server entry point.
 
 Provides the main() function used by the clipcannon console script
-defined in pyproject.toml. Initializes the FastMCP server with tool
-registry, stdio/SSE transport support, and configuration loading.
+defined in pyproject.toml. Initializes the MCP server with tool
+registry, stdio/SSE transport support, and structured logging.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import sys
+from datetime import datetime, timezone
+
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import TextContent, Tool
+
+from clipcannon import __version__
+from clipcannon.tools import ALL_TOOL_DEFINITIONS, TOOL_DISPATCHERS
 
 logger = logging.getLogger(__name__)
+
+
+class JsonFormatter(logging.Formatter):
+    """Structured JSON log formatter for MCP server output.
+
+    Formats log records as single-line JSON objects written to stderr
+    so they do not interfere with the MCP stdio transport on stdout.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Format a log record as a JSON string.
+
+        Args:
+            record: The log record to format.
+
+        Returns:
+            JSON-formatted log line.
+        """
+        log_entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[1]:
+            log_entry["exception"] = str(record.exc_info[1])
+        return json.dumps(log_entry, ensure_ascii=False)
+
+
+def _setup_logging() -> None:
+    """Configure structured JSON logging to stderr."""
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(JsonFormatter())
+
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+    # Quiet noisy loggers
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+def create_server() -> Server:
+    """Create and configure the MCP server with all tools registered.
+
+    Returns:
+        Configured MCP Server instance.
+    """
+    server = Server(
+        name="ClipCannon",
+        version=__version__,
+    )
+
+    @server.list_tools()
+    async def list_tools() -> list[Tool]:
+        """Return all registered tool definitions."""
+        return ALL_TOOL_DEFINITIONS
+
+    @server.call_tool()
+    async def call_tool(
+        name: str,
+        arguments: dict[str, object] | None = None,
+    ) -> list[TextContent]:
+        """Dispatch a tool call and return the result.
+
+        Routes the call to the appropriate tool dispatcher based on
+        the tool name. All tool results are serialized as JSON text.
+
+        Args:
+            name: Tool name to invoke.
+            arguments: Tool arguments dictionary.
+
+        Returns:
+            List containing a single TextContent with JSON result.
+        """
+        args = arguments or {}
+        logger.info("Tool call: %s", name)
+
+        dispatch_fn = TOOL_DISPATCHERS.get(name)
+        if dispatch_fn is None:
+            error_result = {
+                "error": {
+                    "code": "UNKNOWN_TOOL",
+                    "message": f"Unknown tool: {name}",
+                    "details": {"available_tools": [t.name for t in ALL_TOOL_DEFINITIONS]},
+                },
+            }
+            return [TextContent(
+                type="text",
+                text=json.dumps(error_result, indent=2, default=str),
+            )]
+
+        try:
+            result = await dispatch_fn(name, args)
+        except Exception as exc:
+            logger.exception("Tool %s failed", name)
+            result = {
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": f"Tool execution failed: {exc}",
+                    "details": {"tool": name},
+                },
+            }
+
+        return [TextContent(
+            type="text",
+            text=json.dumps(result, indent=2, default=str),
+        )]
+
+    logger.info(
+        "ClipCannon MCP server created: %d tools registered",
+        len(ALL_TOOL_DEFINITIONS),
+    )
+    return server
+
+
+async def run_stdio() -> None:
+    """Run the MCP server over stdio transport."""
+    server = create_server()
+    init_options = server.create_initialization_options()
+
+    async with stdio_server() as (read_stream, write_stream):
+        logger.info("ClipCannon MCP server v%s running on stdio", __version__)
+        await server.run(read_stream, write_stream, init_options)
 
 
 def main() -> None:
     """Start the ClipCannon MCP server.
 
-    Entry point for the ``clipcannon`` console script. Loads configuration,
-    initializes the MCP server, and starts serving on the configured
-    transport (stdio or SSE).
+    Entry point for the ``clipcannon`` console script. Configures
+    structured logging and starts the server on stdio transport.
     """
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        stream=sys.stderr,
-    )
+    _setup_logging()
+    logger.info("ClipCannon MCP Server v%s starting...", __version__)
 
-    logger.info("ClipCannon MCP Server starting...")
-
-    # Placeholder: Full MCP server implementation will be added by Agent 3
-    # This entry point exists to satisfy pyproject.toml [project.scripts]
-    logger.info("Server scaffold ready. MCP tool registration pending.")
+    try:
+        asyncio.run(run_stdio())
+    except KeyboardInterrupt:
+        logger.info("Server shutdown requested")
+    except Exception:
+        logger.exception("Server crashed")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

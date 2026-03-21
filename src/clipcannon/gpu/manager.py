@@ -213,7 +213,8 @@ class ModelManager:
                 except (ValueError, IndexError):
                     device_index = 0
             return torch.cuda.memory_allocated(device_index)
-        except Exception:
+        except Exception as exc:
+            logger.debug("Failed to query VRAM usage: %s", exc)
             return 0
 
     def _get_vram_free(self) -> int:
@@ -340,8 +341,8 @@ class ModelManager:
             try:
                 import torch
                 torch.cuda.empty_cache()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("CUDA cache clear failed during unload: %s", exc)
 
         logger.info("Unloaded model: %s", model_name)
 

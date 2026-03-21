@@ -9,6 +9,7 @@ structure.
 from __future__ import annotations
 
 import logging
+import sqlite3
 from pathlib import Path
 
 from clipcannon.db.connection import get_connection
@@ -388,8 +389,6 @@ _VECTOR_TABLES_SQL = [
         project_id TEXT,
         start_ms INTEGER,
         end_ms INTEGER,
-        energy REAL,
-        arousal REAL,
         emotion_embedding float[1024]
     )""",
     """CREATE VIRTUAL TABLE IF NOT EXISTS vec_speakers USING vec0(
@@ -431,24 +430,18 @@ PROJECT_SUBDIRS: list[str] = [
 ]
 
 
-def _create_core_tables(conn: object) -> None:
+def _create_core_tables(conn: sqlite3.Connection) -> None:
     """Create all core tables and indexes.
 
     Args:
-        conn: SQLite connection (typed as object to avoid import issues,
-            but must support executescript).
+        conn: SQLite connection.
     """
-    import sqlite3
-
-    if not isinstance(conn, sqlite3.Connection):
-        raise DatabaseError("Expected sqlite3.Connection instance")
-
     conn.executescript(_CORE_TABLES_SQL)
     conn.executescript(_INDEXES_SQL)
     logger.debug("Created core tables and indexes.")
 
 
-def _create_vector_tables(conn: object) -> bool:
+def _create_vector_tables(conn: sqlite3.Connection) -> bool:
     """Create sqlite-vec virtual tables.
 
     Args:
@@ -458,17 +451,13 @@ def _create_vector_tables(conn: object) -> bool:
         True if vector tables were created, False if sqlite-vec
         is not available.
     """
-    import sqlite3
-
-    if not isinstance(conn, sqlite3.Connection):
-        raise DatabaseError("Expected sqlite3.Connection instance")
 
     for sql in _VECTOR_TABLES_SQL:
         try:
             conn.execute(sql)
         except sqlite3.OperationalError as exc:
             error_msg = str(exc).lower()
-            if "no such module" in error_msg or "vec0" in error_msg:
+            if "no such module" in error_msg:
                 logger.warning(
                     "sqlite-vec extension not loaded. "
                     "Vector tables will not be created. "
@@ -484,18 +473,13 @@ def _create_vector_tables(conn: object) -> bool:
     return True
 
 
-def _record_schema_version(conn: object, version: int) -> None:
+def _record_schema_version(conn: sqlite3.Connection, version: int) -> None:
     """Record the schema version in the database.
 
     Args:
         conn: SQLite connection.
         version: Schema version number.
     """
-    import sqlite3
-
-    if not isinstance(conn, sqlite3.Connection):
-        raise DatabaseError("Expected sqlite3.Connection instance")
-
     conn.execute(
         "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
         (version,),
@@ -600,8 +584,6 @@ def get_schema_version(db_path: str | Path) -> int | None:
     Returns:
         Schema version number, or None if not set.
     """
-    import sqlite3
-
     try:
         conn = get_connection(db_path, enable_vec=False, dict_rows=False)
         result = conn.execute(

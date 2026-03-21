@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -176,7 +177,7 @@ def _row_to_provenance_record(row: dict[str, object]) -> ProvenanceRecord:
     )
 
 
-def _get_next_sequence(conn: object, project_id: str) -> int:
+def _get_next_sequence(conn: sqlite3.Connection, project_id: str) -> int:
     """Get the next sequence number for a provenance record.
 
     Args:
@@ -189,11 +190,6 @@ def _get_next_sequence(conn: object, project_id: str) -> int:
     Raises:
         ProvenanceError: If the count query fails.
     """
-    import sqlite3
-
-    if not isinstance(conn, sqlite3.Connection):
-        raise ProvenanceError("Expected sqlite3.Connection instance")
-
     try:
         count = count_rows(conn, "provenance", "project_id = ?", (project_id,))
     except Exception as exc:
@@ -206,7 +202,7 @@ def _get_next_sequence(conn: object, project_id: str) -> int:
 
 
 def _lookup_parent_chain_hash(
-    conn: object,
+    conn: sqlite3.Connection,
     project_id: str,
     parent_record_id: str | None,
 ) -> str:
@@ -223,13 +219,8 @@ def _lookup_parent_chain_hash(
     Raises:
         ProvenanceError: If the parent record does not exist.
     """
-    import sqlite3
-
     if parent_record_id is None:
         return GENESIS_HASH
-
-    if not isinstance(conn, sqlite3.Connection):
-        raise ProvenanceError("Expected sqlite3.Connection instance")
 
     row = fetch_one(
         conn,
