@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "clipcannon"
+version = "0.1.0"
+description = "AI-powered video understanding and editing pipeline via MCP"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [
+    { name = "ClipCannon Team" },
+]
+
+dependencies = [
+    # Core
+    "fastmcp>=0.1.0",
+    "pydantic>=2.0",
+    "httpx>=0.25.0",
+    "uvicorn>=0.30.0",
+    "fastapi>=0.110.0",
+    "python-jose[cryptography]>=3.3.0",
+    # ML
+    "torch>=2.3.0",
+    "faster-whisper>=1.0.0",
+    "transformers>=4.40.0",
+    "sentence-transformers>=3.0.0",
+    "demucs>=4.0.0",
+    "Pillow>=10.0.0",
+    # Processing
+    "numpy>=1.26.0",
+    "scipy>=1.12.0",
+    # Billing
+    "stripe>=8.0.0",
+    # Vector search
+    "sqlite-vec>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+clipcannon = "clipcannon.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/clipcannon", "src/license_server"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "SIM", "TCH"]
+ignore = ["ANN101", "ANN102"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+pythonpath = ["src"]
