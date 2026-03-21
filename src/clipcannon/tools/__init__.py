@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from mcp.types import Tool
 
+from clipcannon.tools.audio import (
+    AUDIO_TOOL_DEFINITIONS,
+    dispatch_audio_tool,
+)
 from clipcannon.tools.billing_tools import (
     BILLING_TOOL_DEFINITIONS,
     dispatch_billing_tool,
@@ -21,6 +25,10 @@ from clipcannon.tools.disk import (
     DISK_TOOL_DEFINITIONS,
     dispatch_disk_tool,
 )
+from clipcannon.tools.editing import (
+    EDITING_TOOL_DEFINITIONS,
+    dispatch_editing_tool,
+)
 from clipcannon.tools.project import (
     PROJECT_TOOL_DEFINITIONS,
     dispatch_project_tool,
@@ -28,6 +36,10 @@ from clipcannon.tools.project import (
 from clipcannon.tools.provenance_tools import (
     PROVENANCE_TOOL_DEFINITIONS,
     dispatch_provenance_tool,
+)
+from clipcannon.tools.rendering import (
+    RENDERING_TOOL_DEFINITIONS,
+    dispatch_rendering_tool,
 )
 from clipcannon.tools.understanding import (
     clipcannon_get_analytics,
@@ -256,39 +268,39 @@ async def dispatch_understanding_tool(
             str(arguments["project_id"]),
             arguments.get("options"),  # type: ignore[arg-type]
         )
-    elif name == "clipcannon_get_vud_summary":
+    if name == "clipcannon_get_vud_summary":
         return await clipcannon_get_vud_summary(str(arguments["project_id"]))
-    elif name == "clipcannon_get_analytics":
+    if name == "clipcannon_get_analytics":
         sections = arguments.get("sections")
         return await clipcannon_get_analytics(
             str(arguments["project_id"]),
             list(sections) if sections is not None else None,  # type: ignore[arg-type]
         )
-    elif name == "clipcannon_get_transcript":
+    if name == "clipcannon_get_transcript":
         return await clipcannon_get_transcript(
             str(arguments["project_id"]),
             int(arguments.get("start_ms", 0)),  # type: ignore[arg-type]
             int(arguments["end_ms"]) if arguments.get("end_ms") is not None else None,
         )
-    elif name == "clipcannon_get_segment_detail":
+    if name == "clipcannon_get_segment_detail":
         return await clipcannon_get_segment_detail(
             str(arguments["project_id"]),
             int(arguments["start_ms"]),  # type: ignore[arg-type]
             int(arguments["end_ms"]),  # type: ignore[arg-type]
         )
-    elif name == "clipcannon_get_frame":
+    if name == "clipcannon_get_frame":
         return await clipcannon_get_frame(
             str(arguments["project_id"]),
             int(arguments["timestamp_ms"]),  # type: ignore[arg-type]
         )
-    elif name == "clipcannon_get_frame_strip":
+    if name == "clipcannon_get_frame_strip":
         return await clipcannon_get_frame_strip(
             str(arguments["project_id"]),
             int(arguments["start_ms"]),  # type: ignore[arg-type]
             int(arguments["end_ms"]),  # type: ignore[arg-type]
             int(arguments.get("count", 9)),  # type: ignore[arg-type]
         )
-    elif name == "clipcannon_get_storyboard":
+    if name == "clipcannon_get_storyboard":
         start = arguments.get("start_ms")
         end = arguments.get("end_ms")
         return await clipcannon_get_storyboard(
@@ -297,7 +309,7 @@ async def dispatch_understanding_tool(
             int(start) if start is not None else None,
             int(end) if end is not None else None,
         )
-    elif name == "clipcannon_search_content":
+    if name == "clipcannon_search_content":
         return await clipcannon_search_content(
             str(arguments["project_id"]),
             str(arguments["query"]),
@@ -313,30 +325,46 @@ TOOL_DISPATCHERS: dict[str, object] = {}
 
 # Build dispatcher map from all modules
 for _defs, _dispatch in [
+    # Phase 1 modules
     (PROJECT_TOOL_DEFINITIONS, dispatch_project_tool),
     (PROVENANCE_TOOL_DEFINITIONS, dispatch_provenance_tool),
     (DISK_TOOL_DEFINITIONS, dispatch_disk_tool),
     (CONFIG_TOOL_DEFINITIONS, dispatch_config_tool),
     (UNDERSTANDING_TOOL_DEFINITIONS, dispatch_understanding_tool),
     (BILLING_TOOL_DEFINITIONS, dispatch_billing_tool),
+    # Phase 2 modules
+    (EDITING_TOOL_DEFINITIONS, dispatch_editing_tool),
+    (RENDERING_TOOL_DEFINITIONS, dispatch_rendering_tool),
+    (AUDIO_TOOL_DEFINITIONS, dispatch_audio_tool),
 ]:
     for _tool_def in _defs:
         TOOL_DISPATCHERS[_tool_def.name] = _dispatch
 
 ALL_TOOL_DEFINITIONS = (
+    # Phase 1
     PROJECT_TOOL_DEFINITIONS
     + PROVENANCE_TOOL_DEFINITIONS
     + DISK_TOOL_DEFINITIONS
     + CONFIG_TOOL_DEFINITIONS
     + UNDERSTANDING_TOOL_DEFINITIONS
     + BILLING_TOOL_DEFINITIONS
+    # Phase 2
+    + EDITING_TOOL_DEFINITIONS
+    + RENDERING_TOOL_DEFINITIONS
+    + AUDIO_TOOL_DEFINITIONS
 )
 
 __all__ = [
     "ALL_TOOL_DEFINITIONS",
+    "AUDIO_TOOL_DEFINITIONS",
     "BILLING_TOOL_DEFINITIONS",
+    "EDITING_TOOL_DEFINITIONS",
+    "RENDERING_TOOL_DEFINITIONS",
     "TOOL_DISPATCHERS",
     "UNDERSTANDING_TOOL_DEFINITIONS",
+    "dispatch_audio_tool",
     "dispatch_billing_tool",
+    "dispatch_editing_tool",
+    "dispatch_rendering_tool",
     "dispatch_understanding_tool",
 ]
