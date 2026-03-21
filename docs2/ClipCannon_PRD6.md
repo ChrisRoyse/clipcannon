@@ -135,7 +135,7 @@ Human approval gate prevents accidental publishing of inappropriate content
     "whisper_compute_type": "int8",
     "batch_size_visual": 64,
     "scene_change_threshold": 0.75,
-    "highlight_count_default": 10,
+    "highlight_count_default": 20,
     "min_clip_duration_ms": 5000,
     "max_clip_duration_ms": 600000
   },
@@ -147,30 +147,6 @@ Human approval gate prevents accidental publishing of inappropriate content
     "thumbnail_format": "jpg",
     "thumbnail_quality": 95
   },
-  "audio": {
-    "music_model": "ace-step-v15-turbo-rl",
-    "music_lora": "Text2Samples",
-    "music_guidance_scale": 7.5,
-    "music_default_volume_db": -18,
-    "duck_under_speech": true,
-    "duck_level_db": -6,
-    "sfx_on_transitions": true,
-    "sfx_default_type": "whoosh",
-    "midi_soundfont": "GeneralUser_GS.sf2",
-    "normalize_output": true,
-    "sample_rate": 44100
-  },
-  "animation": {
-    "lower_third_template": "modern_bar",
-    "lower_third_duration_ms": 6000,
-    "title_card_animation": "fade_scale",
-    "default_transition": "fade",
-    "default_transition_duration_ms": 500,
-    "fetch_remote_lottie": false,
-    "default_font": "Montserrat",
-    "default_primary_color": "#2563EB",
-    "default_text_color": "#FFFFFF"
-  },
   "publishing": {
     "require_approval": true,
     "max_daily_posts_per_platform": 5
@@ -178,11 +154,40 @@ Human approval gate prevents accidental publishing of inappropriate content
   "gpu": {
     "device": "cuda:0",
     "max_vram_usage_gb": 24,
-    "concurrent_models": true,
-    "ace_step_cpu_offload": false
+    "concurrent_models": true
   }
 }
 ```
+
+> **Note (Phase 1 actual):** The Phase 1 implementation's `config/default_config.json` contains the 6 sections shown above: `version`, `directories`, `processing`, `rendering`, `publishing`, `gpu`. The `audio` and `animation` config sections below are planned for Phase 2 when the audio generation and motion graphics engines are built. The `gpu.ace_step_cpu_offload` key is also Phase 2.
+>
+> **Phase 2 config additions (planned):**
+> ```json
+> "audio": {
+>   "music_model": "ace-step-v15-turbo-rl",
+>   "music_lora": "Text2Samples",
+>   "music_guidance_scale": 7.5,
+>   "music_default_volume_db": -18,
+>   "duck_under_speech": true,
+>   "duck_level_db": -6,
+>   "sfx_on_transitions": true,
+>   "sfx_default_type": "whoosh",
+>   "midi_soundfont": "GeneralUser_GS.sf2",
+>   "normalize_output": true,
+>   "sample_rate": 44100
+> },
+> "animation": {
+>   "lower_third_template": "modern_bar",
+>   "lower_third_duration_ms": 6000,
+>   "title_card_animation": "fade_scale",
+>   "default_transition": "fade",
+>   "default_transition_duration_ms": 500,
+>   "fetch_remote_lottie": false,
+>   "default_font": "Montserrat",
+>   "default_primary_color": "#2563EB",
+>   "default_text_color": "#FFFFFF"
+> }
+> ```
 
 ## 15. Success Metrics
 

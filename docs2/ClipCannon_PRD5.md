@@ -569,10 +569,10 @@ Frame embedding via SigLIP
 Scene boundary detection
 Video Understanding Document (VUD) generation with AI-readable translations (scene descriptions, topic labels, energy scores -- not raw embeddings)
 SHA-256 Provenance Hash Chain: provenance.db per project, hash computation at every pipeline stage, chain integrity verification, provenance query MCP tools (clipcannon_provenance_verify, clipcannon_provenance_query, clipcannon_provenance_chain)
-Basic MCP tools: clipcannon_ingest, clipcannon_get_vud, clipcannon_get_transcript, clipcannon_get_frame
-License server with credit-based billing (Cloudflare D1 + Stripe)
+27 MCP tools across 7 categories: project management (5), understanding/pipeline (4), understanding/visual (4), understanding/search (1), provenance (4), disk management (2), configuration (3), billing (4)
+License server with credit-based billing (local SQLite + HMAC integrity + Stripe webhooks; Cloudflare D1 sync stubbed for Phase 2)
 Machine ID provisioning + HMAC balance integrity
-Basic dashboard: balance display, add credits, system health, provenance chain viewer
+Dashboard: balance display, add credits, project list, provenance chain viewer, system health
 Success Criteria:
 
 Process a 1-hour video in under 5 minutes
@@ -580,9 +580,11 @@ Accurate word-level timestamps (WER < 5% on English content)
 Scene detection captures 90%+ of visual transitions
 Credit charge/refund flow works end-to-end
 VUD contains AI-readable data (text labels, scores, timestamps) not raw embeddings
-Provenance chain has 11 records (probe through VUD synthesis) with valid chain hashes
+Provenance chain has 19 records (one per pipeline stage: probe through finalize) with valid chain hashes
 clipcannon_provenance_verify passes on every completed project
 Any file modification after provenance recording is detected by hash mismatch
+
+> **Phase 1 COMPLETED and VERIFIED on 2026-03-21.** 750/750 FSV checks passed. 181 pytest tests pass. 0 lint errors. 27 MCP tools, 20 pipeline stages, 16 analysis streams, 23 database tables, 4 vector tables. See [Verification Report](../docs/codestate/12_verification_report.md).
 
 ### Phase 2: Editing Engine + Audio + Dashboard
 

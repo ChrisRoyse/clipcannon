@@ -2,7 +2,9 @@
 # PRD: AI-Native Video Editor MCP Server
 
 Product Requirements Document
-**Version: 5.0 Date: 2026-03-20 Product: ClipCannon (clipcannon.com) Author: Product Team**
+**Version: 5.1 Date: 2026-03-21 Product: ClipCannon (clipcannon.com) Author: Product Team**
+
+> **Phase 1 Status**: COMPLETED and VERIFIED on 2026-03-21. 750/750 FSV checks passed. 181 pytest tests pass. 0 lint errors. 27 MCP tools implemented. See [Verification Report](../docs/codestate/12_verification_report.md) for details.
 
 
 
@@ -64,7 +66,7 @@ MCP-integrated: Plugs into any AI model (Claude, GPT, Llama, etc.) via Model Con
                          |                           |
                          |  +---------------------+  |
                          |  |   Tool Registry      |  |
-                         |  |   (60+ MCP Tools)    |  |
+                         |  | (27 Phase 1, 60+ planned)|  |
                          |  +---------------------+  |
                          |            |               |
                          |  +---------------------+  |
@@ -626,7 +628,7 @@ What The AI Receives (in VUD scenes[] + the actual frame image):
   "quality_avg": 78.5,
   "crop_recommendation": "safe_for_vertical"
 }
-The AI looks at the actual key frame image (delivered via clipcannon_get_vud with key frames). It sees what the scene looks like — no text description needed. The structured data provides quantitative signals: visual_similarity_avg (how visually stable), face_position (for smart cropping), shot_type and crop_recommendation (for aspect ratio decisions). The AI never reads the 1152-dim SigLIP embeddings — those are used internally for scene boundary computation.
+The AI looks at the actual key frame image (delivered via clipcannon_get_vud_summary with key frames). It sees what the scene looks like — no text description needed. The structured data provides quantitative signals: visual_similarity_avg (how visually stable), face_position (for smart cropping), shot_type and crop_recommendation (for aspect ratio decisions). The AI never reads the 1152-dim SigLIP embeddings — those are used internally for scene boundary computation.
 ```
 
 
