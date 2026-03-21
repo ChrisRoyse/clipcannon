@@ -18,10 +18,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/provenance", tags=["provenance"])
 
-PROJECTS_DIR = Path(os.environ.get(
-    "CLIPCANNON_PROJECTS_DIR",
-    str(Path.home() / ".clipcannon" / "projects"),
-))
+PROJECTS_DIR = Path(
+    os.environ.get(
+        "CLIPCANNON_PROJECTS_DIR",
+        str(Path.home() / ".clipcannon" / "projects"),
+    )
+)
 
 
 def _get_db_path(project_id: str) -> Path:
@@ -164,17 +166,19 @@ async def get_provenance_timeline(project_id: str) -> dict[str, object]:
 
         timeline = []
         for record in records:
-            timeline.append({
-                "record_id": record.record_id,
-                "timestamp": record.timestamp_utc,
-                "operation": record.operation,
-                "stage": record.stage,
-                "description": record.description,
-                "model_name": record.model_name,
-                "duration_ms": record.execution_duration_ms,
-                "parent_id": record.parent_record_id,
-                "chain_hash_prefix": record.chain_hash[:12] if record.chain_hash else None,
-            })
+            timeline.append(
+                {
+                    "record_id": record.record_id,
+                    "timestamp": record.timestamp_utc,
+                    "operation": record.operation,
+                    "stage": record.stage,
+                    "description": record.description,
+                    "model_name": record.model_name,
+                    "duration_ms": record.execution_duration_ms,
+                    "parent_id": record.parent_record_id,
+                    "chain_hash_prefix": record.chain_hash[:12] if record.chain_hash else None,
+                }
+            )
 
         return {
             "project_id": project_id,

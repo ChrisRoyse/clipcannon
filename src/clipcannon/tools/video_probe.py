@@ -32,9 +32,13 @@ def run_ffprobe(video_path: str) -> dict[str, object]:
     try:
         result = subprocess.run(
             [
-                "ffprobe", "-v", "quiet",
-                "-print_format", "json",
-                "-show_format", "-show_streams",
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
                 video_path,
             ],
             capture_output=True,
@@ -47,12 +51,12 @@ def run_ffprobe(video_path: str) -> dict[str, object]:
                 f"ffprobe failed with code {result.returncode}: {result.stderr[:200]}",
             )
         return json.loads(result.stdout)
-    except FileNotFoundError:
-        raise ClipCannonError("ffprobe not found. Install ffmpeg to use ClipCannon.")
+    except FileNotFoundError as exc:
+        raise ClipCannonError("ffprobe not found. Install ffmpeg to use ClipCannon.") from exc
     except json.JSONDecodeError as exc:
-        raise ClipCannonError(f"Failed to parse ffprobe output: {exc}")
-    except subprocess.TimeoutExpired:
-        raise ClipCannonError("ffprobe timed out after 60 seconds")
+        raise ClipCannonError(f"Failed to parse ffprobe output: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ClipCannonError("ffprobe timed out after 60 seconds") from exc
 
 
 def extract_video_metadata(probe_data: dict[str, object]) -> dict[str, object]:
@@ -139,9 +143,14 @@ def detect_vfr(video_path: str) -> bool:
     try:
         result = subprocess.run(
             [
-                "ffmpeg", "-i", video_path,
-                "-vf", "vfrdet",
-                "-f", "null", "-",
+                "ffmpeg",
+                "-i",
+                video_path,
+                "-vf",
+                "vfrdet",
+                "-f",
+                "null",
+                "-",
             ],
             capture_output=True,
             text=True,

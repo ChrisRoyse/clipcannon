@@ -10,9 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import time
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert
 from clipcannon.pipeline.orchestrator import StageResult
@@ -24,6 +23,11 @@ from clipcannon.provenance import (
     record_provenance,
     sha256_string,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -154,8 +158,7 @@ def _run_ocr_on_frames(
         from paddleocr import PaddleOCR  # type: ignore[import-untyped]
     except ImportError as exc:
         raise ImportError(
-            "PaddleOCR not installed. Install with: "
-            "pip install paddlepaddle paddleocr"
+            "PaddleOCR not installed. Install with: pip install paddlepaddle paddleocr"
         ) from exc
 
     from PIL import Image
@@ -195,12 +198,14 @@ def _run_ocr_on_frames(
                 region = _classify_region(bbox, img_width, img_height)
                 font_size = _estimate_font_size(bbox, img_height)
 
-                frame_text_entries.append({
-                    "text": text,
-                    "confidence": str(round(confidence, 3)),
-                    "region": region,
-                    "font_size": font_size,
-                })
+                frame_text_entries.append(
+                    {
+                        "text": text,
+                        "confidence": str(round(confidence, 3)),
+                        "region": region,
+                        "font_size": font_size,
+                    }
+                )
 
         # Deduplicate: skip if identical to previous frame
         if curr_texts == prev_texts:
@@ -210,21 +215,25 @@ def _run_ocr_on_frames(
         changed = _texts_differ_significantly(prev_texts, curr_texts)
 
         if curr_texts:
-            text_records.append({
-                "start_ms": ts_ms,
-                "end_ms": ts_ms + int(1000 / extraction_fps),
-                "texts": json.dumps(frame_text_entries),
-                "type": "detected",
-                "change_from_previous": changed,
-            })
+            text_records.append(
+                {
+                    "start_ms": ts_ms,
+                    "end_ms": ts_ms + int(1000 / extraction_fps),
+                    "texts": json.dumps(frame_text_entries),
+                    "type": "detected",
+                    "change_from_previous": changed,
+                }
+            )
 
         if changed and prev_texts:
             title = curr_texts[0] if curr_texts else ""
-            change_events.append({
-                "timestamp_ms": ts_ms,
-                "type": "slide_transition",
-                "new_title": title,
-            })
+            change_events.append(
+                {
+                    "timestamp_ms": ts_ms,
+                    "type": "slide_transition",
+                    "new_title": title,
+                }
+            )
 
         prev_texts = curr_texts
 
@@ -274,12 +283,16 @@ async def run_ocr(
 
         logger.info(
             "Running OCR on %d frames (1fps from %d total at %dfps)",
-            len(ocr_frames), len(all_frames), extraction_fps,
+            len(ocr_frames),
+            len(all_frames),
+            extraction_fps,
         )
 
         # Run OCR in thread pool (blocking operation)
         text_records, change_events = await asyncio.to_thread(
-            _run_ocr_on_frames, ocr_frames, extraction_fps,
+            _run_ocr_on_frames,
+            ocr_frames,
+            extraction_fps,
         )
 
         # Insert text records
@@ -300,8 +313,7 @@ async def run_ocr(
                 batch_insert(
                     conn,
                     "on_screen_text",
-                    ["project_id", "start_ms", "end_ms", "texts", "type",
-                     "change_from_previous"],
+                    ["project_id", "start_ms", "end_ms", "texts", "type", "change_from_previous"],
                     text_rows,
                 )
 
@@ -325,7 +337,9 @@ async def run_ocr(
 
         logger.info(
             "OCR complete: %d text records, %d change events in %d ms",
-            len(text_records), len(change_events), elapsed_ms,
+            len(text_records),
+            len(change_events),
+            elapsed_ms,
         )
 
         content_hash = sha256_string(

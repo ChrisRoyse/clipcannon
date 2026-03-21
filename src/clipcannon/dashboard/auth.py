@@ -12,13 +12,15 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import datetime, timezone
 from functools import wraps
-from typing import Callable
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 from jose import JWTError, jwt
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +116,7 @@ def require_auth(func: Callable[..., object]) -> Callable[..., object]:
     Returns:
         Wrapped function that checks authentication.
     """
+
     @wraps(func)
     async def wrapper(request: Request, *args: object, **kwargs: object) -> object:
         user = get_current_user(request)
@@ -129,6 +132,7 @@ def require_auth(func: Callable[..., object]) -> Callable[..., object]:
             )
         request.state.user = user
         return await func(request, *args, **kwargs)
+
     return wrapper
 
 

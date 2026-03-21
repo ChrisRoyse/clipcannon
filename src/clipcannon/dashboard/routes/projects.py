@@ -8,21 +8,21 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter
-
-from clipcannon.exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
-PROJECTS_DIR = Path(os.environ.get(
-    "CLIPCANNON_PROJECTS_DIR",
-    str(Path.home() / ".clipcannon" / "projects"),
-))
+PROJECTS_DIR = Path(
+    os.environ.get(
+        "CLIPCANNON_PROJECTS_DIR",
+        str(Path.home() / ".clipcannon" / "projects"),
+    )
+)
 
 # Pipeline stages in execution order
 PIPELINE_STAGES = [
@@ -146,10 +146,12 @@ async def list_projects() -> dict[str, object]:
                 "name": proj_dir.name,
                 "has_database": db_path.exists(),
                 "created_at": datetime.fromtimestamp(
-                    stat.st_ctime, tz=timezone.utc,
+                    stat.st_ctime,
+                    tz=UTC,
                 ).isoformat(),
                 "modified_at": datetime.fromtimestamp(
-                    stat.st_mtime, tz=timezone.utc,
+                    stat.st_mtime,
+                    tz=UTC,
                 ).isoformat(),
             }
 
@@ -201,10 +203,12 @@ async def get_project_detail(project_id: str) -> dict[str, object]:
         "found": True,
         "has_database": db_path.exists(),
         "created_at": datetime.fromtimestamp(
-            stat.st_ctime, tz=timezone.utc,
+            stat.st_ctime,
+            tz=UTC,
         ).isoformat(),
         "modified_at": datetime.fromtimestamp(
-            stat.st_mtime, tz=timezone.utc,
+            stat.st_mtime,
+            tz=UTC,
         ).isoformat(),
     }
 
@@ -229,10 +233,12 @@ async def get_project_detail(project_id: str) -> dict[str, object]:
         files = []
         for f in proj_dir.iterdir():
             if f.is_file():
-                files.append({
-                    "name": f.name,
-                    "size_bytes": f.stat().st_size,
-                })
+                files.append(
+                    {
+                        "name": f.name,
+                        "size_bytes": f.stat().st_size,
+                    }
+                )
         result["files"] = files
     except OSError:
         result["files"] = []

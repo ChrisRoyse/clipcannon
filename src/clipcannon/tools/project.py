@@ -37,7 +37,9 @@ from clipcannon.tools.video_probe import (
 logger = logging.getLogger(__name__)
 
 
-def _error_response(code: str, message: str, details: dict[str, object] | None = None) -> dict[str, object]:
+def _error_response(
+    code: str, message: str, details: dict[str, object] | None = None
+) -> dict[str, object]:
     """Build a standardized error response dict.
 
     Args:
@@ -147,11 +149,18 @@ async def clipcannon_project_create(
                     vfr_detected, status
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created')""",
                 (
-                    project_id, name, str(dest_source), source_sha256,
-                    metadata["duration_ms"], metadata["resolution"],
-                    metadata["fps"], metadata["codec"],
-                    metadata.get("audio_codec"), metadata.get("audio_channels"),
-                    metadata.get("file_size_bytes"), vfr_detected,
+                    project_id,
+                    name,
+                    str(dest_source),
+                    source_sha256,
+                    metadata["duration_ms"],
+                    metadata["resolution"],
+                    metadata["fps"],
+                    metadata["codec"],
+                    metadata.get("audio_codec"),
+                    metadata.get("audio_channels"),
+                    metadata.get("file_size_bytes"),
+                    vfr_detected,
                 ),
             )
 
@@ -159,7 +168,8 @@ async def clipcannon_project_create(
             for stream_name in PIPELINE_STREAMS:
                 execute(
                     conn,
-                    "INSERT INTO stream_status (project_id, stream_name, status) VALUES (?, ?, 'pending')",
+                    "INSERT INTO stream_status (project_id, stream_name, status)"
+                    " VALUES (?, ?, 'pending')",
                     (project_id, stream_name),
                 )
 
@@ -269,14 +279,16 @@ async def clipcannon_project_list(status_filter: str = "all") -> dict[str, objec
                 try:
                     row = fetch_one(
                         conn,
-                        "SELECT project_id, name, status, duration_ms, resolution, created_at FROM project LIMIT 1",
+                        "SELECT project_id, name, status, duration_ms,"
+                        " resolution, created_at FROM project LIMIT 1",
                     )
                 finally:
                     conn.close()
 
-                if row is not None:
-                    if status_filter == "all" or row.get("status") == status_filter:
-                        projects.append(dict(row))
+                if row is not None and (
+                    status_filter == "all" or row.get("status") == status_filter
+                ):
+                    projects.append(dict(row))
             except ClipCannonError:
                 logger.warning("Failed to read project %s", entry.name)
                 continue
@@ -305,7 +317,9 @@ async def clipcannon_project_status(project_id: str) -> dict[str, object]:
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
             project_row = fetch_one(
-                conn, "SELECT * FROM project WHERE project_id = ?", (project_id,),
+                conn,
+                "SELECT * FROM project WHERE project_id = ?",
+                (project_id,),
             )
             if project_row is None:
                 return _error_response("PROJECT_NOT_FOUND", f"No project record: {project_id}")
@@ -366,9 +380,7 @@ def _compute_disk_usage(project_dir: Path) -> dict[str, object]:
 
     for item in project_dir.iterdir():
         if item.is_dir():
-            dir_size = sum(
-                f.stat().st_size for f in item.rglob("*") if f.is_file()
-            )
+            dir_size = sum(f.stat().st_size for f in item.rglob("*") if f.is_file())
             subdirs[item.name] = dir_size
             total += dir_size
         elif item.is_file():
@@ -398,16 +410,16 @@ async def clipcannon_project_delete(
 
     try:
         # Measure size before deletion
-        total_size = sum(
-            f.stat().st_size for f in project_dir.rglob("*") if f.is_file()
-        )
+        total_size = sum(f.stat().st_size for f in project_dir.rglob("*") if f.is_file())
 
         if keep_source:
             # Delete everything except source/
             source_dir = project_dir / "source"
-            source_size = sum(
-                f.stat().st_size for f in source_dir.rglob("*") if f.is_file()
-            ) if source_dir.exists() else 0
+            source_size = (
+                sum(f.stat().st_size for f in source_dir.rglob("*") if f.is_file())
+                if source_dir.exists()
+                else 0
+            )
 
             for item in project_dir.iterdir():
                 if item.name == "source":
@@ -437,41 +449,83 @@ async def clipcannon_project_delete(
         return _error_response("INTERNAL_ERROR", f"Deletion failed: {exc}")
 
 
-_PROJECT_ID_SCHEMA = {"type": "object", "properties": {
-    "project_id": {"type": "string", "description": "Project identifier"},
-}, "required": ["project_id"]}
+_PROJECT_ID_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "project_id": {"type": "string", "description": "Project identifier"},
+    },
+    "required": ["project_id"],
+}
 
 PROJECT_TOOL_DEFINITIONS: list[Tool] = [
-    Tool(name="clipcannon_project_create",
-         description="Create a new project from a source video. Validates format, extracts metadata via ffprobe, computes SHA-256, and initializes the project database.",
-         inputSchema={"type": "object", "properties": {
-             "name": {"type": "string", "description": "Human-readable project name"},
-             "source_video_path": {"type": "string", "description": "Absolute path to source video (mp4/mov/mkv/webm/avi/ts/mts)"},
-         }, "required": ["name", "source_video_path"]}),
-    Tool(name="clipcannon_project_open",
-         description="Open an existing project and return its current state.",
-         inputSchema=_PROJECT_ID_SCHEMA),
-    Tool(name="clipcannon_project_list",
-         description="List all projects, optionally filtered by status.",
-         inputSchema={"type": "object", "properties": {
-             "status_filter": {"type": "string", "description": "Filter: all, created, analyzing, ready, error", "default": "all"},
-         }}),
-    Tool(name="clipcannon_project_status",
-         description="Get detailed status with pipeline progress and disk usage.",
-         inputSchema=_PROJECT_ID_SCHEMA),
-    Tool(name="clipcannon_project_delete",
-         description="Delete a project. Can optionally preserve the original source video.",
-         inputSchema={"type": "object", "properties": {
-             "project_id": {"type": "string", "description": "Project identifier"},
-             "keep_source": {"type": "boolean", "description": "Preserve source video", "default": True},
-         }, "required": ["project_id"]}),
+    Tool(
+        name="clipcannon_project_create",
+        description=(
+            "Create a new project from a source video. Validates format,"
+            " extracts metadata via ffprobe, computes SHA-256,"
+            " and initializes the project database."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Human-readable project name"},
+                "source_video_path": {
+                    "type": "string",
+                    "description": "Absolute path to source video (mp4/mov/mkv/webm/avi/ts/mts)",
+                },
+            },
+            "required": ["name", "source_video_path"],
+        },
+    ),
+    Tool(
+        name="clipcannon_project_open",
+        description="Open an existing project and return its current state.",
+        inputSchema=_PROJECT_ID_SCHEMA,
+    ),
+    Tool(
+        name="clipcannon_project_list",
+        description="List all projects, optionally filtered by status.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "status_filter": {
+                    "type": "string",
+                    "description": "Filter: all, created, analyzing, ready, error",
+                    "default": "all",
+                },
+            },
+        },
+    ),
+    Tool(
+        name="clipcannon_project_status",
+        description="Get detailed status with pipeline progress and disk usage.",
+        inputSchema=_PROJECT_ID_SCHEMA,
+    ),
+    Tool(
+        name="clipcannon_project_delete",
+        description="Delete a project. Can optionally preserve the original source video.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string", "description": "Project identifier"},
+                "keep_source": {
+                    "type": "boolean",
+                    "description": "Preserve source video",
+                    "default": True,
+                },
+            },
+            "required": ["project_id"],
+        },
+    ),
 ]
 
 
 async def dispatch_project_tool(name: str, arguments: dict[str, object]) -> dict[str, object]:
     """Dispatch a project tool call by name."""
     if name == "clipcannon_project_create":
-        return await clipcannon_project_create(str(arguments["name"]), str(arguments["source_video_path"]))
+        return await clipcannon_project_create(
+            str(arguments["name"]), str(arguments["source_video_path"])
+        )
     elif name == "clipcannon_project_open":
         return await clipcannon_project_open(str(arguments["project_id"]))
     elif name == "clipcannon_project_list":
@@ -479,5 +533,7 @@ async def dispatch_project_tool(name: str, arguments: dict[str, object]) -> dict
     elif name == "clipcannon_project_status":
         return await clipcannon_project_status(str(arguments["project_id"]))
     elif name == "clipcannon_project_delete":
-        return await clipcannon_project_delete(str(arguments["project_id"]), bool(arguments.get("keep_source", True)))
+        return await clipcannon_project_delete(
+            str(arguments["project_id"]), bool(arguments.get("keep_source", True))
+        )
     return _error_response("INTERNAL_ERROR", f"Unknown project tool: {name}")

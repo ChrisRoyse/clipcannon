@@ -4,14 +4,14 @@ Computes words-per-minute, pause ratios, speaker change density,
 and pacing labels in 60-second sliding windows across the video.
 This is an optional stage -- failure does not abort the pipeline.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert, fetch_all, fetch_one
 from clipcannon.pipeline.orchestrator import StageResult
@@ -22,6 +22,11 @@ from clipcannon.provenance import (
     record_provenance,
     sha256_string,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +83,7 @@ def _load_transcript_words(
             "ORDER BY tw.start_ms",
             (project_id,),
         )
-        return [
-            {"start_ms": int(r["start_ms"]), "end_ms": int(r["end_ms"])}
-            for r in rows
-        ]
+        return [{"start_ms": int(r["start_ms"]), "end_ms": int(r["end_ms"])} for r in rows]
     finally:
         conn.close()
 
@@ -315,14 +317,16 @@ def _compute_pacing_windows(
         speaker_changes = _count_speaker_changes(segments, win_start, win_end)
         label = _classify_pacing(wpm, pause_ratio, speaker_changes)
 
-        windows.append({
-            "start_ms": win_start,
-            "end_ms": win_end,
-            "words_per_minute": round(wpm, 2),
-            "pause_ratio": pause_ratio,
-            "speaker_changes": speaker_changes,
-            "label": label,
-        })
+        windows.append(
+            {
+                "start_ms": win_start,
+                "end_ms": win_end,
+                "words_per_minute": round(wpm, 2),
+                "pause_ratio": pause_ratio,
+                "speaker_changes": speaker_changes,
+                "label": label,
+            }
+        )
 
         win_start = win_end
 
@@ -365,8 +369,13 @@ def _insert_pacing(
             conn,
             "pacing",
             [
-                "project_id", "start_ms", "end_ms",
-                "words_per_minute", "pause_ratio", "speaker_changes", "label",
+                "project_id",
+                "start_ms",
+                "end_ms",
+                "words_per_minute",
+                "pause_ratio",
+                "speaker_changes",
+                "label",
             ],
             rows,
         )
@@ -403,7 +412,9 @@ async def run_chronemic(
 
     try:
         duration_ms = await asyncio.to_thread(
-            _get_duration_ms, db_path, project_id,
+            _get_duration_ms,
+            db_path,
+            project_id,
         )
         if duration_ms <= 0:
             logger.warning("No duration found, skipping chronemic analysis")
@@ -414,19 +425,28 @@ async def run_chronemic(
             )
 
         words = await asyncio.to_thread(
-            _load_transcript_words, db_path, project_id,
+            _load_transcript_words,
+            db_path,
+            project_id,
         )
         gaps = await asyncio.to_thread(
-            _load_silence_gaps, db_path, project_id,
+            _load_silence_gaps,
+            db_path,
+            project_id,
         )
         segments = await asyncio.to_thread(
-            _load_segments_with_speakers, db_path, project_id,
+            _load_segments_with_speakers,
+            db_path,
+            project_id,
         )
 
         windows = _compute_pacing_windows(duration_ms, words, gaps, segments)
 
         count = await asyncio.to_thread(
-            _insert_pacing, db_path, project_id, windows,
+            _insert_pacing,
+            db_path,
+            project_id,
+            windows,
         )
 
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -437,10 +457,7 @@ async def run_chronemic(
             lbl = str(w["label"])
             labels[lbl] = labels.get(lbl, 0) + 1
 
-        summary = (
-            f"{count} windows: "
-            + ", ".join(f"{k}={v}" for k, v in sorted(labels.items()))
-        )
+        summary = f"{count} windows: " + ", ".join(f"{k}={v}" for k, v in sorted(labels.items()))
         output_sha = sha256_string(summary)
 
         record_id = record_provenance(
@@ -463,7 +480,8 @@ async def run_chronemic(
 
         logger.info(
             "Chronemic analysis complete in %d ms: %s",
-            elapsed_ms, summary,
+            elapsed_ms,
+            summary,
         )
 
         return StageResult(

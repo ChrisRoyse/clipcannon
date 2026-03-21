@@ -18,12 +18,11 @@ import logging
 import os
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from clipcannon.billing.hmac_integrity import sign_balance
-from clipcannon.exceptions import BillingError
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +58,7 @@ def _verify_stripe_signature(
         True if the signature is valid, False otherwise.
     """
     try:
-        parts = dict(
-            item.split("=", 1) for item in signature.split(",") if "=" in item
-        )
+        parts = dict(item.split("=", 1) for item in signature.split(",") if "=" in item)
         timestamp = parts.get("t", "")
         sig_v1 = parts.get("v1", "")
         if not timestamp or not sig_v1:
@@ -124,8 +121,8 @@ async def stripe_webhook(
 
     try:
         event = json.loads(body)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
 
     event_type = event.get("type", "")
     logger.info("Received Stripe event: %s", event_type)
@@ -176,9 +173,7 @@ async def _handle_checkout_completed(event: dict[str, object]) -> None:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        row = conn.execute(
-            "SELECT balance, machine_id FROM balance WHERE id = 1"
-        ).fetchone()
+        row = conn.execute("SELECT balance, machine_id FROM balance WHERE id = 1").fetchone()
 
         if row is None:
             logger.error("Balance record not found during Stripe webhook")
@@ -188,7 +183,7 @@ async def _handle_checkout_completed(event: dict[str, object]) -> None:
         db_machine_id: str = row["machine_id"]
         new_balance = current_balance + credits_to_add
         new_hmac = sign_balance(new_balance, db_machine_id)
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         txn_id = f"txn_{uuid.uuid4().hex[:12]}"
 
         conn.execute(

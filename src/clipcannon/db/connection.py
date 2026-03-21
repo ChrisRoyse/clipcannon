@@ -43,6 +43,7 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> bool:
     """
     try:
         import sqlite_vec  # type: ignore[import-untyped]
+
         sqlite_vec.load(conn)
         logger.debug("sqlite-vec extension loaded successfully.")
         return True
@@ -83,7 +84,7 @@ def _dict_row_factory(cursor: sqlite3.Cursor, row: tuple[object, ...]) -> dict[s
         Dictionary mapping column names to values.
     """
     columns = [desc[0] for desc in cursor.description]
-    return dict(zip(columns, row))
+    return dict(zip(columns, row, strict=False))
 
 
 def get_connection(

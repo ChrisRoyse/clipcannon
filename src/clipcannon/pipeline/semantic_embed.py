@@ -14,11 +14,10 @@ import logging
 import struct
 import time
 from collections import Counter
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert, fetch_all
 from clipcannon.exceptions import PipelineError
@@ -31,6 +30,11 @@ from clipcannon.provenance import (
     record_provenance,
     sha256_string,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -45,23 +49,139 @@ DISTANCE_THRESHOLD = 1.2
 MIN_CLUSTER_SIZE = 1
 
 # Stop words for keyword extraction
-_STOP_WORDS = frozenset({
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "shall", "can", "need", "dare", "ought",
-    "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
-    "as", "into", "through", "during", "before", "after", "above", "below",
-    "between", "out", "off", "over", "under", "again", "further", "then",
-    "once", "here", "there", "when", "where", "why", "how", "all", "both",
-    "each", "few", "more", "most", "other", "some", "such", "no", "nor",
-    "not", "only", "own", "same", "so", "than", "too", "very", "just",
-    "because", "but", "and", "or", "if", "while", "that", "this", "these",
-    "those", "it", "its", "i", "me", "my", "we", "our", "you", "your",
-    "he", "him", "his", "she", "her", "they", "them", "their", "what",
-    "which", "who", "whom", "about", "up", "like", "also", "well",
-    "really", "right", "going", "know", "think", "get", "got", "go",
-    "yeah", "okay", "um", "uh", "oh",
-})
+_STOP_WORDS = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "shall",
+        "can",
+        "need",
+        "dare",
+        "ought",
+        "used",
+        "to",
+        "of",
+        "in",
+        "for",
+        "on",
+        "with",
+        "at",
+        "by",
+        "from",
+        "as",
+        "into",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "between",
+        "out",
+        "off",
+        "over",
+        "under",
+        "again",
+        "further",
+        "then",
+        "once",
+        "here",
+        "there",
+        "when",
+        "where",
+        "why",
+        "how",
+        "all",
+        "both",
+        "each",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "no",
+        "nor",
+        "not",
+        "only",
+        "own",
+        "same",
+        "so",
+        "than",
+        "too",
+        "very",
+        "just",
+        "because",
+        "but",
+        "and",
+        "or",
+        "if",
+        "while",
+        "that",
+        "this",
+        "these",
+        "those",
+        "it",
+        "its",
+        "i",
+        "me",
+        "my",
+        "we",
+        "our",
+        "you",
+        "your",
+        "he",
+        "him",
+        "his",
+        "she",
+        "her",
+        "they",
+        "them",
+        "their",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "about",
+        "up",
+        "like",
+        "also",
+        "well",
+        "really",
+        "right",
+        "going",
+        "know",
+        "think",
+        "get",
+        "got",
+        "go",
+        "yeah",
+        "okay",
+        "um",
+        "uh",
+        "oh",
+    }
+)
 
 
 def _load_segments_from_db(
@@ -161,18 +281,20 @@ def _cluster_segments(
         seg = segments[0]
         text = str(seg.get("text", ""))
         keywords = _extract_keywords([text], top_k=3)
-        return [{
-            "start_ms": int(seg.get("start_ms", 0)),
-            "end_ms": int(seg.get("end_ms", 0)),
-            "label": ", ".join(keywords) if keywords else "topic_0",
-            "keywords": json.dumps(keywords),
-            "coherence_score": 1.0,
-            "semantic_density": 1.0,
-        }]
+        return [
+            {
+                "start_ms": int(seg.get("start_ms", 0)),
+                "end_ms": int(seg.get("end_ms", 0)),
+                "label": ", ".join(keywords) if keywords else "topic_0",
+                "keywords": json.dumps(keywords),
+                "coherence_score": 1.0,
+                "semantic_density": 1.0,
+            }
+        ]
 
     # Determine number of clusters
     n_segments = len(segments)
-    max_clusters = max(1, min(n_segments, n_segments // 3 + 1))
+    max(1, min(n_segments, n_segments // 3 + 1))
 
     clustering = AgglomerativeClustering(
         n_clusters=None,
@@ -216,14 +338,16 @@ def _cluster_segments(
         distances = np.linalg.norm(cluster_embeddings - centroid, axis=1)
         density = float(1.0 / (1.0 + np.mean(distances)))
 
-        topics.append({
-            "start_ms": start_ms,
-            "end_ms": end_ms,
-            "label": label,
-            "keywords": json.dumps(keywords),
-            "coherence_score": round(coherence, 4),
-            "semantic_density": round(density, 4),
-        })
+        topics.append(
+            {
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "label": label,
+                "keywords": json.dumps(keywords),
+                "coherence_score": round(coherence, 4),
+                "semantic_density": round(density, 4),
+            }
+        )
 
     return topics
 
@@ -315,9 +439,17 @@ def _insert_results(
                 for t in topics
             ]
             batch_insert(
-                conn, "topics",
-                ["project_id", "start_ms", "end_ms", "label",
-                 "keywords", "coherence_score", "semantic_density"],
+                conn,
+                "topics",
+                [
+                    "project_id",
+                    "start_ms",
+                    "end_ms",
+                    "label",
+                    "keywords",
+                    "coherence_score",
+                    "semantic_density",
+                ],
                 topic_rows,
             )
         counts["topics"] = len(topics)
@@ -360,7 +492,9 @@ async def run_semantic_embed(
     try:
         # Load segments from DB
         segments = await asyncio.to_thread(
-            _load_segments_from_db, db_path, project_id,
+            _load_segments_from_db,
+            db_path,
+            project_id,
         )
 
         if not segments:
@@ -371,14 +505,12 @@ async def run_semantic_embed(
             )
 
         logger.info(
-            "Semantic embedding: processing %d segments", len(segments),
+            "Semantic embedding: processing %d segments",
+            len(segments),
         )
 
         # Prepare texts with search prefix
-        texts = [
-            SEARCH_PREFIX + str(seg.get("text", ""))
-            for seg in segments
-        ]
+        texts = [SEARCH_PREFIX + str(seg.get("text", "")) for seg in segments]
 
         # Compute embeddings
         try:
@@ -392,20 +524,27 @@ async def run_semantic_embed(
 
         # Cluster into topics
         topics = await asyncio.to_thread(
-            _cluster_segments, embeddings, segments,
+            _cluster_segments,
+            embeddings,
+            segments,
         )
 
         # Insert results
         counts = await asyncio.to_thread(
-            _insert_results, db_path, project_id,
-            segments, embeddings, topics,
+            _insert_results,
+            db_path,
+            project_id,
+            segments,
+            embeddings,
+            topics,
         )
 
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
         # Provenance
         segment_texts = json.dumps(
-            [str(s.get("text", "")) for s in segments], sort_keys=True,
+            [str(s.get("text", "")) for s in segments],
+            sort_keys=True,
         )
         input_sha = sha256_string(segment_texts)
         topic_json = json.dumps(topics, sort_keys=True, default=str)
@@ -439,7 +578,9 @@ async def run_semantic_embed(
         )
 
         logger.info(
-            "Semantic embedding complete in %d ms: %s", elapsed_ms, counts,
+            "Semantic embedding complete in %d ms: %s",
+            elapsed_ms,
+            counts,
         )
 
         return StageResult(

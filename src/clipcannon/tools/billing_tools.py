@@ -115,6 +115,7 @@ BILLING_TOOL_DEFINITIONS: list[Tool] = [
 # Tool implementations
 # ---------------------------------------------------------------------------
 
+
 async def clipcannon_credits_balance() -> dict[str, object]:
     """Get current credit balance and spending information.
 
@@ -130,8 +131,7 @@ async def clipcannon_credits_balance() -> dict[str, object]:
             "error": {
                 "code": "LICENSE_SERVER_UNREACHABLE",
                 "message": (
-                    "Cannot connect to the license server. "
-                    "Start it with: clipcannon-license-server"
+                    "Cannot connect to the license server. Start it with: clipcannon-license-server"
                 ),
                 "details": {},
             }
@@ -250,8 +250,7 @@ async def clipcannon_spending_limit(limit_credits: int) -> dict[str, object]:
             "error": {
                 "code": "LICENSE_SERVER_UNREACHABLE",
                 "message": (
-                    "Cannot connect to the license server. "
-                    "Start it with: clipcannon-license-server"
+                    "Cannot connect to the license server. Start it with: clipcannon-license-server"
                 ),
                 "details": {},
             }
@@ -261,6 +260,7 @@ async def clipcannon_spending_limit(limit_credits: int) -> dict[str, object]:
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
+
 
 async def dispatch_billing_tool(
     name: str,

@@ -4,15 +4,15 @@ Updates stream_status for all tracked streams, verifies the provenance
 chain, sets the project status to 'ready' or 'error', and cleans up
 ephemeral files. This is a REQUIRED stage -- failure aborts the pipeline.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import shutil
 import time
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all, fetch_one
 from clipcannon.db.schema import PIPELINE_STREAMS
@@ -26,6 +26,11 @@ from clipcannon.provenance import (
     sha256_string,
     verify_chain,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -105,8 +110,7 @@ def _determine_stream_statuses(
     try:
         existing = fetch_all(
             conn,
-            "SELECT stream_name, status, error_message FROM stream_status "
-            "WHERE project_id = ?",
+            "SELECT stream_name, status, error_message FROM stream_status WHERE project_id = ?",
             (project_id,),
         )
     finally:
@@ -159,8 +163,7 @@ def _update_all_stream_statuses(
         for stream_name, status in statuses.items():
             existing = fetch_one(
                 conn,
-                "SELECT id FROM stream_status "
-                "WHERE project_id = ? AND stream_name = ?",
+                "SELECT id FROM stream_status WHERE project_id = ? AND stream_name = ?",
                 (project_id, stream_name),
             )
             if existing:
@@ -226,8 +229,7 @@ def _set_project_status(
     try:
         execute(
             conn,
-            "UPDATE project SET status = ?, updated_at = datetime('now') "
-            "WHERE project_id = ?",
+            "UPDATE project SET status = ?, updated_at = datetime('now') WHERE project_id = ?",
             (status, project_id),
         )
         conn.commit()
@@ -237,7 +239,8 @@ def _set_project_status(
     if degradation_note:
         logger.warning(
             "Project %s finalized with degradation: %s",
-            project_id, degradation_note,
+            project_id,
+            degradation_note,
         )
 
 
@@ -273,7 +276,9 @@ def _cleanup_temp_files(project_dir: Path) -> int:
             cleaned += 1
         except OSError as exc:
             logger.warning(
-                "Failed to remove cache dir %s: %s", cache_dir, exc,
+                "Failed to remove cache dir %s: %s",
+                cache_dir,
+                exc,
             )
 
     return cleaned
@@ -312,10 +317,15 @@ async def run_finalize(
     try:
         # 1. Determine and update all stream statuses
         statuses = await asyncio.to_thread(
-            _determine_stream_statuses, db_path, project_id,
+            _determine_stream_statuses,
+            db_path,
+            project_id,
         )
         await asyncio.to_thread(
-            _update_all_stream_statuses, db_path, project_id, statuses,
+            _update_all_stream_statuses,
+            db_path,
+            project_id,
+            statuses,
         )
 
         completed_count = sum(1 for s in statuses.values() if s == "completed")
@@ -324,7 +334,9 @@ async def run_finalize(
 
         logger.info(
             "Stream statuses: %d completed, %d failed, %d skipped",
-            completed_count, failed_count, skipped_count,
+            completed_count,
+            failed_count,
+            skipped_count,
         )
 
         # 2. Compute degradation note
@@ -332,16 +344,19 @@ async def run_finalize(
 
         # 3. Verify provenance chain
         chain_result = await asyncio.to_thread(
-            verify_chain, project_id, db_path,
+            verify_chain,
+            project_id,
+            db_path,
         )
 
         if not chain_result.verified:
-            error_detail = (
-                f"Provenance chain verification failed: {chain_result.issue}"
-            )
+            error_detail = f"Provenance chain verification failed: {chain_result.issue}"
             logger.error(error_detail)
             await asyncio.to_thread(
-                _set_project_status, db_path, project_id, "error",
+                _set_project_status,
+                db_path,
+                project_id,
+                "error",
                 error_detail,
             )
             raise PipelineError(
@@ -357,13 +372,17 @@ async def run_finalize(
 
         # 4. Set project status to 'ready'
         await asyncio.to_thread(
-            _set_project_status, db_path, project_id, "ready",
+            _set_project_status,
+            db_path,
+            project_id,
+            "ready",
             degradation_note,
         )
 
         # 5. Clean up temp files
         cleaned = await asyncio.to_thread(
-            _cleanup_temp_files, project_dir,
+            _cleanup_temp_files,
+            project_dir,
         )
         if cleaned > 0:
             logger.info("Cleaned up %d ephemeral files", cleaned)
@@ -400,7 +419,8 @@ async def run_finalize(
 
         logger.info(
             "Finalize complete in %d ms: status=ready, %s",
-            elapsed_ms, summary,
+            elapsed_ms,
+            summary,
         )
 
         return StageResult(

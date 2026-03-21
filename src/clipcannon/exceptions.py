@@ -14,7 +14,9 @@ class ClipCannonError(Exception):
         details: Optional structured data providing additional context.
     """
 
-    def __init__(self, message: str, details: dict[str, str | int | float | bool | None] | None = None) -> None:
+    def __init__(
+        self, message: str, details: dict[str, str | int | float | bool | None] | None = None
+    ) -> None:
         """Initialize ClipCannonError.
 
         Args:

@@ -3,14 +3,18 @@
 Provides semantic (vector KNN) and text (SQL LIKE) search across
 transcript segments in a project database.
 """
+
 from __future__ import annotations
 
 import logging
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import fetch_all, fetch_one
 from clipcannon.tools.understanding import _db_path, _error, _validate_project
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -75,14 +79,17 @@ async def _semantic_search(
 ) -> list[dict[str, object]]:
     """KNN semantic search via sqlite-vec and Nomic embeddings."""
     import struct
+
     import numpy as np
     from sentence_transformers import SentenceTransformer
 
     model = SentenceTransformer(
-        "nomic-ai/nomic-embed-text-v1.5", trust_remote_code=True,
+        "nomic-ai/nomic-embed-text-v1.5",
+        trust_remote_code=True,
     )
     query_embedding = model.encode(
-        [f"search_query: {query}"], show_progress_bar=False,
+        [f"search_query: {query}"],
+        show_progress_bar=False,
     )
     emb = np.array(query_embedding[0], dtype=np.float32)
     norm = np.linalg.norm(emb)
@@ -107,13 +114,15 @@ async def _semantic_search(
                 "SELECT speaker_id FROM transcript_segments WHERE segment_id = ?",
                 (int(row["segment_id"]),),
             )
-            results.append({
-                "segment_id": row["segment_id"],
-                "timestamp_ms": row["timestamp_ms"],
-                "text": row["transcript_text"],
-                "similarity": round(1.0 - float(row["distance"]), 4),
-                "speaker_id": seg_row.get("speaker_id") if seg_row else None,
-            })
+            results.append(
+                {
+                    "segment_id": row["segment_id"],
+                    "timestamp_ms": row["timestamp_ms"],
+                    "text": row["transcript_text"],
+                    "similarity": round(1.0 - float(row["distance"]), 4),
+                    "speaker_id": seg_row.get("speaker_id") if seg_row else None,
+                }
+            )
         return results
     finally:
         conn.close()

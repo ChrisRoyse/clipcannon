@@ -6,7 +6,8 @@ so the orchestrator can resolve execution order via topological sort.
 
 from __future__ import annotations
 
-from clipcannon.config import ClipCannonConfig
+from typing import TYPE_CHECKING
+
 from clipcannon.pipeline.acoustic import run_acoustic
 from clipcannon.pipeline.audio_extract import run_audio_extract
 from clipcannon.pipeline.chronemic import run_chronemic
@@ -28,6 +29,9 @@ from clipcannon.pipeline.storyboard import run_storyboard
 from clipcannon.pipeline.transcribe import run_transcribe
 from clipcannon.pipeline.vfr_normalize import run_vfr_normalize
 from clipcannon.pipeline.visual_embed import run_visual_embed
+
+if TYPE_CHECKING:
+    from clipcannon.config import ClipCannonConfig
 
 # Stage definitions with DAG dependencies.
 # Level 0 (no deps): probe

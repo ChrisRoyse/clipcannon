@@ -11,9 +11,12 @@ import hashlib
 import json
 import logging
 import sqlite3
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from clipcannon.exceptions import ProvenanceError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 

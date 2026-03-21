@@ -11,8 +11,8 @@ import json
 import logging
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert, fetch_one
 from clipcannon.pipeline.orchestrator import StageResult
@@ -23,6 +23,9 @@ from clipcannon.provenance import (
     record_provenance,
     sha256_string,
 )
+
+if TYPE_CHECKING:
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -129,14 +132,15 @@ def _generate_grid(
 
     grid = Image.new("RGB", (GRID_SIZE, GRID_SIZE), color=(0, 0, 0))
 
-    for idx, (fp, ts_ms) in enumerate(zip(frame_paths, timestamps_ms)):
+    for idx, (fp, ts_ms) in enumerate(zip(frame_paths, timestamps_ms, strict=False)):
         row = idx // GRID_COLS
         col = idx % GRID_COLS
 
         try:
             cell_img = Image.open(fp).convert("RGB")
             cell_img = cell_img.resize(
-                (CELL_SIZE, CELL_SIZE), Image.Resampling.LANCZOS,
+                (CELL_SIZE, CELL_SIZE),
+                Image.Resampling.LANCZOS,
             )
         except Exception as exc:
             logger.warning("Failed to load frame %s for grid: %s", fp, exc)
@@ -154,10 +158,12 @@ def _generate_grid(
         # Try to get a small font; fall back to default
         try:
             font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
-        except (OSError, IOError):
+        except OSError:
             try:
-                font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", 14)
-            except (OSError, IOError):
+                font = ImageFont.truetype(
+                    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", 14
+                )
+            except OSError:
                 font = ImageFont.load_default()
 
         # Measure text
@@ -224,16 +230,20 @@ def _generate_storyboards(
 
         logger.info(
             "Generating storyboard grid %d/%d (%d frames)",
-            grid_idx + 1, total_grids, len(batch_frames),
+            grid_idx + 1,
+            total_grids,
+            len(batch_frames),
         )
 
         success = _generate_grid(batch_frames, batch_timestamps, grid_path)
         if success:
-            grids.append({
-                "grid_number": grid_idx + 1,
-                "grid_path": str(grid_path),
-                "cell_timestamps_ms": json.dumps(batch_timestamps),
-            })
+            grids.append(
+                {
+                    "grid_number": grid_idx + 1,
+                    "grid_path": str(grid_path),
+                    "cell_timestamps_ms": json.dumps(batch_timestamps),
+                }
+            )
 
     return grids
 
@@ -297,19 +307,22 @@ async def run_storyboard(
         selected = _select_frames(all_frames, duration_ms, extraction_fps)
 
         # Compute timestamps for selected frames
-        timestamps = [
-            _frame_timestamp_ms(fp, extraction_fps) for fp in selected
-        ]
+        timestamps = [_frame_timestamp_ms(fp, extraction_fps) for fp in selected]
 
         logger.info(
-            "Generating storyboards: %d frames selected from %d total "
-            "(duration=%d ms, fps=%d)",
-            len(selected), len(all_frames), duration_ms, extraction_fps,
+            "Generating storyboards: %d frames selected from %d total (duration=%d ms, fps=%d)",
+            len(selected),
+            len(all_frames),
+            duration_ms,
+            extraction_fps,
         )
 
         # Generate grids in thread pool (PIL operations)
         grids = await asyncio.to_thread(
-            _generate_storyboards, selected, timestamps, storyboard_dir,
+            _generate_storyboards,
+            selected,
+            timestamps,
+            storyboard_dir,
         )
 
         if not grids:
@@ -335,8 +348,7 @@ async def run_storyboard(
             batch_insert(
                 conn,
                 "storyboard_grids",
-                ["project_id", "grid_number", "grid_path",
-                 "cell_timestamps_ms"],
+                ["project_id", "grid_number", "grid_path", "cell_timestamps_ms"],
                 grid_rows,
             )
             conn.commit()

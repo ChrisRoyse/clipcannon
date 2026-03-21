@@ -10,11 +10,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
-from clipcannon.db.connection import get_connection
-from clipcannon.db.queries import fetch_one
 from clipcannon.exceptions import PipelineError
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.pipeline.source_resolution import resolve_source_path
@@ -26,6 +23,11 @@ from clipcannon.provenance import (
     sha256_file,
     sha256_string,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +53,13 @@ async def _run_ffmpeg_extract(
         Tuple of (success, stderr_output).
     """
     cmd = [
-        "ffmpeg", "-y",
-        "-i", str(source_path),
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_path),
         "-vn",
-        "-acodec", "pcm_s16le",
+        "-acodec",
+        "pcm_s16le",
     ]
     if sample_rate is not None:
         cmd.extend(["-ar", str(sample_rate)])
@@ -107,8 +112,10 @@ async def run_audio_extract(
         # Extract 16kHz mono
         logger.info("Extracting 16kHz mono audio for %s", project_id)
         success_16k, stderr_16k = await _run_ffmpeg_extract(
-            source_path, audio_16k_path,
-            sample_rate=16000, mono=True,
+            source_path,
+            audio_16k_path,
+            sample_rate=16000,
+            mono=True,
         )
         if not success_16k:
             raise PipelineError(
@@ -120,12 +127,15 @@ async def run_audio_extract(
         # Extract original rate
         logger.info("Extracting original-rate audio for %s", project_id)
         success_orig, stderr_orig = await _run_ffmpeg_extract(
-            source_path, audio_original_path,
-            sample_rate=None, mono=False,
+            source_path,
+            audio_original_path,
+            sample_rate=None,
+            mono=False,
         )
         if not success_orig:
             raise PipelineError(
-                f"Failed to extract original audio: {stderr_orig[-300:] if stderr_orig else 'unknown'}",
+                "Failed to extract original audio: "
+                f"{stderr_orig[-300:] if stderr_orig else 'unknown'}",
                 stage_name=STAGE,
                 operation=OPERATION,
             )

@@ -11,13 +11,16 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import fetch_all, fetch_one
 from clipcannon.exceptions import ProvenanceError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -160,19 +163,33 @@ def _row_to_chain_record(row: dict[str, object]) -> ProvenanceChainRecord:
         description=str(row["description"]) if row.get("description") else None,
         input_file_path=str(row["input_file_path"]) if row.get("input_file_path") else None,
         input_sha256=str(row["input_sha256"]) if row.get("input_sha256") else None,
-        input_size_bytes=int(row["input_size_bytes"]) if row.get("input_size_bytes") is not None else None,
+        input_size_bytes=int(row["input_size_bytes"])
+        if row.get("input_size_bytes") is not None
+        else None,
         parent_record_id=str(row["parent_record_id"]) if row.get("parent_record_id") else None,
         output_file_path=str(row["output_file_path"]) if row.get("output_file_path") else None,
         output_sha256=str(row["output_sha256"]) if row.get("output_sha256") else None,
-        output_size_bytes=int(row["output_size_bytes"]) if row.get("output_size_bytes") is not None else None,
-        output_record_count=int(row["output_record_count"]) if row.get("output_record_count") is not None else None,
+        output_size_bytes=int(row["output_size_bytes"])
+        if row.get("output_size_bytes") is not None
+        else None,
+        output_record_count=int(row["output_record_count"])
+        if row.get("output_record_count") is not None
+        else None,
         model_name=str(row["model_name"]) if row.get("model_name") else None,
         model_version=str(row["model_version"]) if row.get("model_version") else None,
-        model_quantization=str(row["model_quantization"]) if row.get("model_quantization") else None,
+        model_quantization=str(row["model_quantization"])
+        if row.get("model_quantization")
+        else None,
         model_parameters=str(row["model_parameters"]) if row.get("model_parameters") else None,
-        execution_duration_ms=int(row["execution_duration_ms"]) if row.get("execution_duration_ms") is not None else None,
-        execution_gpu_device=str(row["execution_gpu_device"]) if row.get("execution_gpu_device") else None,
-        execution_vram_peak_mb=float(row["execution_vram_peak_mb"]) if row.get("execution_vram_peak_mb") is not None else None,
+        execution_duration_ms=int(row["execution_duration_ms"])
+        if row.get("execution_duration_ms") is not None
+        else None,
+        execution_gpu_device=str(row["execution_gpu_device"])
+        if row.get("execution_gpu_device")
+        else None,
+        execution_vram_peak_mb=float(row["execution_vram_peak_mb"])
+        if row.get("execution_vram_peak_mb") is not None
+        else None,
         chain_hash=str(row["chain_hash"]),
     )
 
@@ -237,7 +254,9 @@ def verify_chain(project_id: str, db_path: Path) -> ChainVerificationResult:
     try:
         rows = fetch_all(
             conn,
-            "SELECT * FROM provenance WHERE project_id = ? ORDER BY timestamp_utc ASC, record_id ASC",
+            "SELECT * FROM provenance"
+            " WHERE project_id = ?"
+            " ORDER BY timestamp_utc ASC, record_id ASC",
             (project_id,),
         )
 

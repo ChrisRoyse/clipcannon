@@ -11,9 +11,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Awaitable
 
 from pydantic import BaseModel
 
@@ -166,7 +166,9 @@ class PipelineOrchestrator:
 
         logger.info(
             "Pipeline starting for project %s: %d stages in %d levels",
-            project_id, len(self.stages), len(levels),
+            project_id,
+            len(self.stages),
+            len(levels),
         )
 
         pipeline_aborted = False
@@ -185,7 +187,10 @@ class PipelineOrchestrator:
                 else:
                     failed_optional.append(stage.name)
                 update_stream_status(
-                    db_path, project_id, stage.name, "skipped",
+                    db_path,
+                    project_id,
+                    stage.name,
+                    "skipped",
                     error_message=result.error_message,
                 )
 
@@ -194,26 +199,29 @@ class PipelineOrchestrator:
 
             logger.info(
                 "Level %d: running %d stages: %s",
-                level_idx, len(runnable), [s.name for s in runnable],
+                level_idx,
+                len(runnable),
+                [s.name for s in runnable],
             )
 
-            tasks = [
-                self._run_stage(stage, project_id, db_path, project_dir)
-                for stage in runnable
-            ]
+            tasks = [self._run_stage(stage, project_id, db_path, project_dir) for stage in runnable]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            for stage, result in zip(runnable, results):
+            for stage, result in zip(runnable, results, strict=False):
                 if isinstance(result, BaseException):
                     error_msg = f"Unexpected error: {result}"
                     sr = StageResult(
-                        success=False, operation=stage.operation,
+                        success=False,
+                        operation=stage.operation,
                         error_message=error_msg,
                     )
                     stage_results[stage.name] = sr
                     self._failed.add(stage.name)
                     update_stream_status(
-                        db_path, project_id, stage.name, "failed",
+                        db_path,
+                        project_id,
+                        stage.name,
+                        "failed",
                         error_message=error_msg,
                     )
                     if stage.required:
@@ -240,14 +248,20 @@ class PipelineOrchestrator:
             "Pipeline %s for project %s in %d ms. "
             "Completed: %d, Failed required: %d, Failed optional: %d",
             "completed" if success else "FAILED",
-            project_id, total_ms, len(self._completed),
-            len(failed_required), len(failed_optional),
+            project_id,
+            total_ms,
+            len(self._completed),
+            len(failed_required),
+            len(failed_optional),
         )
 
         return PipelineResult(
-            project_id=project_id, success=success,
-            total_duration_ms=total_ms, stage_results=stage_results,
-            failed_required=failed_required, failed_optional=failed_optional,
+            project_id=project_id,
+            success=success,
+            total_duration_ms=total_ms,
+            stage_results=stage_results,
+            failed_required=failed_required,
+            failed_optional=failed_optional,
         )
 
     def _skip_level(
@@ -260,12 +274,16 @@ class PipelineOrchestrator:
         """Mark all stages in a level as skipped."""
         for stage in level:
             result = StageResult(
-                success=False, operation=stage.operation,
+                success=False,
+                operation=stage.operation,
                 error_message="Skipped: pipeline aborted due to required stage failure",
             )
             stage_results[stage.name] = result
             update_stream_status(
-                db_path, project_id, stage.name, "skipped",
+                db_path,
+                project_id,
+                stage.name,
+                "skipped",
                 error_message=result.error_message,
             )
 
@@ -295,7 +313,8 @@ class PipelineOrchestrator:
                 runnable.append(stage)
             else:
                 result = StageResult(
-                    success=False, operation=stage.operation,
+                    success=False,
+                    operation=stage.operation,
                     error_message="Skipped: dependency not met",
                 )
                 skipped.append((stage, result))
@@ -318,7 +337,8 @@ class PipelineOrchestrator:
             if stage.run is None:
                 raise PipelineError(
                     f"Stage '{stage.name}' has no run function",
-                    stage_name=stage.name, operation=stage.operation,
+                    stage_name=stage.name,
+                    operation=stage.operation,
                 )
 
             result = await stage.run(project_id, db_path, project_dir, self.config)
@@ -327,13 +347,19 @@ class PipelineOrchestrator:
 
             status = "completed" if result.success else "failed"
             update_stream_status(
-                db_path, project_id, stage.name, status,
-                error_message=result.error_message, duration_ms=elapsed_ms,
+                db_path,
+                project_id,
+                stage.name,
+                status,
+                error_message=result.error_message,
+                duration_ms=elapsed_ms,
             )
             log_fn = logger.info if result.success else logger.warning
             log_fn(
                 "Stage %s %s in %d ms%s",
-                stage.name, status, elapsed_ms,
+                stage.name,
+                status,
+                elapsed_ms,
                 f": {result.error_message}" if result.error_message else "",
             )
             return result
@@ -345,17 +371,24 @@ class PipelineOrchestrator:
             error_msg = f"{type(exc).__name__}: {exc}"
             logger.error("Stage %s raised exception: %s", stage.name, error_msg)
             update_stream_status(
-                db_path, project_id, stage.name, "failed",
-                error_message=error_msg, duration_ms=elapsed_ms,
+                db_path,
+                project_id,
+                stage.name,
+                "failed",
+                error_message=error_msg,
+                duration_ms=elapsed_ms,
             )
 
             if stage.required:
                 raise PipelineError(
                     f"Required stage '{stage.name}' failed: {error_msg}",
-                    stage_name=stage.name, operation=stage.operation,
+                    stage_name=stage.name,
+                    operation=stage.operation,
                 ) from exc
 
             return StageResult(
-                success=False, operation=stage.operation,
-                error_message=error_msg, duration_ms=elapsed_ms,
+                success=False,
+                operation=stage.operation,
+                error_message=error_msg,
+                duration_ms=elapsed_ms,
             )

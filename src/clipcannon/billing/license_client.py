@@ -12,11 +12,10 @@ import logging
 import uuid
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from clipcannon.billing.credits import estimate_cost
 from clipcannon.billing.hmac_integrity import get_machine_id
-from clipcannon.exceptions import BillingError
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +23,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Pydantic response models
 # ---------------------------------------------------------------------------
+
 
 class ChargeResult(BaseModel):
     """Result of a credit charge operation."""
@@ -75,6 +75,7 @@ class TransactionRecord(BaseModel):
 # ---------------------------------------------------------------------------
 # License client
 # ---------------------------------------------------------------------------
+
 
 class LicenseClient:
     """Async client for the local ClipCannon license server.

@@ -3,15 +3,19 @@
 Provides get_frame, get_frame_strip, get_storyboard, and
 get_segment_detail tools for retrieving visual and temporal data.
 """
+
 from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import fetch_all, fetch_one
 from clipcannon.tools.understanding import _db_path, _error, _project_dir, _validate_project
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -40,18 +44,40 @@ def _get_moment_context(db: Path, project_id: str, ts: int) -> dict[str, object]
         _at = "project_id = ? AND start_ms <= ? AND end_ms >= ?"
         _p = (project_id, ts, ts)
 
-        seg = fetch_one(conn, f"SELECT text, speaker_id FROM transcript_segments WHERE {_at} LIMIT 1", _p)
+        seg = fetch_one(
+            conn, f"SELECT text, speaker_id FROM transcript_segments WHERE {_at} LIMIT 1", _p
+        )
         speaker_label = None
         if seg and seg.get("speaker_id") is not None:
-            spk = fetch_one(conn, "SELECT label FROM speakers WHERE speaker_id = ?", (int(seg["speaker_id"]),))
+            spk = fetch_one(
+                conn, "SELECT label FROM speakers WHERE speaker_id = ?", (int(seg["speaker_id"]),)
+            )
             speaker_label = str(spk.get("label", "")) if spk else None
 
-        emo = fetch_one(conn, f"SELECT arousal, valence, energy FROM emotion_curve WHERE {_at} LIMIT 1", _p)
+        emo = fetch_one(
+            conn, f"SELECT arousal, valence, energy FROM emotion_curve WHERE {_at} LIMIT 1", _p
+        )
         topic = fetch_one(conn, f"SELECT label FROM topics WHERE {_at} LIMIT 1", _p)
-        scene = fetch_one(conn, f"SELECT shot_type, shot_type_confidence, quality_avg, quality_classification FROM scenes WHERE {_at} LIMIT 1", _p)
-        pace = fetch_one(conn, f"SELECT words_per_minute, pause_ratio, label FROM pacing WHERE {_at} LIMIT 1", _p)
+        scene = fetch_one(
+            conn,
+            "SELECT shot_type, shot_type_confidence,"
+            " quality_avg, quality_classification"
+            f" FROM scenes WHERE {_at} LIMIT 1",
+            _p,
+        )
+        pace = fetch_one(
+            conn,
+            f"SELECT words_per_minute, pause_ratio, label FROM pacing WHERE {_at} LIMIT 1",
+            _p,
+        )
         ost = fetch_one(conn, f"SELECT texts, type FROM on_screen_text WHERE {_at} LIMIT 1", _p)
-        prof = fetch_one(conn, "SELECT word, severity FROM profanity_events WHERE project_id = ? AND start_ms <= ? AND end_ms >= ? LIMIT 1", (project_id, ts + 500, ts))
+        prof = fetch_one(
+            conn,
+            "SELECT word, severity FROM profanity_events"
+            " WHERE project_id = ? AND start_ms <= ?"
+            " AND end_ms >= ? LIMIT 1",
+            (project_id, ts + 500, ts),
+        )
     finally:
         conn.close()
 
@@ -64,10 +90,17 @@ def _get_moment_context(db: Path, project_id: str, ts: int) -> dict[str, object]
         "shot_type": str(scene.get("shot_type", "")) if scene else None,
         "shot_type_confidence": scene.get("shot_type_confidence") if scene else None,
         "quality": scene.get("quality_avg") if scene else None,
-        "quality_classification": str(scene.get("quality_classification", "")) if scene else None,
+        "quality_classification": (str(scene.get("quality_classification", "")) if scene else None),
         "pacing": dict(pace) if pace else None,
         "on_screen_text": str(ost.get("texts", "")) if ost else None,
-        "profanity": {"word": str(prof.get("word", "")), "severity": str(prof.get("severity", ""))} if prof else None,
+        "profanity": (
+            {
+                "word": str(prof.get("word", "")),
+                "severity": str(prof.get("severity", "")),
+            }
+            if prof
+            else None
+        ),
     }
 
 
@@ -80,7 +113,9 @@ async def clipcannon_get_frame(project_id: str, timestamp_ms: int) -> dict[str, 
     frames_dir = _project_dir(project_id) / "frames"
     frame_path, actual_ms = _find_nearest_frame(frames_dir, timestamp_ms)
     if frame_path is None:
-        return _error("FRAME_NOT_FOUND", f"No frame near {timestamp_ms}ms", {"frames_dir": str(frames_dir)})
+        return _error(
+            "FRAME_NOT_FOUND", f"No frame near {timestamp_ms}ms", {"frames_dir": str(frames_dir)}
+        )
 
     context = _get_moment_context(_db_path(project_id), project_id, actual_ms)
     return {
@@ -93,7 +128,10 @@ async def clipcannon_get_frame(project_id: str, timestamp_ms: int) -> dict[str, 
 
 
 async def clipcannon_get_frame_strip(
-    project_id: str, start_ms: int, end_ms: int, count: int = 9,
+    project_id: str,
+    start_ms: int,
+    end_ms: int,
+    count: int = 9,
 ) -> dict[str, object]:
     """Build a composite grid of evenly-spaced frames from a range."""
     err = _validate_project(project_id, required_status="ready")
@@ -121,10 +159,25 @@ async def clipcannon_get_frame_strip(
             frame_paths.append(fp)
             conn = get_connection(db, enable_vec=False, dict_rows=True)
             try:
-                seg = fetch_one(conn, "SELECT text, speaker_id FROM transcript_segments WHERE project_id = ? AND start_ms <= ? AND end_ms >= ? LIMIT 1", (project_id, actual_ms, actual_ms))
+                seg = fetch_one(
+                    conn,
+                    "SELECT text, speaker_id"
+                    " FROM transcript_segments"
+                    " WHERE project_id = ?"
+                    " AND start_ms <= ?"
+                    " AND end_ms >= ? LIMIT 1",
+                    (project_id, actual_ms, actual_ms),
+                )
             finally:
                 conn.close()
-            cells.append({"timestamp_ms": actual_ms, "frame_path": str(fp), "transcript": str(seg.get("text", "")) if seg else None, "speaker_id": seg.get("speaker_id") if seg else None})
+            cells.append(
+                {
+                    "timestamp_ms": actual_ms,
+                    "frame_path": str(fp),
+                    "transcript": str(seg.get("text", "")) if seg else None,
+                    "speaker_id": seg.get("speaker_id") if seg else None,
+                }
+            )
 
     if not frame_paths:
         return _error("FRAME_NOT_FOUND", "No frames found in range")
@@ -134,14 +187,30 @@ async def clipcannon_get_frame_strip(
         _build_grid_image(frame_paths, grid_path)
     except Exception as exc:
         logger.warning("Grid composition failed: %s", exc)
-        return {"project_id": project_id, "start_ms": start_ms, "end_ms": end_ms, "grid_path": None, "grid_error": str(exc), "cell_count": len(cells), "cells": cells}
+        return {
+            "project_id": project_id,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "grid_path": None,
+            "grid_error": str(exc),
+            "cell_count": len(cells),
+            "cells": cells,
+        }
 
-    return {"project_id": project_id, "start_ms": start_ms, "end_ms": end_ms, "grid_path": str(grid_path), "cell_count": len(cells), "cells": cells}
+    return {
+        "project_id": project_id,
+        "start_ms": start_ms,
+        "end_ms": end_ms,
+        "grid_path": str(grid_path),
+        "cell_count": len(cells),
+        "cells": cells,
+    }
 
 
 def _build_grid_image(frame_paths: list[Path], output_path: Path, cols: int = 3) -> None:
     """Compose frames into a JPEG grid image."""
     from PIL import Image
+
     if not frame_paths:
         return
     cell_size = 348
@@ -158,8 +227,10 @@ def _build_grid_image(frame_paths: list[Path], output_path: Path, cols: int = 3)
 
 
 async def clipcannon_get_storyboard(
-    project_id: str, batch: int = 1,
-    start_ms: int | None = None, end_ms: int | None = None,
+    project_id: str,
+    batch: int = 1,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
 ) -> dict[str, object]:
     """Get storyboard grids by batch (12/batch) or time range."""
     err = _validate_project(project_id, required_status="ready")
@@ -171,7 +242,11 @@ async def clipcannon_get_storyboard(
     try:
         cols = "grid_id, grid_number, grid_path, cell_timestamps_ms, cell_metadata"
         if start_ms is not None and end_ms is not None:
-            grids = fetch_all(conn, f"SELECT {cols} FROM storyboard_grids WHERE project_id = ? ORDER BY grid_number", (project_id,))
+            grids = fetch_all(
+                conn,
+                f"SELECT {cols} FROM storyboard_grids WHERE project_id = ? ORDER BY grid_number",
+                (project_id,),
+            )
             grids_out: list[dict[str, object]] = []
             for g in grids:
                 try:
@@ -183,17 +258,29 @@ async def clipcannon_get_storyboard(
         else:
             per_batch = 12
             offset = (batch - 1) * per_batch
-            grids = fetch_all(conn, f"SELECT {cols} FROM storyboard_grids WHERE project_id = ? ORDER BY grid_number LIMIT ? OFFSET ?", (project_id, per_batch, offset))
+            grids = fetch_all(
+                conn,
+                f"SELECT {cols} FROM storyboard_grids"
+                " WHERE project_id = ?"
+                " ORDER BY grid_number LIMIT ? OFFSET ?",
+                (project_id, per_batch, offset),
+            )
             grids_out = [dict(g) for g in grids]
 
-        total_row = fetch_one(conn, "SELECT count(*) as cnt FROM storyboard_grids WHERE project_id = ?", (project_id,))
+        total_row = fetch_one(
+            conn, "SELECT count(*) as cnt FROM storyboard_grids WHERE project_id = ?", (project_id,)
+        )
         total_grids = int(total_row["cnt"]) if total_row else 0
     finally:
         conn.close()
 
     enriched: list[dict[str, object]] = []
     for g in grids_out:
-        gd: dict[str, object] = {"grid_id": g.get("grid_id"), "grid_number": g.get("grid_number"), "grid_path": g.get("grid_path")}
+        gd: dict[str, object] = {
+            "grid_id": g.get("grid_id"),
+            "grid_number": g.get("grid_number"),
+            "grid_path": g.get("grid_path"),
+        }
         try:
             gd["cell_timestamps_ms"] = json.loads(str(g.get("cell_timestamps_ms", "[]")))
         except (json.JSONDecodeError, TypeError):
@@ -216,7 +303,9 @@ async def clipcannon_get_storyboard(
 
 
 async def clipcannon_get_segment_detail(
-    project_id: str, start_ms: int, end_ms: int,
+    project_id: str,
+    start_ms: int,
+    end_ms: int,
 ) -> dict[str, object]:
     """Get ALL stream data for a time range: transcript, emotion, speakers,
     reactions, beats, on-screen text, pacing, quality, silence gaps."""
@@ -232,27 +321,86 @@ async def clipcannon_get_segment_detail(
         rq = "project_id = ? AND start_ms < ? AND end_ms > ?"
         rp = (project_id, end_ms, start_ms)
 
-        transcript = fetch_all(conn, f"SELECT segment_id, start_ms, end_ms, text, speaker_id FROM transcript_segments WHERE {rq} ORDER BY start_ms", rp)
-        emotion = fetch_all(conn, f"SELECT start_ms, end_ms, arousal, valence, energy FROM emotion_curve WHERE {rq} ORDER BY start_ms", rp)
+        transcript = fetch_all(
+            conn,
+            "SELECT segment_id, start_ms, end_ms, text, speaker_id"
+            f" FROM transcript_segments WHERE {rq}"
+            " ORDER BY start_ms",
+            rp,
+        )
+        emotion = fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, arousal, valence, energy"
+            f" FROM emotion_curve WHERE {rq}"
+            " ORDER BY start_ms",
+            rp,
+        )
 
         speaker_ids = {int(t["speaker_id"]) for t in transcript if t.get("speaker_id") is not None}
         speakers: list[dict[str, object]] = []
         for sid in sorted(speaker_ids):
-            row = fetch_one(conn, "SELECT speaker_id, label, total_speaking_ms, speaking_pct FROM speakers WHERE speaker_id = ?", (sid,))
+            row = fetch_one(
+                conn,
+                "SELECT speaker_id, label, total_speaking_ms,"
+                " speaking_pct FROM speakers"
+                " WHERE speaker_id = ?",
+                (sid,),
+            )
             if row:
                 speakers.append(dict(row))
 
-        reactions = fetch_all(conn, f"SELECT start_ms, end_ms, type, confidence, intensity, context_transcript FROM reactions WHERE {rq} ORDER BY start_ms", rp)
-        beat_sections = fetch_all(conn, f"SELECT start_ms, end_ms, tempo_bpm, time_signature FROM beat_sections WHERE {rq} ORDER BY start_ms", rp)
-        on_screen = fetch_all(conn, f"SELECT start_ms, end_ms, texts, type FROM on_screen_text WHERE {rq} ORDER BY start_ms", rp)
-        pacing = fetch_all(conn, f"SELECT start_ms, end_ms, words_per_minute, pause_ratio, speaker_changes, label FROM pacing WHERE {rq} ORDER BY start_ms", rp)
-        scenes = fetch_all(conn, f"SELECT start_ms, end_ms, quality_avg, quality_min, quality_classification, quality_issues, shot_type FROM scenes WHERE {rq} ORDER BY start_ms", rp)
-        silence = fetch_all(conn, f"SELECT start_ms, end_ms, duration_ms, type FROM silence_gaps WHERE {rq} ORDER BY start_ms", rp)
+        reactions = fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, type, confidence,"
+            " intensity, context_transcript"
+            f" FROM reactions WHERE {rq}"
+            " ORDER BY start_ms",
+            rp,
+        )
+        beat_sections = fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, tempo_bpm, time_signature"
+            f" FROM beat_sections WHERE {rq}"
+            " ORDER BY start_ms",
+            rp,
+        )
+        on_screen = fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, texts, type"
+            f" FROM on_screen_text WHERE {rq}"
+            " ORDER BY start_ms",
+            rp,
+        )
+        pacing = fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, words_per_minute,"
+            " pause_ratio, speaker_changes, label"
+            f" FROM pacing WHERE {rq}"
+            " ORDER BY start_ms",
+            rp,
+        )
+        scenes = fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, quality_avg, quality_min,"
+            " quality_classification, quality_issues, shot_type"
+            f" FROM scenes WHERE {rq}"
+            " ORDER BY start_ms",
+            rp,
+        )
+        silence = fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, duration_ms, type"
+            f" FROM silence_gaps WHERE {rq}"
+            " ORDER BY start_ms",
+            rp,
+        )
     finally:
         conn.close()
 
     return {
-        "project_id": project_id, "start_ms": start_ms, "end_ms": end_ms,
+        "project_id": project_id,
+        "start_ms": start_ms,
+        "end_ms": end_ms,
         "transcript": [dict(t) for t in transcript],
         "emotion_curve": [dict(e) for e in emotion],
         "speakers": speakers,

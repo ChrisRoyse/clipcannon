@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -40,7 +40,7 @@ class JsonFormatter(logging.Formatter):
             JSON-formatted log line.
         """
         log_entry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -110,10 +110,12 @@ def create_server() -> Server:
                     "details": {"available_tools": [t.name for t in ALL_TOOL_DEFINITIONS]},
                 },
             }
-            return [TextContent(
-                type="text",
-                text=json.dumps(error_result, indent=2, default=str),
-            )]
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(error_result, indent=2, default=str),
+                )
+            ]
 
         try:
             result = await dispatch_fn(name, args)
@@ -127,10 +129,12 @@ def create_server() -> Server:
                 },
             }
 
-        return [TextContent(
-            type="text",
-            text=json.dumps(result, indent=2, default=str),
-        )]
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(result, indent=2, default=str),
+            )
+        ]
 
     logger.info(
         "ClipCannon MCP server created: %d tools registered",

@@ -11,10 +11,8 @@ import asyncio
 import logging
 import shutil
 import subprocess
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
-from clipcannon.exceptions import PipelineError
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.provenance import (
     ExecutionInfo,
@@ -25,6 +23,11 @@ from clipcannon.provenance import (
     sha256_file,
     sha256_string,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,7 @@ def _check_demucs_available() -> bool:
     """
     try:
         import demucs  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -62,10 +66,15 @@ async def _run_demucs_subprocess(
         Tuple of (success, stderr_output).
     """
     cmd = [
-        "python", "-m", "demucs",
-        "--two-stems", "vocals",
-        "-n", "htdemucs",
-        "-o", str(output_dir),
+        "python",
+        "-m",
+        "demucs",
+        "--two-stems",
+        "vocals",
+        "-n",
+        "htdemucs",
+        "-o",
+        str(output_dir),
         str(audio_path),
     ]
     logger.info("Running demucs: %s", " ".join(cmd))
@@ -97,8 +106,8 @@ async def _run_demucs_api(
     try:
         import torch
         import torchaudio
-        from demucs.pretrained import get_model
         from demucs.apply import apply_model
+        from demucs.pretrained import get_model
 
         def _separate() -> bool:
             model = get_model("htdemucs")

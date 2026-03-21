@@ -4,14 +4,15 @@ Matches transcript words against a severity-rated word list to detect
 profanity, compute content ratings, and populate the content_safety
 table. This is an optional stage -- failure does not abort the pipeline.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert, execute, fetch_all
 from clipcannon.pipeline.orchestrator import StageResult
@@ -22,6 +23,9 @@ from clipcannon.provenance import (
     record_provenance,
     sha256_string,
 )
+
+if TYPE_CHECKING:
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -121,12 +125,14 @@ def _match_transcript_words(
         # Strip punctuation for matching
         clean = raw_word.lower().strip(".,!?;:\"'-()[]{}#@")
         if clean in wordlist:
-            matches.append({
-                "word": raw_word,
-                "start_ms": int(row["start_ms"]),
-                "end_ms": int(row["end_ms"]),
-                "severity": wordlist[clean],
-            })
+            matches.append(
+                {
+                    "word": raw_word,
+                    "start_ms": int(row["start_ms"]),
+                    "end_ms": int(row["end_ms"]),
+                    "severity": wordlist[clean],
+                }
+            )
 
     return matches
 
@@ -271,17 +277,26 @@ async def run_profanity(
 
         # Match transcript words
         matches = await asyncio.to_thread(
-            _match_transcript_words, db_path, project_id, wordlist,
+            _match_transcript_words,
+            db_path,
+            project_id,
+            wordlist,
         )
 
         # Get duration for density calculation
         duration_ms = await asyncio.to_thread(
-            _get_duration_ms, db_path, project_id,
+            _get_duration_ms,
+            db_path,
+            project_id,
         )
 
         # Insert results
         profanity_count, content_rating = await asyncio.to_thread(
-            _insert_profanity_results, db_path, project_id, matches, duration_ms,
+            _insert_profanity_results,
+            db_path,
+            project_id,
+            matches,
+            duration_ms,
         )
 
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -316,7 +331,9 @@ async def run_profanity(
         )
 
         logger.info(
-            "Profanity detection complete in %d ms: %s", elapsed_ms, summary,
+            "Profanity detection complete in %d ms: %s",
+            elapsed_ms,
+            summary,
         )
 
         return StageResult(

@@ -5,14 +5,14 @@ combination of seven signals: emotion energy, reaction presence,
 semantic density, narrative completeness, visual variety, visual
 quality, and speaker confidence. This is an optional stage.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert, fetch_all, fetch_one
 from clipcannon.pipeline.orchestrator import StageResult
@@ -23,6 +23,11 @@ from clipcannon.provenance import (
     record_provenance,
     sha256_string,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -116,14 +121,10 @@ def _load_reactions(
     try:
         rows = fetch_all(
             conn,
-            "SELECT start_ms, end_ms FROM reactions "
-            "WHERE project_id = ? ORDER BY start_ms",
+            "SELECT start_ms, end_ms FROM reactions WHERE project_id = ? ORDER BY start_ms",
             (project_id,),
         )
-        return [
-            {"start_ms": int(r["start_ms"]), "end_ms": int(r["end_ms"])}
-            for r in rows
-        ]
+        return [{"start_ms": int(r["start_ms"]), "end_ms": int(r["end_ms"])} for r in rows]
     finally:
         conn.close()
 
@@ -188,9 +189,7 @@ def _load_scenes(
             {
                 "start_ms": int(r["start_ms"]),
                 "end_ms": int(r["end_ms"]),
-                "quality_avg": float(r["quality_avg"])
-                if r.get("quality_avg") is not None
-                else 0.5,
+                "quality_avg": float(r["quality_avg"]) if r.get("quality_avg") is not None else 0.5,
             }
             for r in rows
         ]
@@ -343,12 +342,8 @@ def _narrative_completeness(
     first_text = str(in_window[0].get("text", "")).strip()
     last_text = str(in_window[-1].get("text", "")).strip()
 
-    starts_at_boundary = (
-        first_text and first_text[0].isupper()
-    ) if first_text else False
-    ends_at_boundary = (
-        last_text and last_text[-1] in ".!?"
-    ) if last_text else False
+    starts_at_boundary = (first_text and first_text[0].isupper()) if first_text else False
+    ends_at_boundary = (last_text and last_text[-1] in ".!?") if last_text else False
 
     if starts_at_boundary and ends_at_boundary:
         return 1.0
@@ -486,10 +481,7 @@ def _generate_reason(
 
     start_s = win_start / 1000.0
     end_s = win_end / 1000.0
-    return (
-        f"Highlight at {start_s:.1f}s-{end_s:.1f}s: "
-        + ", ".join(reasons)
-    )
+    return f"Highlight at {start_s:.1f}s-{end_s:.1f}s: " + ", ".join(reasons)
 
 
 def _classify_highlight_type(scores: dict[str, float]) -> str:
@@ -566,20 +558,22 @@ def _score_candidates(
         highlight_type = _classify_highlight_type(scores)
         reason = _generate_reason(scores, win_start, win_end)
 
-        candidates.append({
-            "start_ms": win_start,
-            "end_ms": win_end,
-            "type": highlight_type,
-            "score": round(total_score, 4),
-            "reason": reason,
-            "emotion_score": round(scores["emotion"], 4),
-            "reaction_score": round(scores["reaction"], 4),
-            "semantic_score": round(scores["semantic"], 4),
-            "narrative_score": round(scores["narrative"], 4),
-            "visual_score": round(scores["visual_variety"], 4),
-            "quality_score": round(scores["quality"], 4),
-            "speaker_score": round(scores["speaker"], 4),
-        })
+        candidates.append(
+            {
+                "start_ms": win_start,
+                "end_ms": win_end,
+                "type": highlight_type,
+                "score": round(total_score, 4),
+                "reason": reason,
+                "emotion_score": round(scores["emotion"], 4),
+                "reaction_score": round(scores["reaction"], 4),
+                "semantic_score": round(scores["semantic"], 4),
+                "narrative_score": round(scores["narrative"], 4),
+                "visual_score": round(scores["visual_variety"], 4),
+                "quality_score": round(scores["quality"], 4),
+                "speaker_score": round(scores["speaker"], 4),
+            }
+        )
 
         win_start = win_end
 
@@ -630,10 +624,19 @@ def _insert_highlights(
             conn,
             "highlights",
             [
-                "project_id", "start_ms", "end_ms", "type", "score",
-                "reason", "emotion_score", "reaction_score",
-                "semantic_score", "narrative_score", "visual_score",
-                "quality_score", "speaker_score",
+                "project_id",
+                "start_ms",
+                "end_ms",
+                "type",
+                "score",
+                "reason",
+                "emotion_score",
+                "reaction_score",
+                "semantic_score",
+                "narrative_score",
+                "visual_score",
+                "quality_score",
+                "speaker_score",
             ],
             rows,
         )
@@ -670,7 +673,9 @@ async def run_highlights(
 
     try:
         duration_ms = await asyncio.to_thread(
-            _get_duration_ms, db_path, project_id,
+            _get_duration_ms,
+            db_path,
+            project_id,
         )
         if duration_ms <= 0:
             logger.warning("No duration found, skipping highlight scoring")
@@ -695,19 +700,29 @@ async def run_highlights(
             asyncio.to_thread(_load_topics, db_path, project_id),
             asyncio.to_thread(_load_scenes, db_path, project_id),
             asyncio.to_thread(
-                _load_segments_with_speakers, db_path, project_id,
+                _load_segments_with_speakers,
+                db_path,
+                project_id,
             ),
         )
 
         # Score candidates
         highlights = _score_candidates(
-            duration_ms, emotions, reactions, topics,
-            scenes, segments, max_highlights,
+            duration_ms,
+            emotions,
+            reactions,
+            topics,
+            scenes,
+            segments,
+            max_highlights,
         )
 
         # Insert
         count = await asyncio.to_thread(
-            _insert_highlights, db_path, project_id, highlights,
+            _insert_highlights,
+            db_path,
+            project_id,
+            highlights,
         )
 
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -715,8 +730,7 @@ async def run_highlights(
         # Build provenance
         top_score = highlights[0]["score"] if highlights else 0.0
         summary = (
-            f"{count} highlights selected (top score={top_score}), "
-            f"max_requested={max_highlights}"
+            f"{count} highlights selected (top score={top_score}), max_requested={max_highlights}"
         )
         output_sha = sha256_string(summary)
 
@@ -740,7 +754,8 @@ async def run_highlights(
 
         logger.info(
             "Highlight scoring complete in %d ms: %s",
-            elapsed_ms, summary,
+            elapsed_ms,
+            summary,
         )
 
         return StageResult(

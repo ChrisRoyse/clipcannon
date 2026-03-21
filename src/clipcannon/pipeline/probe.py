@@ -10,8 +10,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_one
 from clipcannon.exceptions import PipelineError
@@ -30,6 +30,9 @@ from clipcannon.tools.video_probe import (
     extract_video_metadata,
     run_ffprobe,
 )
+
+if TYPE_CHECKING:
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 

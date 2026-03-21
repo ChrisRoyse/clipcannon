@@ -14,9 +14,8 @@ import asyncio
 import json
 import logging
 import time
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all
 from clipcannon.pipeline.orchestrator import StageResult
@@ -28,6 +27,11 @@ from clipcannon.provenance import (
     record_provenance,
     sha256_string,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -134,15 +138,17 @@ def _run_pyiqa_scoring(
 
     metric = pyiqa.create_metric("brisque", device=device)
 
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.ToTensor(),
+        ]
+    )
 
     quality_scores: list[float] = []
     batch_size = 16
 
     for batch_start in range(0, len(frame_paths), batch_size):
-        batch_paths = frame_paths[batch_start:batch_start + batch_size]
+        batch_paths = frame_paths[batch_start : batch_start + batch_size]
         batch_tensors: list[object] = []
 
         for fp in batch_paths:
@@ -201,7 +207,7 @@ def _run_laplacian_fallback(frame_paths: list[Path]) -> list[float]:
 
             for di in range(3):
                 for dj in range(3):
-                    laplacian += padded[di:di + h, dj:dj + w] * kernel[di, dj]
+                    laplacian += padded[di : di + h, dj : dj + w] * kernel[di, dj]
 
             variance = float(np.var(laplacian))
 
@@ -270,7 +276,8 @@ async def run_quality(
         device = str(config.get("gpu.device"))
 
         logger.info(
-            "Starting quality assessment: %d frames", len(frame_paths),
+            "Starting quality assessment: %d frames",
+            len(frame_paths),
         )
 
         # Try pyiqa first, fall back to Laplacian
@@ -279,20 +286,23 @@ async def run_quality(
 
         try:
             quality_scores = await asyncio.to_thread(
-                _run_pyiqa_scoring, frame_paths, device,
+                _run_pyiqa_scoring,
+                frame_paths,
+                device,
             )
             logger.info("Quality scoring completed with pyiqa BRISQUE")
         except ImportError:
             logger.warning("pyiqa not available, using Laplacian fallback")
             quality_scores = await asyncio.to_thread(
-                _run_laplacian_fallback, frame_paths,
+                _run_laplacian_fallback,
+                frame_paths,
             )
             model_name = "laplacian_variance"
             model_version = "fallback"
 
         # Build frame -> quality mapping
         frame_quality: dict[int, float] = {}
-        for fp, score in zip(frame_paths, quality_scores):
+        for fp, score in zip(frame_paths, quality_scores, strict=False):
             ts_ms = _frame_timestamp_ms(fp, extraction_fps)
             frame_quality[ts_ms] = score
 
@@ -316,8 +326,7 @@ async def run_quality(
 
                     # Collect quality scores for frames in this scene
                     scene_scores: list[float] = [
-                        score for ts, score in frame_quality.items()
-                        if start_ms <= ts <= end_ms
+                        score for ts, score in frame_quality.items() if start_ms <= ts <= end_ms
                     ]
 
                     if not scene_scores:
@@ -349,9 +358,7 @@ async def run_quality(
 
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
-        avg_quality = (
-            sum(quality_scores) / len(quality_scores) if quality_scores else 0.0
-        )
+        avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0.0
 
         content_hash = sha256_string(
             f"quality:frames={len(quality_scores)},avg={avg_quality:.2f}",

@@ -586,9 +586,7 @@ def get_schema_version(db_path: str | Path) -> int | None:
     """
     try:
         conn = get_connection(db_path, enable_vec=False, dict_rows=False)
-        result = conn.execute(
-            "SELECT MAX(version) FROM schema_version"
-        ).fetchone()
+        result = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
         conn.close()
         return result[0] if result and result[0] is not None else None
     except (sqlite3.OperationalError, DatabaseError):

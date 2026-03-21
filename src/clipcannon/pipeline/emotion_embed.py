@@ -16,11 +16,10 @@ import json
 import logging
 import struct
 import time
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert
 from clipcannon.exceptions import PipelineError
@@ -35,6 +34,11 @@ from clipcannon.provenance import (
     sha256_file,
     sha256_string,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,7 @@ def _load_audio(audio_path: Path) -> tuple[np.ndarray, int]:
     """
     try:
         import torchaudio
+
         waveform, sr = torchaudio.load(str(audio_path))
         # Convert to mono
         if waveform.shape[0] > 1:
@@ -116,7 +121,7 @@ def _segment_audio(
 
     pos = 0
     while pos + window_samples <= len(audio):
-        chunk = audio[pos:pos + window_samples]
+        chunk = audio[pos : pos + window_samples]
         start_ms = int(pos / sample_rate * 1000)
         end_ms = int((pos + window_samples) / sample_rate * 1000)
         segments.append((start_ms, end_ms, chunk))
@@ -151,7 +156,7 @@ def _compute_emotion_model(
         embedding.
     """
     import torch
-    from transformers import AutoModel, AutoFeatureExtractor
+    from transformers import AutoFeatureExtractor, AutoModel
 
     feature_extractor = AutoFeatureExtractor.from_pretrained(MODEL_ID)
     model = AutoModel.from_pretrained(MODEL_ID)
@@ -176,7 +181,7 @@ def _compute_emotion_model(
         hidden = outputs.last_hidden_state.squeeze(0).cpu().numpy()
 
         # Energy: normalized RMS of hidden states
-        rms = float(np.sqrt(np.mean(hidden ** 2)))
+        rms = float(np.sqrt(np.mean(hidden**2)))
         energy = float(np.clip(rms / (rms + 1.0), 0.0, 1.0))
 
         # Arousal: normalized variance of hidden states
@@ -190,14 +195,16 @@ def _compute_emotion_model(
         # Mean-pool hidden states to get embedding
         embedding = np.mean(hidden, axis=0).astype(np.float32)
 
-        results.append({
-            "start_ms": start_ms,
-            "end_ms": end_ms,
-            "energy": round(energy, 4),
-            "arousal": round(arousal, 4),
-            "valence": round(valence, 4),
-            "embedding": embedding,
-        })
+        results.append(
+            {
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "energy": round(energy, 4),
+                "arousal": round(arousal, 4),
+                "valence": round(valence, 4),
+                "embedding": embedding,
+            }
+        )
 
     # Clean up
     del model
@@ -222,34 +229,33 @@ def _compute_emotion_fallback(
     results: list[dict[str, object]] = []
 
     for start_ms, end_ms, chunk in segments:
-        rms = float(np.sqrt(np.mean(chunk ** 2)))
+        rms = float(np.sqrt(np.mean(chunk**2)))
         energy = float(np.clip(rms * 5.0, 0.0, 1.0))
 
         # Arousal from energy variance over sub-windows
         sub_size = max(1, len(chunk) // 10)
         sub_energies = []
         for i in range(0, len(chunk) - sub_size, sub_size):
-            sub_rms = float(np.sqrt(np.mean(chunk[i:i + sub_size] ** 2)))
+            sub_rms = float(np.sqrt(np.mean(chunk[i : i + sub_size] ** 2)))
             sub_energies.append(sub_rms)
 
-        if sub_energies:
-            arousal = float(np.clip(np.std(sub_energies) * 10, 0.0, 1.0))
-        else:
-            arousal = 0.0
+        arousal = float(np.clip(np.std(sub_energies) * 10, 0.0, 1.0)) if sub_energies else 0.0
 
         valence = 0.5  # Cannot determine from raw audio
 
         # Zero embedding as placeholder
         embedding = np.zeros(EMBEDDING_DIM, dtype=np.float32)
 
-        results.append({
-            "start_ms": start_ms,
-            "end_ms": end_ms,
-            "energy": round(energy, 4),
-            "arousal": round(arousal, 4),
-            "valence": round(valence, 4),
-            "embedding": embedding,
-        })
+        results.append(
+            {
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "energy": round(energy, 4),
+                "arousal": round(arousal, 4),
+                "valence": round(valence, 4),
+                "embedding": embedding,
+            }
+        )
 
     return results
 
@@ -298,7 +304,8 @@ def _insert_results(
             for r in results
         ]
         batch_insert(
-            conn, "emotion_curve",
+            conn,
+            "emotion_curve",
             ["project_id", "start_ms", "end_ms", "arousal", "valence", "energy"],
             curve_rows,
         )
@@ -388,7 +395,9 @@ async def run_emotion_embed(
         audio, sample_rate = await asyncio.to_thread(_load_audio, audio_path)
         logger.info(
             "Audio loaded: %d samples, %d Hz, %.1f seconds",
-            len(audio), sample_rate, len(audio) / sample_rate,
+            len(audio),
+            sample_rate,
+            len(audio) / sample_rate,
         )
 
         # Segment audio
@@ -409,7 +418,9 @@ async def run_emotion_embed(
 
         try:
             results = await asyncio.to_thread(
-                _compute_emotion_model, segments, device,
+                _compute_emotion_model,
+                segments,
+                device,
             )
             logger.info("Wav2Vec2 emotion analysis succeeded")
         except (ImportError, OSError, RuntimeError) as model_err:
@@ -419,12 +430,16 @@ async def run_emotion_embed(
             )
             backend_name = "rms_fallback"
             results = await asyncio.to_thread(
-                _compute_emotion_fallback, segments,
+                _compute_emotion_fallback,
+                segments,
             )
 
         # Insert results
         counts = await asyncio.to_thread(
-            _insert_results, db_path, project_id, results,
+            _insert_results,
+            db_path,
+            project_id,
+            results,
         )
 
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -432,8 +447,7 @@ async def run_emotion_embed(
         # Provenance
         input_sha = await asyncio.to_thread(sha256_file, audio_path)
         summary_data = json.dumps(
-            [{"s": r["start_ms"], "e": r["energy"], "a": r["arousal"]}
-             for r in results],
+            [{"s": r["start_ms"], "e": r["energy"], "a": r["arousal"]} for r in results],
             sort_keys=True,
         )
         output_sha = sha256_string(summary_data)
@@ -474,7 +488,9 @@ async def run_emotion_embed(
         )
 
         logger.info(
-            "Emotion analysis complete in %d ms: %s", elapsed_ms, counts,
+            "Emotion analysis complete in %d ms: %s",
+            elapsed_ms,
+            counts,
         )
 
         return StageResult(

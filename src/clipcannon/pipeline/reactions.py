@@ -3,26 +3,36 @@
 Detects audience reactions (laughter, applause) in audio using the
 SenseVoice model. Falls back to energy-based detection if unavailable.
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import time
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert, fetch_all
 from clipcannon.exceptions import PipelineError
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.pipeline.source_resolution import resolve_audio_input
 from clipcannon.provenance import (
-    ExecutionInfo, InputInfo, ModelInfo, OutputInfo,
-    record_provenance, sha256_file, sha256_string,
+    ExecutionInfo,
+    InputInfo,
+    ModelInfo,
+    OutputInfo,
+    record_provenance,
+    sha256_file,
+    sha256_string,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 OPERATION = "reaction_detection"
@@ -44,6 +54,7 @@ def _load_audio(audio_path: Path) -> tuple[np.ndarray, int]:
     """
     try:
         import torchaudio
+
         waveform, sr = torchaudio.load(str(audio_path))
         if waveform.shape[0] > 1:
             waveform = waveform.mean(dim=0, keepdim=True)
@@ -76,6 +87,7 @@ def _check_sensevoice_funasr() -> bool:
     """Check if FunASR SenseVoice is available."""
     try:
         from funasr import AutoModel as FunASRModel  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -85,6 +97,7 @@ def _check_sensevoice_transformers() -> bool:
     """Check if SenseVoice via transformers is available."""
     try:
         from transformers import AutoModelForAudioClassification  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -113,7 +126,7 @@ def _detect_reactions_funasr(
 
     pos = 0
     while pos + window_samples <= len(audio):
-        chunk = audio[pos:pos + window_samples]
+        chunk = audio[pos : pos + window_samples]
         start_ms = int(pos / sample_rate * 1000)
         end_ms = int((pos + window_samples) / sample_rate * 1000)
 
@@ -124,23 +137,27 @@ def _detect_reactions_funasr(
             text_lower = text.lower()
 
             if "<laughter>" in text_lower or "laugh" in text_lower:
-                reactions.append({
-                    "start_ms": start_ms,
-                    "end_ms": end_ms,
-                    "type": "laughter",
-                    "confidence": 0.8,
-                    "duration_ms": end_ms - start_ms,
-                    "intensity": "moderate",
-                })
+                reactions.append(
+                    {
+                        "start_ms": start_ms,
+                        "end_ms": end_ms,
+                        "type": "laughter",
+                        "confidence": 0.8,
+                        "duration_ms": end_ms - start_ms,
+                        "intensity": "moderate",
+                    }
+                )
             if "<applause>" in text_lower or "applause" in text_lower:
-                reactions.append({
-                    "start_ms": start_ms,
-                    "end_ms": end_ms,
-                    "type": "applause",
-                    "confidence": 0.8,
-                    "duration_ms": end_ms - start_ms,
-                    "intensity": "moderate",
-                })
+                reactions.append(
+                    {
+                        "start_ms": start_ms,
+                        "end_ms": end_ms,
+                        "type": "applause",
+                        "confidence": 0.8,
+                        "duration_ms": end_ms - start_ms,
+                        "intensity": "moderate",
+                    }
+                )
 
         pos += stride_samples
 
@@ -170,11 +187,11 @@ def _detect_reactions_energy(
 
     pos = 0
     while pos + window_samples <= len(audio):
-        chunk = audio[pos:pos + window_samples]
+        chunk = audio[pos : pos + window_samples]
         start_ms = int(pos / sample_rate * 1000)
         end_ms = int((pos + window_samples) / sample_rate * 1000)
 
-        rms = float(np.sqrt(np.mean(chunk ** 2)))
+        rms = float(np.sqrt(np.mean(chunk**2)))
 
         if rms > ENERGY_REACTION_THRESHOLD:
             # Compute spectral features to classify
@@ -182,15 +199,14 @@ def _detect_reactions_energy(
             if len(spectrum) > 0:
                 # Spectral centroid (higher = more likely applause/laughter)
                 freqs = np.fft.rfftfreq(len(chunk), 1.0 / sample_rate)
-                centroid = float(
-                    np.sum(freqs * spectrum) / (np.sum(spectrum) + 1e-10)
-                )
+                centroid = float(np.sum(freqs * spectrum) / (np.sum(spectrum) + 1e-10))
 
                 # Spectral spread
-                spread = float(np.sqrt(
-                    np.sum(((freqs - centroid) ** 2) * spectrum)
-                    / (np.sum(spectrum) + 1e-10)
-                ))
+                spread = float(
+                    np.sqrt(
+                        np.sum(((freqs - centroid) ** 2) * spectrum) / (np.sum(spectrum) + 1e-10)
+                    )
+                )
 
                 # Zero crossing rate
                 zcr = float(np.mean(np.abs(np.diff(np.sign(chunk)))) / 2)
@@ -215,14 +231,16 @@ def _detect_reactions_energy(
                     elif rms > 0.2:
                         intensity = "moderate"
 
-                    reactions.append({
-                        "start_ms": start_ms,
-                        "end_ms": end_ms,
-                        "type": reaction_type,
-                        "confidence": round(confidence, 3),
-                        "duration_ms": end_ms - start_ms,
-                        "intensity": intensity,
-                    })
+                    reactions.append(
+                        {
+                            "start_ms": start_ms,
+                            "end_ms": end_ms,
+                            "type": reaction_type,
+                            "confidence": round(confidence, 3),
+                            "duration_ms": end_ms - start_ms,
+                            "intensity": intensity,
+                        }
+                    )
 
         pos += stride_samples
 
@@ -297,8 +315,7 @@ def _merge_overlapping_reactions(
 
     current = dict(sorted_reactions[0])
     for r in sorted_reactions[1:]:
-        if (str(r["type"]) == str(current["type"])
-                and int(r["start_ms"]) <= int(current["end_ms"])):
+        if str(r["type"]) == str(current["type"]) and int(r["start_ms"]) <= int(current["end_ms"]):
             current["end_ms"] = max(int(current["end_ms"]), int(r["end_ms"]))
             current["duration_ms"] = int(current["end_ms"]) - int(current["start_ms"])
             current["confidence"] = max(
@@ -347,9 +364,18 @@ def _insert_reactions(
             for r in reactions
         ]
         batch_insert(
-            conn, "reactions",
-            ["project_id", "start_ms", "end_ms", "type",
-             "confidence", "duration_ms", "intensity", "context_transcript"],
+            conn,
+            "reactions",
+            [
+                "project_id",
+                "start_ms",
+                "end_ms",
+                "type",
+                "confidence",
+                "duration_ms",
+                "intensity",
+                "context_transcript",
+            ],
             rows,
         )
         conn.commit()
@@ -403,23 +429,30 @@ async def run_reactions(
         if _check_sensevoice_funasr():
             try:
                 reactions = await asyncio.to_thread(
-                    _detect_reactions_funasr, audio, sample_rate,
+                    _detect_reactions_funasr,
+                    audio,
+                    sample_rate,
                 )
                 backend_name = "sensevoice_funasr"
                 logger.info("SenseVoice detected %d reactions", len(reactions))
             except Exception as sv_err:
                 logger.warning(
-                    "SenseVoice failed, using energy fallback: %s", sv_err,
+                    "SenseVoice failed, using energy fallback: %s",
+                    sv_err,
                 )
                 reactions = await asyncio.to_thread(
-                    _detect_reactions_energy, audio, sample_rate,
+                    _detect_reactions_energy,
+                    audio,
+                    sample_rate,
                 )
         else:
             logger.info(
                 "SenseVoice not available, using energy-based detection",
             )
             reactions = await asyncio.to_thread(
-                _detect_reactions_energy, audio, sample_rate,
+                _detect_reactions_energy,
+                audio,
+                sample_rate,
             )
 
         # Merge overlapping reactions
@@ -427,12 +460,18 @@ async def run_reactions(
 
         # Attach context transcripts
         reactions = await asyncio.to_thread(
-            _attach_context_transcripts, db_path, project_id, reactions,
+            _attach_context_transcripts,
+            db_path,
+            project_id,
+            reactions,
         )
 
         # Insert
         count = await asyncio.to_thread(
-            _insert_reactions, db_path, project_id, reactions,
+            _insert_reactions,
+            db_path,
+            project_id,
+            reactions,
         )
 
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -478,7 +517,9 @@ async def run_reactions(
 
         logger.info(
             "Reaction detection complete in %d ms: %d reactions (%s)",
-            elapsed_ms, count, backend_name,
+            elapsed_ms,
+            count,
+            backend_name,
         )
 
         return StageResult(

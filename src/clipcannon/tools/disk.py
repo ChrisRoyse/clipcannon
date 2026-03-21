@@ -6,6 +6,7 @@ regenerable, ephemeral) and cleaning up files to free space.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
 from pathlib import Path
@@ -27,7 +28,9 @@ REGENERABLE_FILE_PATTERNS: set[str] = {"source_cfr.mp4"}
 # Everything else is ephemeral (logs, temp files, etc.)
 
 
-def _error_response(code: str, message: str, details: dict[str, object] | None = None) -> dict[str, object]:
+def _error_response(
+    code: str, message: str, details: dict[str, object] | None = None
+) -> dict[str, object]:
     """Build a standardized error response dict.
 
     Args:
@@ -160,7 +163,7 @@ async def clipcannon_disk_status(project_id: str) -> dict[str, object]:
             "total_bytes": total_bytes,
             "total_mb": round(total_bytes / (1024 * 1024), 2),
             "system_free_bytes": free_space,
-            "system_free_gb": round(free_space / (1024 ** 3), 2),
+            "system_free_gb": round(free_space / (1024**3), 2),
         }
 
     except Exception as exc:
@@ -192,7 +195,7 @@ async def clipcannon_disk_cleanup(
     try:
         deleted_files: list[dict[str, object]] = []
         total_freed = 0
-        target_bytes = int(target_free_gb * (1024 ** 3)) if target_free_gb else None
+        target_bytes = int(target_free_gb * (1024**3)) if target_free_gb else None
 
         # Collect files by tier
         ephemeral_files: list[tuple[Path, int]] = []
@@ -237,7 +240,9 @@ async def clipcannon_disk_cleanup(
                 try:
                     relative = str(file_path.relative_to(project_dir))
                     file_path.unlink()
-                    deleted_files.append({"path": relative, "size_bytes": size, "tier": "regenerable"})
+                    deleted_files.append(
+                        {"path": relative, "size_bytes": size, "tier": "regenerable"}
+                    )
                     total_freed += size
                 except OSError as exc:
                     logger.warning("Failed to delete %s: %s", file_path, exc)
@@ -245,10 +250,8 @@ async def clipcannon_disk_cleanup(
         # Clean up empty directories
         for dir_path in sorted(project_dir.rglob("*"), reverse=True):
             if dir_path.is_dir() and not list(dir_path.iterdir()):
-                try:
+                with contextlib.suppress(OSError):
                     dir_path.rmdir()
-                except OSError:
-                    pass
 
         free_after = _get_system_free_space(project_dir)
 
@@ -258,7 +261,7 @@ async def clipcannon_disk_cleanup(
             "total_deleted": len(deleted_files),
             "freed_bytes": total_freed,
             "freed_mb": round(total_freed / (1024 * 1024), 2),
-            "system_free_gb_after": round(free_after / (1024 ** 3), 2),
+            "system_free_gb_after": round(free_after / (1024**3), 2),
         }
 
     except Exception as exc:
@@ -273,7 +276,11 @@ async def clipcannon_disk_cleanup(
 DISK_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
         name="clipcannon_disk_status",
-        description="Show disk usage for a project classified by storage tier: sacred (never deleted), regenerable (can be recreated), and ephemeral (safe to delete).",
+        description=(
+            "Show disk usage for a project classified by storage tier:"
+            " sacred (never deleted), regenerable (can be recreated),"
+            " and ephemeral (safe to delete)."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -287,7 +294,11 @@ DISK_TOOL_DEFINITIONS: list[Tool] = [
     ),
     Tool(
         name="clipcannon_disk_cleanup",
-        description="Free disk space by deleting ephemeral files first, then regenerable files (largest first). Sacred files are never touched.",
+        description=(
+            "Free disk space by deleting ephemeral files first,"
+            " then regenerable files (largest first)."
+            " Sacred files are never touched."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -297,7 +308,10 @@ DISK_TOOL_DEFINITIONS: list[Tool] = [
                 },
                 "target_free_gb": {
                     "type": "number",
-                    "description": "Stop cleanup once this many GB are free on disk (omit to clean all non-sacred)",
+                    "description": (
+                        "Stop cleanup once this many GB are free"
+                        " on disk (omit to clean all non-sacred)"
+                    ),
                 },
             },
             "required": ["project_id"],

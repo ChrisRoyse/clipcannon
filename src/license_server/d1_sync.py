@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +43,11 @@ def sync_push() -> str:
         A status message string.
     """
     if not is_d1_configured():
-        msg = "D1 sync skipped (local-only mode). Set CLIPCANNON_D1_API_URL and CLIPCANNON_D1_API_TOKEN to enable."
+        msg = (
+            "D1 sync skipped (local-only mode)."
+            " Set CLIPCANNON_D1_API_URL and"
+            " CLIPCANNON_D1_API_TOKEN to enable."
+        )
         logger.info(msg)
         return msg
 
@@ -68,7 +71,11 @@ def sync_pull() -> str:
         A status message string.
     """
     if not is_d1_configured():
-        msg = "D1 sync skipped (local-only mode). Set CLIPCANNON_D1_API_URL and CLIPCANNON_D1_API_TOKEN to enable."
+        msg = (
+            "D1 sync skipped (local-only mode)."
+            " Set CLIPCANNON_D1_API_URL and"
+            " CLIPCANNON_D1_API_TOKEN to enable."
+        )
         logger.info(msg)
         return msg
 

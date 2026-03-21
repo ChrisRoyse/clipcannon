@@ -11,8 +11,8 @@ import asyncio
 import logging
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_one
 from clipcannon.exceptions import PipelineError
@@ -25,6 +25,9 @@ from clipcannon.provenance import (
     sha256_file,
 )
 
+if TYPE_CHECKING:
+    from clipcannon.config import ClipCannonConfig
+
 logger = logging.getLogger(__name__)
 
 OPERATION = "vfr_normalize"
@@ -32,7 +35,14 @@ STAGE = "ffmpeg_cfr"
 
 # Standard frame rates to snap to
 STANDARD_FRAME_RATES: list[float] = [
-    23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0,
+    23.976,
+    24.0,
+    25.0,
+    29.97,
+    30.0,
+    50.0,
+    59.94,
+    60.0,
 ]
 
 
@@ -71,14 +81,22 @@ async def _run_ffmpeg_normalize(
 
     if try_nvenc:
         cmd_nvenc = [
-            "ffmpeg", "-y",
-            "-hwaccel", "cuda",
-            "-i", str(source_path),
-            "-vf", f"fps={fps_str}",
-            "-c:v", "h264_nvenc",
-            "-preset", "p4",
-            "-cq", "18",
-            "-c:a", "copy",
+            "ffmpeg",
+            "-y",
+            "-hwaccel",
+            "cuda",
+            "-i",
+            str(source_path),
+            "-vf",
+            f"fps={fps_str}",
+            "-c:v",
+            "h264_nvenc",
+            "-preset",
+            "p4",
+            "-cq",
+            "18",
+            "-c:a",
+            "copy",
             str(output_path),
         ]
         logger.info("Attempting VFR normalization with NVENC: fps=%s", fps_str)
@@ -100,13 +118,20 @@ async def _run_ffmpeg_normalize(
         )
 
     cmd_sw = [
-        "ffmpeg", "-y",
-        "-i", str(source_path),
-        "-vf", f"fps={fps_str}",
-        "-c:v", "libx264",
-        "-crf", "18",
-        "-preset", "medium",
-        "-c:a", "copy",
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_path),
+        "-vf",
+        f"fps={fps_str}",
+        "-c:v",
+        "libx264",
+        "-crf",
+        "18",
+        "-preset",
+        "medium",
+        "-c:a",
+        "copy",
         str(output_path),
     ]
     logger.info("Running VFR normalization with libx264: fps=%s", fps_str)
@@ -191,7 +216,10 @@ async def run_vfr_normalize(
         # Run ffmpeg
         use_nvenc = bool(config.get("rendering.use_nvenc"))
         success, stderr = await _run_ffmpeg_normalize(
-            source_path, output_path, target_fps, try_nvenc=use_nvenc,
+            source_path,
+            output_path,
+            target_fps,
+            try_nvenc=use_nvenc,
         )
 
         if not success:

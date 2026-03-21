@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Query
 
@@ -139,7 +139,7 @@ async def add_credits(
             "success": result.success,
             "amount": amount,
             "balance_after": result.balance_after,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "message": f"Added {amount} credits in dev mode." if result.success else result.error,
         }
     except Exception as exc:
@@ -148,9 +148,7 @@ async def add_credits(
             "success": False,
             "amount": amount,
             "error": str(exc),
-            "message": (
-                "License server unreachable. Start it with: clipcannon-license-server"
-            ),
+            "message": ("License server unreachable. Start it with: clipcannon-license-server"),
         }
 
 
@@ -163,13 +161,15 @@ async def get_packages() -> dict[str, object]:
     """
     packages = []
     for name, info in CREDIT_PACKAGES.items():
-        packages.append({
-            "name": name,
-            "credits": info["credits"],
-            "price_cents": info["price_cents"],
-            "price_display": f"${info['price_cents'] / 100:.2f}",
-            "per_credit_cents": round(info["price_cents"] / info["credits"], 2),
-        })
+        packages.append(
+            {
+                "name": name,
+                "credits": info["credits"],
+                "price_cents": info["price_cents"],
+                "price_display": f"${info['price_cents'] / 100:.2f}",
+                "per_credit_cents": round(info["price_cents"] / info["credits"], 2),
+            }
+        )
 
     return {
         "packages": packages,

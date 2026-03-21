@@ -7,11 +7,14 @@ stream_status table management.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_one
 from clipcannon.exceptions import PipelineError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -120,8 +123,7 @@ def update_stream_status(
             else:
                 execute(
                     conn,
-                    "UPDATE stream_status SET status = ? "
-                    "WHERE project_id = ? AND stream_name = ?",
+                    "UPDATE stream_status SET status = ? WHERE project_id = ? AND stream_name = ?",
                     (status, project_id, stream_name),
                 )
         else:

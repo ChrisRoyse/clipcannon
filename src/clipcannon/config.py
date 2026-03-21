@@ -17,7 +17,6 @@ import json
 import logging
 from copy import deepcopy
 from pathlib import Path
-from typing import Union
 
 from pydantic import BaseModel, Field
 
@@ -26,7 +25,7 @@ from clipcannon.exceptions import ConfigError
 logger = logging.getLogger(__name__)
 
 # Type alias for config values (no Any)
-ConfigValue = Union[str, int, float, bool, None, list["ConfigValue"], dict[str, "ConfigValue"]]
+ConfigValue = str | int | float | bool | None | list["ConfigValue"] | dict[str, "ConfigValue"]
 
 DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "default_config.json"
 USER_CONFIG_DIR = Path.home() / ".clipcannon"
@@ -114,7 +113,9 @@ def _load_default_config() -> dict[str, ConfigValue]:
         ) from exc
 
 
-def _deep_merge(base: dict[str, ConfigValue], override: dict[str, ConfigValue]) -> dict[str, ConfigValue]:
+def _deep_merge(
+    base: dict[str, ConfigValue], override: dict[str, ConfigValue]
+) -> dict[str, ConfigValue]:
     """Deep-merge override into base, returning a new dict.
 
     Args:
@@ -257,9 +258,7 @@ class ClipCannonConfig:
 
         if path.exists():
             try:
-                user_data: dict[str, ConfigValue] = json.loads(
-                    path.read_text(encoding="utf-8")
-                )
+                user_data: dict[str, ConfigValue] = json.loads(path.read_text(encoding="utf-8"))
                 merged = _deep_merge(defaults, user_data)
                 logger.info("Loaded user config from %s", path)
             except json.JSONDecodeError as exc:

@@ -16,9 +16,9 @@ import logging
 import sqlite3
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import AsyncGenerator
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -30,6 +30,9 @@ from clipcannon.billing.hmac_integrity import (
     verify_balance_or_raise,
 )
 from clipcannon.exceptions import BillingError
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +118,7 @@ def _init_db() -> None:
         if row is None:
             machine_id = get_machine_id()
             hmac_sig = sign_balance(DEV_INITIAL_CREDITS, machine_id)
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             conn.execute(
                 """INSERT INTO balance
                    (id, machine_id, balance, balance_hmac, last_sync_utc,
@@ -145,6 +148,7 @@ def _init_db() -> None:
 # ---------------------------------------------------------------------------
 # Request/Response models
 # ---------------------------------------------------------------------------
+
 
 class ChargeRequest(BaseModel):
     """Credit charge request body."""
@@ -181,6 +185,7 @@ class SpendingLimitRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Balance helpers
 # ---------------------------------------------------------------------------
+
 
 def _read_balance(conn: sqlite3.Connection) -> dict[str, int | str]:
     """Read and verify the current balance.
@@ -230,7 +235,7 @@ def _write_balance(
         spending_delta: Credits to add to spending_this_month (positive).
     """
     new_hmac = sign_balance(new_balance, machine_id)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     conn.execute(
         """UPDATE balance SET
            balance = ?,
@@ -245,6 +250,7 @@ def _write_balance(
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -358,7 +364,7 @@ async def charge_credits(req: ChargeRequest) -> dict[str, object]:
         # Execute charge
         new_balance = current_balance - req.credits
         txn_id = f"txn_{uuid.uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         _write_balance(conn, new_balance, machine_id, spending_delta=req.credits)
 
@@ -444,7 +450,7 @@ async def refund_credits(req: RefundRequest) -> dict[str, object]:
 
         new_balance = current_balance + refund_amount
         txn_id = f"txn_{uuid.uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         # Reduce spending_this_month (spending_delta is negative for refund)
         _write_balance(conn, new_balance, machine_id, spending_delta=-refund_amount)
@@ -579,7 +585,7 @@ async def add_credits_dev(req: AddCreditsRequest) -> dict[str, object]:
 
         new_balance = current_balance + req.credits
         txn_id = f"txn_{uuid.uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         _write_balance(conn, new_balance, machine_id, spending_delta=0)
 

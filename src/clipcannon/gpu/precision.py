@@ -34,6 +34,7 @@ def _is_torch_available() -> bool:
     """
     try:
         import torch  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -48,6 +49,7 @@ def _is_cuda_available() -> bool:
     if not _is_torch_available():
         return False
     import torch
+
     return torch.cuda.is_available()
 
 
@@ -65,6 +67,7 @@ def get_compute_capability(device_index: int = 0) -> str | None:
 
     try:
         import torch
+
         major, minor = torch.cuda.get_device_capability(device_index)
         cc = f"{major}.{minor}"
         logger.info("Detected GPU compute capability: %s", cc)
@@ -90,7 +93,9 @@ def auto_detect_precision(device_index: int = 0) -> str:
     cc = get_compute_capability(device_index)
 
     if cc is None:
-        logger.warning("No CUDA GPU detected. Using CPU mode with %s precision.", DEFAULT_CPU_PRECISION)
+        logger.warning(
+            "No CUDA GPU detected. Using CPU mode with %s precision.", DEFAULT_CPU_PRECISION
+        )
         return DEFAULT_CPU_PRECISION
 
     precision = PRECISION_MAP.get(cc)
@@ -102,7 +107,9 @@ def auto_detect_precision(device_index: int = 0) -> str:
                 precision = map_precision
                 logger.info(
                     "CC %s not in precision map; using closest match %s -> %s",
-                    cc, map_cc, precision,
+                    cc,
+                    map_cc,
+                    precision,
                 )
                 break
 
@@ -116,7 +123,8 @@ def auto_detect_precision(device_index: int = 0) -> str:
             precision = DEFAULT_CPU_PRECISION
         logger.warning(
             "CC %s not recognized. Falling back to %s precision.",
-            cc, precision,
+            cc,
+            precision,
         )
 
     logger.info("Selected precision: %s (CC %s)", precision, cc)
@@ -151,17 +159,20 @@ def validate_gpu_for_pipeline(device_index: int = 0) -> dict[str, str | int | fl
 
     try:
         import torch
-        props = torch.cuda.get_device_properties(device_index)
-        vram_gb = props.total_memory / (1024 ** 3)
 
-        result.update({
-            "cpu_only": False,
-            "device_name": props.name,
-            "compute_capability": f"{props.major}.{props.minor}",
-            "vram_total_gb": round(vram_gb, 2),
-            "precision": auto_detect_precision(device_index),
-            "meets_minimum": vram_gb >= 8.0,
-        })
+        props = torch.cuda.get_device_properties(device_index)
+        vram_gb = props.total_memory / (1024**3)
+
+        result.update(
+            {
+                "cpu_only": False,
+                "device_name": props.name,
+                "compute_capability": f"{props.major}.{props.minor}",
+                "vram_total_gb": round(vram_gb, 2),
+                "precision": auto_detect_precision(device_index),
+                "meets_minimum": vram_gb >= 8.0,
+            }
+        )
 
         if vram_gb < 8.0:
             result["warning"] = (

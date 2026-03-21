@@ -12,9 +12,12 @@ from __future__ import annotations
 import logging
 import sqlite3
 from contextlib import contextmanager
-from typing import Generator
+from typing import TYPE_CHECKING
 
 from clipcannon.exceptions import DatabaseError
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +43,7 @@ def fetch_one(
     try:
         cursor = conn.execute(sql, params or ())
         row = cursor.fetchone()
-        return row if row is not None else None  # type: ignore[return-value]
+        return row  # type: ignore[return-value]
     except sqlite3.Error as exc:
         raise DatabaseError(
             f"Query failed: {exc}",
@@ -245,7 +248,9 @@ def table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     return bool(count)
 
 
-def count_rows(conn: sqlite3.Connection, table: str, where: str = "", params: tuple[object, ...] = ()) -> int:
+def count_rows(
+    conn: sqlite3.Connection, table: str, where: str = "", params: tuple[object, ...] = ()
+) -> int:
     """Count rows in a table with optional WHERE clause.
 
     Args:

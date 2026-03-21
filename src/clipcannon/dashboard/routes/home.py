@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -21,10 +21,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["home"])
 
-PROJECTS_DIR = Path(os.environ.get(
-    "CLIPCANNON_PROJECTS_DIR",
-    str(Path.home() / ".clipcannon" / "projects"),
-))
+PROJECTS_DIR = Path(
+    os.environ.get(
+        "CLIPCANNON_PROJECTS_DIR",
+        str(Path.home() / ".clipcannon" / "projects"),
+    )
+)
 
 
 def _get_disk_usage() -> dict[str, str | int]:
@@ -36,9 +38,9 @@ def _get_disk_usage() -> dict[str, str | int]:
     try:
         usage = shutil.disk_usage(str(PROJECTS_DIR.parent))
         return {
-            "total_gb": round(usage.total / (1024 ** 3), 2),
-            "used_gb": round(usage.used / (1024 ** 3), 2),
-            "free_gb": round(usage.free / (1024 ** 3), 2),
+            "total_gb": round(usage.total / (1024**3), 2),
+            "used_gb": round(usage.used / (1024**3), 2),
+            "free_gb": round(usage.free / (1024**3), 2),
             "usage_pct": round(usage.used / usage.total * 100, 1),
         }
     except OSError:
@@ -58,10 +60,11 @@ def _get_gpu_status() -> dict[str, str | bool | float | None]:
     """
     try:
         import torch
+
         if torch.cuda.is_available():
             device_name = torch.cuda.get_device_name(0)
-            vram_total = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
-            vram_used = torch.cuda.memory_allocated(0) / (1024 ** 3)
+            vram_total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            vram_used = torch.cuda.memory_allocated(0) / (1024**3)
             return {
                 "available": True,
                 "device": device_name,
@@ -108,17 +111,21 @@ def _list_recent_projects(limit: int = 10) -> list[dict[str, str | int | None]]:
             db_path = proj_dir / "analysis.db"
             status = "ready" if db_path.exists() else "created"
             stat = proj_dir.stat()
-            projects.append({
-                "project_id": proj_dir.name,
-                "name": proj_dir.name,
-                "status": status,
-                "created_at": datetime.fromtimestamp(
-                    stat.st_ctime, tz=timezone.utc,
-                ).isoformat(),
-                "modified_at": datetime.fromtimestamp(
-                    stat.st_mtime, tz=timezone.utc,
-                ).isoformat(),
-            })
+            projects.append(
+                {
+                    "project_id": proj_dir.name,
+                    "name": proj_dir.name,
+                    "status": status,
+                    "created_at": datetime.fromtimestamp(
+                        stat.st_ctime,
+                        tz=UTC,
+                    ).isoformat(),
+                    "modified_at": datetime.fromtimestamp(
+                        stat.st_mtime,
+                        tz=UTC,
+                    ).isoformat(),
+                }
+            )
     except OSError as exc:
         logger.warning("Failed to list projects: %s", exc)
 
@@ -160,7 +167,7 @@ def _get_system_overview() -> dict[str, object]:
     """
     return {
         "version": __version__,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "gpu": _get_gpu_status(),
         "recent_projects": _list_recent_projects(),
         "system_health": {

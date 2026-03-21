@@ -10,7 +10,6 @@ Convention:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 
@@ -42,8 +41,7 @@ async def resolve_source_path(project_id: str, db_path: Path) -> Path:
     try:
         row = fetch_one(
             conn,
-            "SELECT source_path, source_cfr_path, vfr_detected "
-            "FROM project WHERE project_id = ?",
+            "SELECT source_path, source_cfr_path, vfr_detected FROM project WHERE project_id = ?",
             (project_id,),
         )
     finally:
@@ -64,12 +62,14 @@ async def resolve_source_path(project_id: str, db_path: Path) -> Path:
         if resolved.exists():
             logger.debug(
                 "Using CFR-normalized source for %s: %s",
-                project_id, resolved,
+                project_id,
+                resolved,
             )
             return resolved
         logger.warning(
             "CFR file %s not found for project %s, falling back to original",
-            resolved, project_id,
+            resolved,
+            project_id,
         )
 
     source_path = Path(str(row["source_path"]))

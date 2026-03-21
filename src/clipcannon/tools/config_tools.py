@@ -16,7 +16,9 @@ from clipcannon.exceptions import ConfigError
 logger = logging.getLogger(__name__)
 
 
-def _error_response(code: str, message: str, details: dict[str, object] | None = None) -> dict[str, object]:
+def _error_response(
+    code: str, message: str, details: dict[str, object] | None = None
+) -> dict[str, object]:
     """Build a standardized error response dict.
 
     Args:
@@ -102,7 +104,10 @@ async def clipcannon_config_list() -> dict[str, object]:
 CONFIG_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
         name="clipcannon_config_get",
-        description="Get a ClipCannon configuration value by dot-notation key (e.g., 'processing.whisper_model', 'gpu.device').",
+        description=(
+            "Get a ClipCannon configuration value by dot-notation key"
+            " (e.g., 'processing.whisper_model', 'gpu.device')."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -116,7 +121,10 @@ CONFIG_TOOL_DEFINITIONS: list[Tool] = [
     ),
     Tool(
         name="clipcannon_config_set",
-        description="Set a ClipCannon configuration value and save to disk. Value is validated against the config schema.",
+        description=(
+            "Set a ClipCannon configuration value and save to disk."
+            " Value is validated against the config schema."
+        ),
         inputSchema={
             "type": "object",
             "properties": {

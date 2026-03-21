@@ -18,11 +18,10 @@ import os
 import struct
 import time
 from collections import Counter
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
-from clipcannon.db.queries import batch_insert, execute
+from clipcannon.db.queries import batch_insert
 from clipcannon.exceptions import PipelineError
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.provenance import (
@@ -33,6 +32,11 @@ from clipcannon.provenance import (
     record_provenance,
     sha256_string,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +93,7 @@ def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     Returns:
         Cosine similarity in range [-1, 1].
     """
-    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    dot = sum(a * b for a, b in zip(vec_a, vec_b, strict=False))
     norm_a = sum(a * a for a in vec_a) ** 0.5
     norm_b = sum(b * b for b in vec_b) ** 0.5
     if norm_a == 0.0 or norm_b == 0.0:
@@ -232,11 +236,16 @@ def _run_embedding_pipeline(
 
         logger.info(
             "Processing visual embedding batch %d/%d (%d frames)",
-            batch_idx + 1, total_batches, len(batch_paths),
+            batch_idx + 1,
+            total_batches,
+            len(batch_paths),
         )
 
         batch_embeddings = _load_and_embed_batch(
-            batch_paths, model, processor, device,
+            batch_paths,
+            model,
+            processor,
+            device,
         )
         all_embeddings.extend(batch_embeddings)
 
@@ -300,14 +309,16 @@ def _detect_scenes(
         # Extract dominant colors from key frame
         colors = _extract_dominant_colors(frame_paths[start_frame_idx])
 
-        scenes.append({
-            "start_ms": start_ms,
-            "end_ms": end_ms,
-            "key_frame_path": key_frame_path,
-            "key_frame_timestamp_ms": key_frame_ts,
-            "visual_similarity_avg": round(sim_avg, 4),
-            "dominant_colors": json.dumps(colors),
-        })
+        scenes.append(
+            {
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "key_frame_path": key_frame_path,
+                "key_frame_timestamp_ms": key_frame_ts,
+                "visual_similarity_avg": round(sim_avg, 4),
+                "dominant_colors": json.dumps(colors),
+            }
+        )
 
     return scenes
 
@@ -342,40 +353,50 @@ async def run_visual_embed(
         batch_size = int(config.get("processing.batch_size_visual"))
         threshold = float(config.get("processing.scene_change_threshold"))
         device = str(config.get("gpu.device"))
-        hf_token = os.environ.get("HF_TOKEN", os.environ.get(
-            "HUGGING_FACE_HUB_TOKEN", "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",
-        ))
+        hf_token = os.environ.get(
+            "HF_TOKEN",
+            os.environ.get(
+                "HUGGING_FACE_HUB_TOKEN",
+                "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",
+            ),
+        )
 
         logger.info(
             "Starting visual embedding: %d frames, batch_size=%d, device=%s",
-            len(frame_paths), batch_size, device,
+            len(frame_paths),
+            batch_size,
+            device,
         )
 
         # Run model inference in thread pool
         embeddings = await asyncio.to_thread(
             _run_embedding_pipeline,
-            frame_paths, batch_size, hf_token, device,
+            frame_paths,
+            batch_size,
+            hf_token,
+            device,
         )
 
         # Insert embeddings into vec_frames
         conn = get_connection(db_path, enable_vec=True, dict_rows=True)
         try:
             vec_rows: list[tuple[object, ...]] = []
-            for idx, (fp, emb) in enumerate(zip(frame_paths, embeddings)):
+            for idx, (fp, emb) in enumerate(zip(frame_paths, embeddings, strict=False)):
                 ts_ms = _frame_timestamp_ms(fp, extraction_fps)
-                vec_rows.append((
-                    idx + 1,
-                    project_id,
-                    ts_ms,
-                    str(fp),
-                    _serialize_embedding(emb),
-                ))
+                vec_rows.append(
+                    (
+                        idx + 1,
+                        project_id,
+                        ts_ms,
+                        str(fp),
+                        _serialize_embedding(emb),
+                    )
+                )
 
             batch_insert(
                 conn,
                 "vec_frames",
-                ["frame_id", "project_id", "timestamp_ms", "frame_path",
-                 "visual_embedding"],
+                ["frame_id", "project_id", "timestamp_ms", "frame_path", "visual_embedding"],
                 vec_rows,
             )
             conn.commit()
@@ -392,22 +413,30 @@ async def run_visual_embed(
         try:
             scene_rows: list[tuple[object, ...]] = []
             for scene in scenes:
-                scene_rows.append((
-                    project_id,
-                    scene["start_ms"],
-                    scene["end_ms"],
-                    scene["key_frame_path"],
-                    scene["key_frame_timestamp_ms"],
-                    scene["visual_similarity_avg"],
-                    scene["dominant_colors"],
-                ))
+                scene_rows.append(
+                    (
+                        project_id,
+                        scene["start_ms"],
+                        scene["end_ms"],
+                        scene["key_frame_path"],
+                        scene["key_frame_timestamp_ms"],
+                        scene["visual_similarity_avg"],
+                        scene["dominant_colors"],
+                    )
+                )
 
             batch_insert(
                 conn,
                 "scenes",
-                ["project_id", "start_ms", "end_ms", "key_frame_path",
-                 "key_frame_timestamp_ms", "visual_similarity_avg",
-                 "dominant_colors"],
+                [
+                    "project_id",
+                    "start_ms",
+                    "end_ms",
+                    "key_frame_path",
+                    "key_frame_timestamp_ms",
+                    "visual_similarity_avg",
+                    "dominant_colors",
+                ],
                 scene_rows,
             )
             conn.commit()
@@ -451,8 +480,7 @@ async def run_visual_embed(
             ),
             parent_record_id=None,
             description=(
-                f"Computed {len(frame_paths)} SigLIP embeddings, "
-                f"detected {len(scenes)} scenes"
+                f"Computed {len(frame_paths)} SigLIP embeddings, detected {len(scenes)} scenes"
             ),
         )
 

@@ -11,15 +11,15 @@ Public API:
     - Source resolution: resolve_source_path, resolve_audio_input
 """
 
+from clipcannon.pipeline.audio_extract import run_audio_extract
+from clipcannon.pipeline.frame_extract import run_frame_extract
+from clipcannon.pipeline.ocr import run_ocr
 from clipcannon.pipeline.orchestrator import (
     PipelineOrchestrator,
     PipelineResult,
     PipelineStage,
     StageResult,
 )
-from clipcannon.pipeline.audio_extract import run_audio_extract
-from clipcannon.pipeline.frame_extract import run_frame_extract
-from clipcannon.pipeline.ocr import run_ocr
 from clipcannon.pipeline.probe import run_probe
 from clipcannon.pipeline.quality import run_quality
 from clipcannon.pipeline.shot_type import run_shot_type

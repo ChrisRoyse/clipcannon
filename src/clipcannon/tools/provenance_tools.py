@@ -23,7 +23,9 @@ from clipcannon.provenance import (
 logger = logging.getLogger(__name__)
 
 
-def _error_response(code: str, message: str, details: dict[str, object] | None = None) -> dict[str, object]:
+def _error_response(
+    code: str, message: str, details: dict[str, object] | None = None
+) -> dict[str, object]:
     """Build a standardized error response dict.
 
     Args:
@@ -190,8 +192,7 @@ async def clipcannon_provenance_timeline(project_id: str) -> dict[str, object]:
             timeline_entries.append(entry)
 
         total_duration_ms = sum(
-            r.execution_duration_ms for r in records
-            if r.execution_duration_ms is not None
+            r.execution_duration_ms for r in records if r.execution_duration_ms is not None
         )
 
         return {
@@ -211,7 +212,10 @@ async def clipcannon_provenance_timeline(project_id: str) -> dict[str, object]:
 PROVENANCE_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
         name="clipcannon_provenance_verify",
-        description="Verify the integrity of the provenance hash chain for a project. Detects tampering or broken links.",
+        description=(
+            "Verify the integrity of the provenance hash chain"
+            " for a project. Detects tampering or broken links."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -225,7 +229,9 @@ PROVENANCE_TOOL_DEFINITIONS: list[Tool] = [
     ),
     Tool(
         name="clipcannon_provenance_query",
-        description="Query provenance records for a project, optionally filtered by operation or stage.",
+        description=(
+            "Query provenance records for a project, optionally filtered by operation or stage."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -247,7 +253,10 @@ PROVENANCE_TOOL_DEFINITIONS: list[Tool] = [
     ),
     Tool(
         name="clipcannon_provenance_chain",
-        description="Walk the provenance chain from genesis to a specific record. Shows the full lineage of a processing result.",
+        description=(
+            "Walk the provenance chain from genesis to a specific"
+            " record. Shows the full lineage of a processing result."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -265,7 +274,10 @@ PROVENANCE_TOOL_DEFINITIONS: list[Tool] = [
     ),
     Tool(
         name="clipcannon_provenance_timeline",
-        description="Get a chronological timeline of all provenance events for a project, with durations and models used.",
+        description=(
+            "Get a chronological timeline of all provenance events"
+            " for a project, with durations and models used."
+        ),
         inputSchema={
             "type": "object",
             "properties": {

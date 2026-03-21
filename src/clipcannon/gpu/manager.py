@@ -21,7 +21,7 @@ from clipcannon.gpu.precision import (
 logger = logging.getLogger(__name__)
 
 # VRAM threshold in bytes: GPUs with >16 GB can run models concurrently
-CONCURRENT_VRAM_THRESHOLD_BYTES = 16 * 1024 ** 3
+CONCURRENT_VRAM_THRESHOLD_BYTES = 16 * 1024**3
 
 
 @dataclass
@@ -53,17 +53,17 @@ class GPUHealthReport:
     @property
     def vram_total_gb(self) -> float:
         """Total VRAM in gigabytes."""
-        return self.vram_total_bytes / (1024 ** 3)
+        return self.vram_total_bytes / (1024**3)
 
     @property
     def vram_used_gb(self) -> float:
         """Used VRAM in gigabytes."""
-        return self.vram_used_bytes / (1024 ** 3)
+        return self.vram_used_bytes / (1024**3)
 
     @property
     def vram_free_gb(self) -> float:
         """Free VRAM in gigabytes."""
-        return self.vram_free_bytes / (1024 ** 3)
+        return self.vram_free_bytes / (1024**3)
 
     @property
     def vram_usage_pct(self) -> float:
@@ -107,6 +107,23 @@ class _ModelEntry:
     model: object
     vram_estimate_bytes: int
     loaded_at: float = field(default_factory=time.time)
+
+
+def _parse_device_index(device: str) -> int:
+    """Extract CUDA device index from a device string like "cuda:0".
+
+    Args:
+        device: CUDA device string (e.g. "cuda:0", "cuda:1").
+
+    Returns:
+        Integer device index, defaulting to 0 if parsing fails.
+    """
+    if ":" in device:
+        try:
+            return int(device.split(":")[1])
+        except (ValueError, IndexError):
+            return 0
+    return 0
 
 
 class ModelManager:
@@ -160,14 +177,7 @@ class ModelManager:
             logger.warning("CUDA not available. ModelManager running in CPU-only mode.")
             return
 
-        # Extract device index
-        device_index = 0
-        if ":" in device:
-            try:
-                device_index = int(device.split(":")[1])
-            except (ValueError, IndexError):
-                device_index = 0
-
+        device_index = _parse_device_index(device)
         self.precision = auto_detect_precision(device_index)
 
         try:
@@ -177,7 +187,7 @@ class ModelManager:
             logger.info(
                 "ModelManager initialized: device=%s, VRAM=%.1f GB, precision=%s, concurrent=%s",
                 device,
-                self._vram_total / (1024 ** 3),
+                self._vram_total / (1024**3),
                 self.precision,
                 self.concurrent,
             )
@@ -206,13 +216,8 @@ class ModelManager:
             return 0
         try:
             import torch
-            device_index = 0
-            if ":" in self.device:
-                try:
-                    device_index = int(self.device.split(":")[1])
-                except (ValueError, IndexError):
-                    device_index = 0
-            return torch.cuda.memory_allocated(device_index)
+
+            return torch.cuda.memory_allocated(_parse_device_index(self.device))
         except Exception as exc:
             logger.debug("Failed to query VRAM usage: %s", exc)
             return 0
@@ -318,7 +323,9 @@ class ModelManager:
             model=model,
             vram_estimate_bytes=vram_estimate_bytes,
         )
-        logger.info("Loaded model: %s (est. %.1f MB VRAM)", model_name, vram_estimate_bytes / (1024 ** 2))
+        logger.info(
+            "Loaded model: %s (est. %.1f MB VRAM)", model_name, vram_estimate_bytes / (1024**2)
+        )
         return model
 
     def unload(self, model_name: str) -> None:
@@ -340,6 +347,7 @@ class ModelManager:
         if not self.cpu_only:
             try:
                 import torch
+
                 torch.cuda.empty_cache()
             except Exception as exc:
                 logger.debug("CUDA cache clear failed during unload: %s", exc)
@@ -376,12 +384,8 @@ class ModelManager:
 
         try:
             import torch
-            device_index = 0
-            if ":" in self.device:
-                try:
-                    device_index = int(self.device.split(":")[1])
-                except (ValueError, IndexError):
-                    device_index = 0
+
+            device_index = _parse_device_index(self.device)
             props = torch.cuda.get_device_properties(device_index)
             device_name = props.name
             cc_val = get_compute_capability(device_index)

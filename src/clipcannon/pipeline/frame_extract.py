@@ -10,9 +10,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import fetch_one
 from clipcannon.exceptions import PipelineError
@@ -26,6 +25,11 @@ from clipcannon.provenance import (
     sha256_file,
     sha256_string,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -64,11 +68,16 @@ async def _run_ffmpeg_frames_gpu(
         Tuple of (success, stderr_output).
     """
     cmd = [
-        "ffmpeg", "-y",
-        "-hwaccel", "cuda",
-        "-i", str(source_path),
-        "-vf", f"fps={fps}",
-        "-q:v", "2",
+        "ffmpeg",
+        "-y",
+        "-hwaccel",
+        "cuda",
+        "-i",
+        str(source_path),
+        "-vf",
+        f"fps={fps}",
+        "-q:v",
+        "2",
         str(frames_dir / "frame_%06d.jpg"),
     ]
     proc = await asyncio.to_thread(
@@ -98,10 +107,14 @@ async def _run_ffmpeg_frames_sw(
         Tuple of (success, stderr_output).
     """
     cmd = [
-        "ffmpeg", "-y",
-        "-i", str(source_path),
-        "-vf", f"fps={fps}",
-        "-q:v", "2",
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source_path),
+        "-vf",
+        f"fps={fps}",
+        "-q:v",
+        "2",
         str(frames_dir / "frame_%06d.jpg"),
     ]
     proc = await asyncio.to_thread(
@@ -175,7 +188,9 @@ async def run_frame_extract(
         if use_nvenc:
             logger.info("Attempting GPU-accelerated frame extraction at %dfps", extraction_fps)
             success, stderr = await _run_ffmpeg_frames_gpu(
-                source_path, frames_dir, extraction_fps,
+                source_path,
+                frames_dir,
+                extraction_fps,
             )
             if not success:
                 logger.warning(
@@ -186,7 +201,9 @@ async def run_frame_extract(
         if not success:
             logger.info("Running software frame extraction at %dfps", extraction_fps)
             success, stderr = await _run_ffmpeg_frames_sw(
-                source_path, frames_dir, extraction_fps,
+                source_path,
+                frames_dir,
+                extraction_fps,
             )
 
         if not success:
@@ -254,7 +271,9 @@ async def run_frame_extract(
             model_info=None,
             execution_info=ExecutionInfo(),
             parent_record_id="prov_001",
-            description=f"Extracted {frame_count} frames at {extraction_fps}fps ({total_size} bytes)",
+            description=(
+                f"Extracted {frame_count} frames at {extraction_fps}fps ({total_size} bytes)"
+            ),
         )
 
         logger.info(

@@ -12,8 +12,8 @@ import logging
 import os
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all
 from clipcannon.pipeline.orchestrator import StageResult
@@ -25,6 +25,9 @@ from clipcannon.provenance import (
     record_provenance,
     sha256_string,
 )
+
+if TYPE_CHECKING:
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +71,7 @@ def _classify_shot_types(
     """
     import torch
     from PIL import Image
-    from transformers import AutoModel, AutoProcessor, AutoTokenizer
+    from transformers import AutoModel, AutoProcessor
 
     if hf_token:
         os.environ["HF_TOKEN"] = hf_token
@@ -118,7 +121,8 @@ def _classify_shot_types(
         except Exception as exc:
             logger.warning(
                 "Shot type classification failed for %s: %s",
-                frame_path, exc,
+                frame_path,
+                exc,
             )
             results.append(("medium", 0.0))
 
@@ -149,9 +153,13 @@ async def run_shot_type(
 
     try:
         device = str(config.get("gpu.device"))
-        hf_token = os.environ.get("HF_TOKEN", os.environ.get(
-            "HUGGING_FACE_HUB_TOKEN", "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",
-        ))
+        hf_token = os.environ.get(
+            "HF_TOKEN",
+            os.environ.get(
+                "HUGGING_FACE_HUB_TOKEN",
+                "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",
+            ),
+        )
 
         # Fetch scenes with key frames
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
@@ -183,7 +191,9 @@ async def run_shot_type(
                 key_frame_paths.append(kfp)
             else:
                 logger.warning(
-                    "Key frame not found for scene %d: %s", sid, kfp,
+                    "Key frame not found for scene %d: %s",
+                    sid,
+                    kfp,
                 )
 
         if not key_frame_paths:
@@ -194,19 +204,25 @@ async def run_shot_type(
             )
 
         logger.info(
-            "Classifying shot types for %d scenes", len(key_frame_paths),
+            "Classifying shot types for %d scenes",
+            len(key_frame_paths),
         )
 
         # Run classification in thread pool
         classifications = await asyncio.to_thread(
-            _classify_shot_types, key_frame_paths, hf_token, device,
+            _classify_shot_types,
+            key_frame_paths,
+            hf_token,
+            device,
         )
 
         # Update scenes with shot type info
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
             for scene_id, (shot_type, confidence) in zip(
-                scene_ids, classifications,
+                scene_ids,
+                classifications,
+                strict=False,
             ):
                 crop_rec = CROP_RECOMMENDATIONS.get(shot_type, "needs_reframe")
                 execute(

@@ -15,11 +15,9 @@ import asyncio
 import json
 import logging
 import os
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
-from clipcannon.db.queries import batch_insert, execute
 from clipcannon.exceptions import PipelineError
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.pipeline.source_resolution import resolve_audio_input
@@ -32,6 +30,11 @@ from clipcannon.provenance import (
     sha256_file,
     sha256_string,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +49,7 @@ def _check_whisperx_available() -> bool:
     """Check if WhisperX is importable."""
     try:
         import whisperx  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -55,6 +59,7 @@ def _check_faster_whisper_available() -> bool:
     """Check if faster-whisper is importable."""
     try:
         from faster_whisper import WhisperModel  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -115,6 +120,7 @@ async def _transcribe_whisperx(
         # Clean up models
         del model, align_model
         import torch
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -166,22 +172,27 @@ async def _transcribe_faster_whisper(
             words = []
             if seg.words:
                 for w in seg.words:
-                    words.append({
-                        "word": w.word.strip(),
-                        "start": w.start,
-                        "end": w.end,
-                        "score": w.probability,
-                    })
+                    words.append(
+                        {
+                            "word": w.word.strip(),
+                            "start": w.start,
+                            "end": w.end,
+                            "score": w.probability,
+                        }
+                    )
 
-            segments.append({
-                "start": seg.start,
-                "end": seg.end,
-                "text": seg.text.strip(),
-                "words": words,
-            })
+            segments.append(
+                {
+                    "start": seg.start,
+                    "end": seg.end,
+                    "text": seg.text.strip(),
+                    "words": words,
+                }
+            )
 
         del model
         import torch
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -252,13 +263,15 @@ def _insert_transcript(
                     w_conf = w.get("score") or w.get("confidence")
                     w_conf_float = float(w_conf) if w_conf is not None else None
 
-                    word_rows.append((
-                        segment_id,
-                        w_text,
-                        int(w_start * 1000),
-                        int(w_end * 1000),
-                        w_conf_float,
-                    ))
+                    word_rows.append(
+                        (
+                            segment_id,
+                            w_text,
+                            int(w_start * 1000),
+                            int(w_end * 1000),
+                            w_conf_float,
+                        )
+                    )
 
                 if word_rows:
                     conn.executemany(
@@ -321,10 +334,15 @@ async def run_transcribe(
         if use_whisperx:
             logger.info(
                 "Transcribing with WhisperX: model=%s, compute=%s, device=%s",
-                model_name, compute_type, device,
+                model_name,
+                compute_type,
+                device,
             )
             result = await _transcribe_whisperx(
-                audio_path, model_name, compute_type, device,
+                audio_path,
+                model_name,
+                compute_type,
+                device,
             )
         elif use_faster_whisper:
             logger.warning(
@@ -333,7 +351,10 @@ async def run_transcribe(
             )
             backend_name = "faster-whisper"
             result = await _transcribe_faster_whisper(
-                audio_path, model_name, compute_type, device,
+                audio_path,
+                model_name,
+                compute_type,
+                device,
             )
         else:
             return StageResult(
@@ -357,7 +378,10 @@ async def run_transcribe(
 
         # Insert into database
         segment_count, word_count = _insert_transcript(
-            db_path, project_id, segments, language,
+            db_path,
+            project_id,
+            segments,
+            language,
         )
 
         # Compute provenance hash
@@ -401,7 +425,10 @@ async def run_transcribe(
 
         logger.info(
             "Transcription complete: %d segments, %d words (backend=%s, lang=%s)",
-            segment_count, word_count, backend_name, language,
+            segment_count,
+            word_count,
+            backend_name,
+            language,
         )
 
         return StageResult(
