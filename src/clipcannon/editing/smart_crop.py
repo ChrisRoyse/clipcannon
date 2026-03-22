@@ -340,62 +340,28 @@ def get_crop_for_scene(
     face_x = float(scene_data.get("face_position_x", 0.5))
     face_y = float(scene_data.get("face_position_y", 0.5))
 
-    # Decision tree based on shot type and crop recommendation
-    if shot_type in ("extreme_closeup",) and crop_rec == "safe_for_vertical":
-        # Center crop, no face detection needed
+    # Extreme closeup with safe framing: always center, ignore face
+    if shot_type == "extreme_closeup" and crop_rec == "safe_for_vertical":
         return compute_crop_region(
             source_w, source_h, target_aspect,
             face_position_x=0.5, face_position_y=0.5,
         )
 
-    if shot_type == "closeup" and crop_rec == "safe_for_vertical":
-        # Use face position if available, otherwise center
-        if face_detected:
-            return compute_crop_region(
-                source_w, source_h, target_aspect,
-                face_position_x=face_x, face_position_y=face_y,
-            )
-        return compute_crop_region(
-            source_w, source_h, target_aspect,
-            face_position_x=0.5, face_position_y=0.5,
-        )
-
-    if shot_type == "medium" and crop_rec == "needs_reframe":
-        # Face detection required for proper reframe
-        if face_detected:
-            return compute_crop_region(
-                source_w, source_h, target_aspect,
-                face_position_x=face_x, face_position_y=face_y,
-            )
-        # No face: center with slight bias
-        return compute_crop_region(
-            source_w, source_h, target_aspect,
-            face_position_x=0.5, face_position_y=0.5,
-        )
-
-    if shot_type in ("wide", "establishing") and crop_rec == "keep_landscape":
-        # Wide/establishing: center crop or face-guided pan-and-scan
-        if face_detected and shot_type == "wide":
-            return compute_crop_region(
-                source_w, source_h, target_aspect,
-                face_position_x=face_x, face_position_y=face_y,
-                safe_area_pct=0.9,
-            )
-        # Establishing or no face: center crop
-        return compute_crop_region(
-            source_w, source_h, target_aspect,
-            face_position_x=0.5, face_position_y=0.5,
-        )
-
-    # Default: use face if available, otherwise center
-    if face_detected:
+    # Wide shots with landscape framing get a wider safe area to
+    # preserve more context around the subject
+    if shot_type == "wide" and crop_rec == "keep_landscape" and face_detected:
         return compute_crop_region(
             source_w, source_h, target_aspect,
             face_position_x=face_x, face_position_y=face_y,
+            safe_area_pct=0.9,
         )
+
+    # All other cases: use face position if available, otherwise center
+    pos_x = face_x if face_detected else 0.5
+    pos_y = face_y if face_detected else 0.5
     return compute_crop_region(
         source_w, source_h, target_aspect,
-        face_position_x=0.5, face_position_y=0.5,
+        face_position_x=pos_x, face_position_y=pos_y,
     )
 
 

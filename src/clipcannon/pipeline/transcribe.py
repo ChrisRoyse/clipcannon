@@ -4,6 +4,15 @@ Transcribes audio using WhisperX with wav2vec2 forced alignment
 for 20-50ms word-level precision. Falls back to faster-whisper
 if WhisperX is not installed.
 
+Includes a multi-layer anti-hallucination pipeline:
+1. VAD tuning (vad_onset/vad_offset for WhisperX)
+2. Threshold parameters (for faster-whisper fallback)
+3. Post-transcription filtering:
+   - Known hallucination phrase detection
+   - Repetition/looping detection and delooping
+   - Confidence-based word and segment filtering
+   - Single-word segment removal
+
 Per the constitution, WhisperX with forced alignment is MANDATORY
 for production use. The faster-whisper fallback is for development
 and testing only.
@@ -15,6 +24,7 @@ import asyncio
 import json
 import logging
 import os
+import zlib
 from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
@@ -41,10 +51,73 @@ logger = logging.getLogger(__name__)
 OPERATION = "transcription"
 STAGE = "whisperx"
 
-# HuggingFace token for model downloads
-_HF_TOKEN = "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"
+# HuggingFace token: read from environment
+_HF_TOKEN_ENV = "HF_TOKEN"
+
+# ============================================================
+# ANTI-HALLUCINATION CONFIGURATION
+# ============================================================
+
+# VAD thresholds for WhisperX (pyannote-based)
+# Higher vad_onset = more selective about what counts as speech
+_VAD_ONSET = 0.5
+_VAD_OFFSET = 0.363
+
+# Thresholds for faster-whisper fallback (ignored by WhisperX batched mode)
+_NO_SPEECH_THRESHOLD = 0.4
+_LOG_PROB_THRESHOLD = -0.7
+_COMPRESSION_RATIO_THRESHOLD = 2.0
+# Silence duration (seconds) that triggers hallucination suppression
+_HALLUCINATION_SILENCE_THRESHOLD = 2.0
+
+# Post-transcription filtering thresholds
+_MIN_WORD_CONFIDENCE = 0.3
+_MIN_SEGMENT_CONFIDENCE = 0.4
+# Compression ratio above this indicates repetitive/hallucinated text
+_MAX_COMPRESSION_RATIO = 2.0
+# Known hallucination phrases -- ~35% of all Whisper hallucinations
+# are just the top 2, and >50% come from the top 10.
+# Substring-matched against normalized segment text.
+_HALLUCINATION_PHRASES: list[str] = [
+    "thank you for watching",
+    "thanks for watching",
+    "thank you for listening",
+    "thanks for listening",
+    "please subscribe",
+    "like and subscribe",
+    "subscribe to my channel",
+    "subtitles by the amara.org community",
+    "subtitles by",
+    "transcript emily beynon",
+    "please like and subscribe",
+    "thanks for tuning in",
+    "see you in the next video",
+    "don't forget to subscribe",
+    "hit the bell",
+    "leave a comment below",
+    "visit our website",
+    "see you next time",
+    "bye bye",
+    "bye-bye",
+    "music playing",
+]
+
+# Single-word or very short phrases that are hallucinated only when
+# they appear as the ENTIRE segment text (not as part of real speech).
+_HALLUCINATION_EXACT: list[str] = [
+    "music",
+    "applause",
+    "laughter",
+    "silence",
+    "the end",
+    "you",
+    "check out my",
+]
 
 
+# ============================================================
+# BACKEND DETECTION
+# ============================================================
 def _check_whisperx_available() -> bool:
     """Check if WhisperX is importable."""
     try:
@@ -65,6 +138,252 @@ def _check_faster_whisper_available() -> bool:
         return False
 
 
+# ============================================================
+# POST-TRANSCRIPTION HALLUCINATION FILTERING
+# ============================================================
+def _is_hallucination_phrase(text: str) -> bool:
+    """Check if text matches a known hallucination phrase.
+
+    Uses two-tier matching:
+    - Substring match for multi-word phrases (catches them anywhere)
+    - Exact match for single-word/short phrases (avoids false positives
+      when the word appears naturally in real speech)
+
+    Args:
+        text: Segment text to check.
+
+    Returns:
+        True if the text is a known hallucination.
+    """
+    normalized = text.strip().lower()
+    if not normalized:
+        return True
+
+    # Tier 1: Substring match for multi-word phrases
+    if any(phrase in normalized for phrase in _HALLUCINATION_PHRASES):
+        return True
+
+    # Tier 2: Exact match for short/ambiguous phrases
+    # Strip trailing punctuation for comparison
+    cleaned = normalized.rstrip(".,!?;:")
+    return cleaned in _HALLUCINATION_EXACT
+
+
+def _detect_repetition(text: str, min_ngram: int = 2) -> bool:
+    """Detect repeated n-grams indicating hallucination loops.
+
+    When Whisper hallucinates, it often gets stuck in a loop
+    repeating the same phrase over and over. Catches both
+    single-word stutters ("the the the") and multi-word loops
+    ("hello world hello world").
+
+    Args:
+        text: Text to check for repetition.
+        min_ngram: Minimum n-gram size to check.
+
+    Returns:
+        True if repetition is detected.
+    """
+    words = text.lower().split()
+    if len(words) < min_ngram * 2:
+        return False
+
+    max_n = min(len(words) // 2, 20)
+    for n in range(min_ngram, max_n + 1):
+        for i in range(len(words) - 2 * n + 1):
+            ngram = tuple(words[i : i + n])
+            next_ngram = tuple(words[i + n : i + 2 * n])
+            if ngram == next_ngram:
+                return True
+    return False
+
+
+def _deloop_text(text: str, min_ngram: int = 2) -> str:
+    """Collapse repeated phrases to single occurrence.
+
+    Args:
+        text: Text with potential repetitions.
+        min_ngram: Minimum n-gram size for delooping.
+
+    Returns:
+        Text with repeated phrases collapsed.
+    """
+    words = text.split()
+    result: list[str] = []
+    i = 0
+    while i < len(words):
+        matched = False
+        max_n = min(len(words) - i, 20)
+        for n in range(max_n, min_ngram - 1, -1):
+            if i + 2 * n > len(words):
+                continue
+            phrase = words[i : i + n]
+            next_phrase = words[i + n : i + 2 * n]
+            if phrase == next_phrase:
+                result.extend(phrase)
+                # Skip all consecutive repetitions
+                j = i + n
+                while j + n <= len(words) and words[j : j + n] == phrase:
+                    j += n
+                i = j
+                matched = True
+                break
+        if not matched:
+            result.append(words[i])
+            i += 1
+    return " ".join(result)
+
+
+def _compression_ratio(text: str) -> float:
+    """Compute compression ratio of text.
+
+    High ratio = repetitive/compressible = likely hallucinated.
+
+    Args:
+        text: Text to analyze.
+
+    Returns:
+        Compression ratio (uncompressed / compressed size).
+    """
+    text_bytes = text.encode("utf-8")
+    if not text_bytes:
+        return 0.0
+    compressed = zlib.compress(text_bytes)
+    return len(text_bytes) / len(compressed)
+
+
+def _word_confidence(word: dict[str, object]) -> float | None:
+    """Extract confidence score from a word dict.
+
+    WhisperX uses 'score', faster-whisper uses 'confidence'.
+    Returns None if neither key is present.
+
+    Args:
+        word: Word dict from transcript segment.
+
+    Returns:
+        Confidence score as float, or None.
+    """
+    score = word.get("score") or word.get("confidence")
+    if score is None:
+        return None
+    return float(score)
+
+
+def _filter_hallucinations(
+    segments: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], int]:
+    """Apply multi-layer hallucination filtering to transcript segments.
+
+    Filtering layers:
+    1. Known hallucination phrase detection
+    2. Repetition/looping detection and delooping
+    3. Compression ratio filtering (repetitive text)
+    4. Confidence-based word filtering
+    5. Confidence-based segment filtering
+
+    Args:
+        segments: Raw transcript segments from Whisper/WhisperX.
+
+    Returns:
+        Tuple of (filtered_segments, removed_count).
+    """
+    filtered: list[dict[str, object]] = []
+    removed = 0
+
+    for seg in segments:
+        text = str(seg.get("text", "")).strip()
+
+        # Layer 1: Known hallucination phrases
+        if _is_hallucination_phrase(text):
+            logger.debug(
+                "Filtered hallucination phrase: %r at %.1f-%.1fs",
+                text[:50],
+                float(seg.get("start", 0)),
+                float(seg.get("end", 0)),
+            )
+            removed += 1
+            continue
+
+        # Layer 2: Repetition detection
+        if _detect_repetition(text):
+            delooped = _deloop_text(text)
+            if _is_hallucination_phrase(delooped):
+                logger.debug("Filtered repeated hallucination: %r", text[:50])
+                removed += 1
+                continue
+            seg["text"] = delooped
+            logger.debug("Delooped repetition: %r -> %r", text[:50], delooped[:50])
+
+        # Layer 3: Compression ratio (catches subtle repetition)
+        text = str(seg.get("text", ""))
+        if len(text) > 20:
+            ratio = _compression_ratio(text)
+            if ratio > _MAX_COMPRESSION_RATIO:
+                delooped = _deloop_text(text)
+                if len(delooped.split()) < 3:
+                    logger.debug(
+                        "Filtered high-compression segment: %r (ratio=%.2f)",
+                        text[:50],
+                        ratio,
+                    )
+                    removed += 1
+                    continue
+                seg["text"] = delooped
+
+        # Layer 4: Word-level confidence filtering
+        words = seg.get("words", [])
+        if isinstance(words, list) and words:
+            good_words = []
+            for w in words:
+                if not isinstance(w, dict):
+                    continue
+                conf = _word_confidence(w)
+                if conf is not None and conf < _MIN_WORD_CONFIDENCE:
+                    continue
+                good_words.append(w)
+
+            if not good_words:
+                logger.debug(
+                    "Filtered all-low-confidence segment: %r",
+                    text[:50],
+                )
+                removed += 1
+                continue
+
+            # Layer 5: Segment-level confidence check
+            scores = [c for w in good_words if (c := _word_confidence(w)) is not None]
+            if scores:
+                avg_conf = sum(scores) / len(scores)
+                if avg_conf < _MIN_SEGMENT_CONFIDENCE:
+                    logger.debug(
+                        "Filtered low-confidence segment: %r (avg=%.3f)",
+                        text[:50],
+                        avg_conf,
+                    )
+                    removed += 1
+                    continue
+
+            seg["words"] = good_words
+            seg["text"] = " ".join(
+                str(w.get("word", "")).strip()
+                for w in good_words
+                if str(w.get("word", "")).strip()
+            )
+
+        # Keep the segment
+        final_text = str(seg.get("text", "")).strip()
+        if final_text:
+            filtered.append(seg)
+        else:
+            removed += 1
+
+    return filtered, removed
+
+
+# ============================================================
+# WHISPERX TRANSCRIPTION
+# ============================================================
 async def _transcribe_whisperx(
     audio_path: Path,
     model_name: str,
@@ -72,6 +391,11 @@ async def _transcribe_whisperx(
     device: str,
 ) -> dict[str, object]:
     """Transcribe using WhisperX with forced alignment.
+
+    Configures VAD thresholds and anti-hallucination settings.
+    Note: WhisperX batched mode ignores no_speech_threshold,
+    log_prob_threshold, etc. -- post-transcription filtering
+    handles hallucination prevention instead.
 
     Args:
         audio_path: Path to the audio file.
@@ -85,15 +409,25 @@ async def _transcribe_whisperx(
     import whisperx
 
     def _run() -> dict[str, object]:
-        # Set HF token for wav2vec2 model downloads
-        os.environ.setdefault("HF_TOKEN", _HF_TOKEN)
+        # Ensure HF token is set for wav2vec2 model downloads
+        os.environ.setdefault(_HF_TOKEN_ENV, "")
 
-        # 1. Load model and transcribe
+        # 1. Load model with tuned VAD and anti-hallucination options
         model = whisperx.load_model(
             model_name,
             device=device,
             compute_type=compute_type,
+            vad_options={
+                "vad_onset": _VAD_ONSET,
+                "vad_offset": _VAD_OFFSET,
+            },
+            asr_options={
+                "suppress_blank": True,
+                "condition_on_previous_text": False,
+                "initial_prompt": None,
+            },
         )
+
         audio = whisperx.load_audio(str(audio_path))
         result = model.transcribe(
             audio,
@@ -132,13 +466,19 @@ async def _transcribe_whisperx(
     return await asyncio.to_thread(_run)
 
 
+# ============================================================
+# FASTER-WHISPER FALLBACK
+# ============================================================
 async def _transcribe_faster_whisper(
     audio_path: Path,
     model_name: str,
     compute_type: str,
     device: str,
 ) -> dict[str, object]:
-    """Fallback transcription using faster-whisper (no forced alignment).
+    """Fallback transcription using faster-whisper.
+
+    Includes full hallucination prevention parameters that
+    faster-whisper supports (unlike WhisperX batched mode).
 
     Args:
         audio_path: Path to the audio file.
@@ -162,6 +502,13 @@ async def _transcribe_faster_whisper(
             beam_size=5,
             word_timestamps=True,
             vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
+            no_speech_threshold=_NO_SPEECH_THRESHOLD,
+            log_prob_threshold=_LOG_PROB_THRESHOLD,
+            compression_ratio_threshold=_COMPRESSION_RATIO_THRESHOLD,
+            condition_on_previous_text=False,
+            hallucination_silence_threshold=_HALLUCINATION_SILENCE_THRESHOLD,
+            temperature=0.0,
         )
 
         detected_language = info.language
@@ -169,17 +516,15 @@ async def _transcribe_faster_whisper(
 
         segments = []
         for seg in segments_iter:
-            words = []
-            if seg.words:
-                for w in seg.words:
-                    words.append(
-                        {
-                            "word": w.word.strip(),
-                            "start": w.start,
-                            "end": w.end,
-                            "score": w.probability,
-                        }
-                    )
+            words = [
+                {
+                    "word": w.word.strip(),
+                    "start": w.start,
+                    "end": w.end,
+                    "score": w.probability,
+                }
+                for w in (seg.words or [])
+            ]
 
             segments.append(
                 {
@@ -204,6 +549,9 @@ async def _transcribe_faster_whisper(
     return await asyncio.to_thread(_run)
 
 
+# ============================================================
+# DATABASE INSERT
+# ============================================================
 def _insert_transcript(
     db_path: Path,
     project_id: str,
@@ -215,7 +563,7 @@ def _insert_transcript(
     Args:
         db_path: Path to the project database.
         project_id: Project identifier.
-        segments: List of transcript segments from WhisperX/faster-whisper.
+        segments: List of transcript segments (already filtered).
         language: Detected language code.
 
     Returns:
@@ -296,6 +644,9 @@ def _insert_transcript(
         conn.close()
 
 
+# ============================================================
+# MAIN PIPELINE STAGE
+# ============================================================
 async def run_transcribe(
     project_id: str,
     db_path: Path,
@@ -307,6 +658,9 @@ async def run_transcribe(
     Uses WhisperX with wav2vec2 forced alignment for 20-50ms
     word-level precision. Falls back to faster-whisper if
     WhisperX is not installed.
+
+    Applies post-transcription hallucination filtering to both
+    backends before inserting into the database.
 
     Args:
         project_id: Project identifier.
@@ -376,6 +730,28 @@ async def run_transcribe(
                 error_message="Transcription produced no segments",
             )
 
+        # Apply post-transcription hallucination filtering
+        raw_count = len(segments)
+        segments, removed_count = _filter_hallucinations(segments)
+
+        if removed_count > 0:
+            logger.info(
+                "Hallucination filter: removed %d/%d segments (%.1f%%)",
+                removed_count,
+                raw_count,
+                removed_count / raw_count * 100,
+            )
+
+        if not segments:
+            return StageResult(
+                success=False,
+                operation=OPERATION,
+                error_message=(
+                    "All segments filtered as hallucinations. "
+                    "The audio may not contain clear speech."
+                ),
+            )
+
         # Insert into database
         segment_count, word_count = _insert_transcript(
             db_path,
@@ -410,6 +786,10 @@ async def run_transcribe(
                 parameters={
                     "beam_size": 5,
                     "vad_filter": True,
+                    "vad_onset": _VAD_ONSET,
+                    "vad_offset": _VAD_OFFSET,
+                    "hallucination_filter": True,
+                    "segments_removed": removed_count,
                     "language": language,
                 },
             ),
@@ -419,14 +799,17 @@ async def run_transcribe(
             parent_record_id="prov_001",
             description=(
                 f"Transcription ({backend_name}): {segment_count} segments, "
-                f"{word_count} words, language={language}"
+                f"{word_count} words, {removed_count} hallucinations removed, "
+                f"language={language}"
             ),
         )
 
         logger.info(
-            "Transcription complete: %d segments, %d words (backend=%s, lang=%s)",
+            "Transcription complete: %d segments, %d words, "
+            "%d hallucinations removed (backend=%s, lang=%s)",
             segment_count,
             word_count,
+            removed_count,
             backend_name,
             language,
         )

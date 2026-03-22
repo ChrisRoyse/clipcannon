@@ -431,6 +431,54 @@ def build_encoding_args(
 # ============================================================
 # SPLIT-SCREEN LAYOUT
 # ============================================================
+def _build_vstack_filters(
+    speaker_label: str,
+    screen_label: str,
+    bar_label: str | None,
+    out_label: str,
+    layout: SplitScreenLayout,
+    filter_parts: list[str],
+) -> None:
+    """Append vstack filter(s) to combine speaker and screen regions.
+
+    Handles separator bar and speaker position (top/bottom).
+    Modifies filter_parts in place.
+
+    Args:
+        speaker_label: FFmpeg stream label for the speaker region.
+        screen_label: FFmpeg stream label for the screen region.
+        bar_label: FFmpeg stream label for separator bar, or None if no separator.
+        out_label: Output stream label for the stacked result.
+        layout: Split-screen layout config (for separator and position).
+        filter_parts: Accumulating filter_complex parts (modified in place).
+    """
+    if layout.separator_px > 0 and bar_label is not None:
+        hex_color = layout.separator_color.lstrip("#")
+        filter_parts.append(
+            f"color=c=0x{hex_color}:s={layout.output_w}x{layout.separator_px}"
+            f":d=99999,setsar=1[{bar_label}]"
+        )
+        if layout.speaker_position == "top":
+            filter_parts.append(
+                f"[{speaker_label}][{bar_label}][{screen_label}]"
+                f"vstack=inputs=3[{out_label}]"
+            )
+        else:
+            filter_parts.append(
+                f"[{screen_label}][{bar_label}][{speaker_label}]"
+                f"vstack=inputs=3[{out_label}]"
+            )
+    else:
+        if layout.speaker_position == "top":
+            filter_parts.append(
+                f"[{speaker_label}][{screen_label}]vstack=inputs=2[{out_label}]"
+            )
+        else:
+            filter_parts.append(
+                f"[{screen_label}][{speaker_label}]vstack=inputs=2[{out_label}]"
+            )
+
+
 def _build_split_screen_cmd(
     source_path: Path,
     output_path: Path,
@@ -496,26 +544,15 @@ def _build_split_screen_cmd(
         f"scale={ow}:{scr_h},setsar=1[screen]"
     )
 
-    # Create separator bar (if any)
-    if sep > 0:
-        hex_color = layout.separator_color.lstrip("#")
-        filters.append(
-            f"color=c=0x{hex_color}:s={ow}x{sep}:d=99999,setsar=1[bar]"
-        )
-        # Stack based on speaker position
-        if layout.speaker_position == "top":
-            filters.append(
-                "[speaker][bar][screen]vstack=inputs=3[stacked]"
-            )
-        else:
-            filters.append(
-                "[screen][bar][speaker]vstack=inputs=3[stacked]"
-            )
-    else:
-        if layout.speaker_position == "top":
-            filters.append("[speaker][screen]vstack=inputs=2[stacked]")
-        else:
-            filters.append("[screen][speaker]vstack=inputs=2[stacked]")
+    # Stack speaker and screen regions with optional separator
+    _build_vstack_filters(
+        speaker_label="speaker",
+        screen_label="screen",
+        bar_label="bar" if sep > 0 else None,
+        out_label="stacked",
+        layout=layout,
+        filter_parts=filters,
+    )
 
     # Apply speed adjustment if needed
     final_v = "stacked"
@@ -619,29 +656,15 @@ def _build_split_screen_multi_segment(
             f"scale={ow}:{scr_h},setsar=1[scn{i}]"
         )
 
-        # Stack
-        if sep > 0:
-            filter_parts.append(
-                f"color=c=0x{layout.separator_color.lstrip('#')}"
-                f":s={ow}x{sep}:d=99999,setsar=1[bar{i}]"
-            )
-            if layout.speaker_position == "top":
-                filter_parts.append(
-                    f"[spk{i}][bar{i}][scn{i}]vstack=inputs=3[v{i}]"
-                )
-            else:
-                filter_parts.append(
-                    f"[scn{i}][bar{i}][spk{i}]vstack=inputs=3[v{i}]"
-                )
-        else:
-            if layout.speaker_position == "top":
-                filter_parts.append(
-                    f"[spk{i}][scn{i}]vstack=inputs=2[v{i}]"
-                )
-            else:
-                filter_parts.append(
-                    f"[scn{i}][spk{i}]vstack=inputs=2[v{i}]"
-                )
+        # Stack speaker and screen regions
+        _build_vstack_filters(
+            speaker_label=f"spk{i}",
+            screen_label=f"scn{i}",
+            bar_label=f"bar{i}" if sep > 0 else None,
+            out_label=f"v{i}",
+            layout=layout,
+            filter_parts=filter_parts,
+        )
 
         video_labels.append(f"v{i}")
 
