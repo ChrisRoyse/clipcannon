@@ -52,13 +52,11 @@ from clipcannon.tools.understanding_search import (
 )
 from clipcannon.tools.understanding_visual import (
     clipcannon_get_frame,
-    clipcannon_get_frame_strip,
     clipcannon_get_segment_detail,
-    clipcannon_get_storyboard,
 )
 
 # ---------------------------------------------------------------
-# Understanding tool definitions (9 tools)
+# Understanding tool definitions (7 tools)
 # ---------------------------------------------------------------
 _PROJECT_ID_PROP = {
     "project_id": {"type": "string", "description": "Project identifier"},
@@ -178,49 +176,6 @@ UNDERSTANDING_TOOL_DEFINITIONS: list[Tool] = [
         },
     ),
     Tool(
-        name="clipcannon_get_frame_strip",
-        description=(
-            "Build a 3x3 composite grid of evenly-spaced frames from a range. "
-            "Returns grid image path and per-cell metadata."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {"type": "string", "description": "Project identifier"},
-                "start_ms": {"type": "integer", "description": "Start time in ms"},
-                "end_ms": {"type": "integer", "description": "End time in ms"},
-                "count": {
-                    "type": "integer",
-                    "description": "Number of frames (default: 9, max: 16)",
-                    "default": 9,
-                },
-            },
-            "required": ["project_id", "start_ms", "end_ms"],
-        },
-    ),
-    Tool(
-        name="clipcannon_get_storyboard",
-        description=(
-            "Get storyboard grids by batch number or time range. "
-            "Each batch contains 12 grids. Specify start_ms/end_ms "
-            "to get grids in a time range instead."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {"type": "string", "description": "Project identifier"},
-                "batch": {
-                    "type": "integer",
-                    "description": "Batch number (1-indexed, 12 grids/batch)",
-                    "default": 1,
-                },
-                "start_ms": {"type": "integer", "description": "Start time filter (ms)"},
-                "end_ms": {"type": "integer", "description": "End time filter (ms)"},
-            },
-            "required": ["project_id"],
-        },
-    ),
-    Tool(
         name="clipcannon_search_content",
         description=(
             "Search video content by semantic similarity or text match. "
@@ -292,22 +247,6 @@ async def dispatch_understanding_tool(
         return await clipcannon_get_frame(
             str(arguments["project_id"]),
             int(arguments["timestamp_ms"]),  # type: ignore[arg-type]
-        )
-    if name == "clipcannon_get_frame_strip":
-        return await clipcannon_get_frame_strip(
-            str(arguments["project_id"]),
-            int(arguments["start_ms"]),  # type: ignore[arg-type]
-            int(arguments["end_ms"]),  # type: ignore[arg-type]
-            int(arguments.get("count", 9)),  # type: ignore[arg-type]
-        )
-    if name == "clipcannon_get_storyboard":
-        start = arguments.get("start_ms")
-        end = arguments.get("end_ms")
-        return await clipcannon_get_storyboard(
-            str(arguments["project_id"]),
-            int(arguments.get("batch", 1)),  # type: ignore[arg-type]
-            int(start) if start is not None else None,
-            int(end) if end is not None else None,
         )
     if name == "clipcannon_search_content":
         return await clipcannon_search_content(

@@ -6,14 +6,13 @@ search, and error handling with synthetic data in a temp database.
 from __future__ import annotations
 
 import json
-import sys
 import uuid
 from pathlib import Path
 
 import pytest
 
 from clipcannon.db.connection import get_connection
-from clipcannon.db.queries import batch_insert, execute, fetch_one
+from clipcannon.db.queries import batch_insert, execute
 from clipcannon.db.schema import create_project_db
 from clipcannon.tools.understanding import (
     clipcannon_get_analytics,
@@ -24,9 +23,7 @@ from clipcannon.tools.understanding_search import (
     clipcannon_search_content,
 )
 from clipcannon.tools.understanding_visual import (
-    clipcannon_get_frame,
     clipcannon_get_segment_detail,
-    clipcannon_get_storyboard,
 )
 
 
@@ -432,30 +429,6 @@ class TestGetSegmentDetail:
         pid = str(ready_project["project_id"])
         result = await clipcannon_get_segment_detail(pid, start_ms=10000, end_ms=5000)
         assert "error" in result
-
-
-class TestGetStoryboard:
-    """Tests for clipcannon_get_storyboard."""
-
-    @pytest.mark.asyncio
-    async def test_batch_query(self, ready_project: dict[str, object]) -> None:
-        """Returns grids for batch 1."""
-        pid = str(ready_project["project_id"])
-        result = await clipcannon_get_storyboard(pid, batch=1)
-
-        assert "error" not in result
-        assert result["total_grids"] == 1
-        assert result["grid_count"] == 1
-        assert result["grids"][0]["grid_number"] == 1
-
-    @pytest.mark.asyncio
-    async def test_time_range_query(self, ready_project: dict[str, object]) -> None:
-        """Returns grids overlapping with time range."""
-        pid = str(ready_project["project_id"])
-        result = await clipcannon_get_storyboard(
-            pid, start_ms=0, end_ms=5000,
-        )
-        assert result["grid_count"] == 1
 
 
 class TestSearchContent:
