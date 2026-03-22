@@ -2,7 +2,7 @@
 
 Forensic verification of:
   1. Server creation and identity
-  2. Tool registry completeness (27 tools)
+  2. Tool registry completeness (38 tools)
   3. Tool dispatcher mapping completeness
   4. Unknown tool error handling
   5. Default configuration validation
@@ -22,7 +22,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 
 # ============================================================
-# CONSTANTS: The spec-defined 27 tools
+# CONSTANTS: The spec-defined 38 tools
 # ============================================================
 
 EXPECTED_TOOLS = [
@@ -32,15 +32,13 @@ EXPECTED_TOOLS = [
     "clipcannon_project_list",
     "clipcannon_project_status",
     "clipcannon_project_delete",
-    # Understanding tools (9)
+    # Understanding tools (7)
     "clipcannon_ingest",
     "clipcannon_get_vud_summary",
     "clipcannon_get_analytics",
     "clipcannon_get_transcript",
     "clipcannon_get_segment_detail",
     "clipcannon_get_frame",
-    "clipcannon_get_frame_strip",
-    "clipcannon_get_storyboard",
     "clipcannon_search_content",
     # Provenance tools (4)
     "clipcannon_provenance_verify",
@@ -59,6 +57,22 @@ EXPECTED_TOOLS = [
     "clipcannon_credits_history",
     "clipcannon_credits_estimate",
     "clipcannon_spending_limit",
+    # Editing tools (4)
+    "clipcannon_create_edit",
+    "clipcannon_modify_edit",
+    "clipcannon_list_edits",
+    "clipcannon_generate_metadata",
+    # Rendering tools (6)
+    "clipcannon_render",
+    "clipcannon_render_status",
+    "clipcannon_render_batch",
+    "clipcannon_get_editing_context",
+    "clipcannon_analyze_frame",
+    "clipcannon_preview_layout",
+    # Audio tools (3)
+    "clipcannon_generate_music",
+    "clipcannon_compose_midi",
+    "clipcannon_generate_sfx",
 ]
 
 REQUIRED_CONFIG_SECTIONS = ["version", "directories", "processing", "rendering", "publishing", "gpu"]
@@ -289,7 +303,7 @@ def test_unknown_tool() -> None:
             )
             record(
                 "Error details include available_tools list",
-                len(error_result["error"]["details"]["available_tools"]) == 27,
+                len(error_result["error"]["details"]["available_tools"]) == 38,
                 f"count={len(error_result['error']['details']['available_tools'])}",
             )
 

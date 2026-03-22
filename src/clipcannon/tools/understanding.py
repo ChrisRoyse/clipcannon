@@ -65,7 +65,7 @@ def _validate_project(
             return _error(
                 "INVALID_STATE", f"Project must be 'created' to ingest, current: {status}"
             )
-        if required_status == "ready" and status not in ("ready", "analyzing"):
+        if required_status == "ready" and status not in ("ready", "ready_degraded", "analyzing"):
             return _error("INVALID_STATE", f"Project not ready, current status: {status}")
     return None
 

@@ -118,7 +118,7 @@ class TestFullPipeline:
 
         assert proj is not None
         assert EXPECTED_DURATION_MS_MIN <= int(proj["duration_ms"]) <= EXPECTED_DURATION_MS_MAX
-        assert str(proj["status"]) == "ready"
+        assert str(proj["status"]) in ("ready", "ready_degraded")
 
     def test_audio_files_on_disk(self, pipeline_project, full_pipeline_results) -> None:
         stems_dir = pipeline_project["project_dir"] / "stems"

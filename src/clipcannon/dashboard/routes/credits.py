@@ -60,15 +60,10 @@ async def get_balance() -> dict[str, object]:
             "server_reachable": balance_info.balance >= 0,
         }
     except Exception as exc:
-        logger.warning("Failed to get balance: %s", exc)
+        logger.error("License server unreachable: %s", exc)
         return {
-            "balance": -1,
-            "balance_hmac": "",
-            "last_sync_utc": "",
-            "spending_this_month": 0,
-            "spending_limit": 200,
             "server_reachable": False,
-            "error": str(exc),
+            "error": f"LICENSE_SERVER_UNREACHABLE: {exc}",
         }
 
 

@@ -370,12 +370,14 @@ async def run_finalize(
             chain_result.total_records,
         )
 
-        # 4. Set project status to 'ready'
+        # 4. Set project status
+        # 'ready' = all streams completed, 'ready_degraded' = optional failures
+        final_status = "ready" if not degradation_note else "ready_degraded"
         await asyncio.to_thread(
             _set_project_status,
             db_path,
             project_id,
-            "ready",
+            final_status,
             degradation_note,
         )
 

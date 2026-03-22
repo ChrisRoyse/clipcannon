@@ -138,7 +138,7 @@ def validate_project(
         if row is None:
             return error_response("PROJECT_NOT_FOUND", f"No project record: {project_id}")
         status = str(row.get("status", ""))
-        if required_status == "ready" and status not in ("ready", "analyzing"):
+        if required_status == "ready" and status not in ("ready", "ready_degraded", "analyzing"):
             return error_response(
                 "INVALID_STATE",
                 f"Project not ready, current status: {status}",
