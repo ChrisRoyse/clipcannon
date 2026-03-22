@@ -63,6 +63,25 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
         },
     ),
     Tool(
+        name="clipcannon_get_editing_context",
+        description=(
+            "Get ALL data needed for editing decisions in one call. "
+            "Returns transcript, highlights (ranked), silence gaps "
+            "(natural cut points), pacing, and scene boundaries. "
+            "Use this FIRST before creating any edit."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+            },
+            "required": ["project_id"],
+        },
+    ),
+    Tool(
         name="clipcannon_analyze_frame",
         description=(
             "Analyze a frame for content regions and webcam PIP "

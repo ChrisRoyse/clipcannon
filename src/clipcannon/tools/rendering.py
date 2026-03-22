@@ -700,6 +700,10 @@ async def dispatch_rendering_tool(
             project_id=str(arguments["project_id"]),
             edit_ids=[str(e) for e in list(arguments["edit_ids"])],  # type: ignore[union-attr]
         )
+    if name == "clipcannon_get_editing_context":
+        return await clipcannon_get_editing_context(
+            project_id=str(arguments["project_id"]),
+        )
     if name == "clipcannon_analyze_frame":
         return await clipcannon_analyze_frame(
             project_id=str(arguments["project_id"]),
@@ -784,4 +788,132 @@ async def clipcannon_analyze_frame(
         "pip_overlay": result["pip_overlay"],
         "region_count": result["region_count"],
         "elapsed_ms": elapsed_ms,
+    }
+
+
+# ============================================================
+# TOOL 6: clipcannon_get_editing_context
+# ============================================================
+async def clipcannon_get_editing_context(
+    project_id: str,
+) -> dict[str, object]:
+    """Get all data needed for AI editing decisions in one call.
+
+    Consolidates transcript summary, highlights, silence gaps,
+    pacing, scenes, and frame analysis into a single response.
+    This replaces multiple separate tool calls.
+
+    Args:
+        project_id: Project identifier.
+
+    Returns:
+        Dict with all editing-relevant data.
+    """
+    import time
+
+    from clipcannon.db.connection import get_connection
+    from clipcannon.db.queries import fetch_all, fetch_one
+
+    start_time = time.monotonic()
+
+    err = _validate_project(project_id)
+    if err is not None:
+        return err
+
+    db = _db_path(project_id)
+    conn = get_connection(db, enable_vec=False, dict_rows=True)
+    try:
+        # Project metadata
+        proj = fetch_one(
+            conn,
+            "SELECT duration_ms, resolution, fps FROM project "
+            "WHERE project_id = ?",
+            (project_id,),
+        )
+        if proj is None:
+            return _error("PROJECT_NOT_FOUND", f"No project: {project_id}")
+
+        # Transcript segments (compact: just text + timing)
+        segments = fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, text FROM transcript_segments "
+            "WHERE project_id = ? ORDER BY start_ms",
+            (project_id,),
+        )
+
+        # Highlights (ranked by score)
+        highlights = fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, type, score, reason "
+            "FROM highlights WHERE project_id = ? ORDER BY score DESC",
+            (project_id,),
+        )
+
+        # Silence gaps (natural cut points)
+        gaps = fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, duration_ms "
+            "FROM silence_gaps WHERE project_id = ? "
+            "ORDER BY start_ms",
+            (project_id,),
+        )
+
+        # Pacing windows
+        pacing = fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, words_per_minute, "
+            "pause_ratio, label FROM pacing "
+            "WHERE project_id = ? ORDER BY start_ms",
+            (project_id,),
+        )
+
+        # Scene boundaries
+        scenes = fetch_all(
+            conn,
+            "SELECT scene_id, start_ms, end_ms, "
+            "key_frame_path, dominant_colors "
+            "FROM scenes WHERE project_id = ? ORDER BY start_ms",
+            (project_id,),
+        )
+
+    finally:
+        conn.close()
+
+    elapsed = int((time.monotonic() - start_time) * 1000)
+
+    return {
+        "project_id": project_id,
+        "duration_ms": int(proj["duration_ms"]),
+        "resolution": str(proj["resolution"]),
+        "transcript": [
+            {"start_ms": s["start_ms"], "end_ms": s["end_ms"],
+             "text": s["text"]}
+            for s in segments
+        ],
+        "highlights": [
+            {"start_ms": h["start_ms"], "end_ms": h["end_ms"],
+             "score": h["score"], "reason": h["reason"]}
+            for h in highlights
+        ],
+        "silence_gaps": [
+            {"start_ms": g["start_ms"], "end_ms": g["end_ms"],
+             "duration_ms": g["duration_ms"]}
+            for g in gaps
+        ],
+        "pacing": [
+            {"start_ms": p["start_ms"], "end_ms": p["end_ms"],
+             "wpm": p["words_per_minute"], "label": p["label"]}
+            for p in pacing
+        ],
+        "scenes": [
+            {"scene_id": s["scene_id"], "start_ms": s["start_ms"],
+             "end_ms": s["end_ms"],
+             "key_frame": s["key_frame_path"]}
+            for s in scenes
+        ],
+        "segment_count": len(segments),
+        "highlight_count": len(highlights),
+        "scene_count": len(scenes),
+        "silence_gap_count": len(gaps),
+        "elapsed_ms": elapsed,
     }
