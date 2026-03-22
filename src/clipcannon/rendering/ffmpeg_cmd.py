@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
     from clipcannon.editing.edl import (
         CanvasSpec,
+        ColorSpec,
+        OverlaySpec,
         SegmentSpec,
     )
     from clipcannon.editing.smart_crop import (
@@ -64,6 +66,9 @@ def build_ffmpeg_cmd(
     split_layout: SplitScreenLayout | None = None,
     pip_layout: PipLayout | None = None,
     canvas: CanvasSpec | None = None,
+    global_color: ColorSpec | None = None,
+    overlays: list[OverlaySpec] | None = None,
+    removals: list | None = None,
 ) -> list[str]:
     """Build the FFmpeg command as a list of arguments.
 
@@ -81,6 +86,9 @@ def build_ffmpeg_cmd(
         split_layout: Split-screen layout (for "split_screen" layout).
         pip_layout: PIP layout (for "pip" layout).
         canvas: Canvas compositing spec (full AI creative control).
+        global_color: Global color grading applied after compositing.
+        overlays: Visual overlays (lower thirds, titles, etc.).
+        removals: Regions to remove via FFmpeg delogo filter.
 
     Returns:
         FFmpeg command as a list of strings.
@@ -95,6 +103,9 @@ def build_ffmpeg_cmd(
         return _build_per_segment_canvas_cmd(
             source_path, output_path, segments,
             profile, canvas, ass_path, encoding_args,
+            global_color=global_color,
+            overlays=overlays,
+            removals=removals,
         )
 
     # Split-screen layout
@@ -116,10 +127,12 @@ def build_ffmpeg_cmd(
         return _build_single_segment_cmd(
             source_path, output_path, segments[0],
             profile, crop_region, ass_path, encoding_args,
+            removals=removals,
         )
     return _build_multi_segment_cmd(
         source_path, output_path, segments,
         profile, crop_region, ass_path, encoding_args,
+        removals=removals,
     )
 
 
@@ -131,6 +144,7 @@ def _build_single_segment_cmd(
     crop_region: CropRegion | None,
     ass_path: Path | None,
     encoding_args: list[str],
+    removals: list | None = None,
 ) -> list[str]:
     """Build FFmpeg command for a single-segment EDL.
 
@@ -142,6 +156,7 @@ def _build_single_segment_cmd(
         crop_region: Optional crop region.
         ass_path: Optional ASS subtitle path.
         encoding_args: Pre-built encoding arguments.
+        removals: Regions to remove via FFmpeg delogo filter.
 
     Returns:
         FFmpeg command as argument list.
@@ -151,6 +166,13 @@ def _build_single_segment_cmd(
 
     # Build video filter chain
     vfilters: list[str] = []
+
+    # Apply delogo removals before crop/scale
+    if removals:
+        for rem in removals:
+            vfilters.append(
+                f"delogo=x={rem.x}:y={rem.y}:w={rem.width}:h={rem.height}:band=10"
+            )
 
     if crop_region is not None:
         vfilters.append(
@@ -199,6 +221,7 @@ def _build_multi_segment_cmd(
     crop_region: CropRegion | None,
     ass_path: Path | None,
     encoding_args: list[str],
+    removals: list | None = None,
 ) -> list[str]:
     """Build FFmpeg command for multi-segment EDL with concat.
 
@@ -213,6 +236,7 @@ def _build_multi_segment_cmd(
         crop_region: Optional crop region.
         ass_path: Optional ASS subtitle path.
         encoding_args: Pre-built encoding arguments.
+        removals: Regions to remove via FFmpeg delogo filter.
 
     Returns:
         FFmpeg command as argument list.
@@ -221,6 +245,12 @@ def _build_multi_segment_cmd(
     video_labels: list[str] = []
     audio_labels: list[str] = []
 
+    # Build delogo chain string for removals
+    delogo_chain = ""
+    if removals:
+        for rem in removals:
+            delogo_chain += f",delogo=x={rem.x}:y={rem.y}:w={rem.width}:h={rem.height}:band=10"
+
     for i, seg in enumerate(segments):
         start_s = seg.source_start_ms / 1000.0
         end_s = seg.source_end_ms / 1000.0
@@ -228,7 +258,7 @@ def _build_multi_segment_cmd(
         # Video chain for this segment
         vchain = (
             f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-            f"setpts=PTS-STARTPTS"
+            f"setpts=PTS-STARTPTS{delogo_chain}"
         )
 
         if crop_region is not None:
@@ -838,6 +868,9 @@ def _build_per_segment_canvas_cmd(
     top_level_canvas: CanvasSpec | None,
     ass_path: Path | None,
     encoding_args: list[str],
+    global_color: ColorSpec | None = None,
+    overlays: list[OverlaySpec] | None = None,
+    removals: list | None = None,
 ) -> list[str]:
     """Build FFmpeg command with per-segment canvas compositing.
 
@@ -857,6 +890,9 @@ def _build_per_segment_canvas_cmd(
         top_level_canvas: Global canvas spec (fallback).
         ass_path: Optional ASS subtitle path.
         encoding_args: Encoding arguments.
+        global_color: Global color grading applied after compositing.
+        overlays: Visual overlays applied after compositing.
+        removals: Regions to remove via FFmpeg delogo filter.
 
     Returns:
         FFmpeg command as argument list.
@@ -876,10 +912,14 @@ def _build_per_segment_canvas_cmd(
     for i, seg in enumerate(segments):
         # Build video chain for this segment based on its layout
         if seg.canvas is not None and seg.canvas.zoom is not None:
-            _build_segment_zoom_chain(filter_parts, seg, i, profile, cw, ch)
+            _build_segment_zoom_chain(
+                filter_parts, seg, i, profile, cw, ch,
+                removals=removals,
+            )
         elif seg.canvas is not None and seg.canvas.regions:
             _build_segment_canvas_chain(
                 filter_parts, seg, i, profile, cw, ch, seg.canvas,
+                removals=removals,
             )
         elif (
             top_level_canvas is not None
@@ -893,9 +933,13 @@ def _build_per_segment_canvas_cmd(
             )
             _build_segment_canvas_chain(
                 filter_parts, seg, i, profile, cw, ch, seg_canvas,
+                removals=removals,
             )
         else:
-            _build_segment_plain_chain(filter_parts, seg, i, profile)
+            _build_segment_plain_chain(
+                filter_parts, seg, i, profile,
+                removals=removals,
+            )
 
         video_labels.append(f"v{i}")
 
@@ -923,6 +967,52 @@ def _build_per_segment_canvas_cmd(
     final_video, final_audio = _build_concat_filters(
         filter_parts, video_labels, audio_labels,
     )
+
+    # Apply global color grading (after concat, before subtitles)
+    if global_color is not None:
+        from clipcannon.editing.motion import build_color_filters
+
+        color_filter = build_color_filters(
+            brightness=global_color.brightness,
+            contrast=global_color.contrast,
+            saturation=global_color.saturation,
+            gamma=global_color.gamma,
+            hue_shift=global_color.hue_shift,
+        )
+        if color_filter:
+            filter_parts.append(
+                f"[{final_video}]{color_filter}[color_graded]"
+            )
+            final_video = "color_graded"
+
+    # Apply overlay drawtext/drawbox filters
+    if overlays:
+        from clipcannon.editing.overlays import build_overlay_filters
+
+        overlay_idx = 0
+        for overlay in overlays:
+            ov_filters = build_overlay_filters(
+                overlay_type=overlay.overlay_type,
+                text=overlay.text,
+                subtitle=overlay.subtitle,
+                position=overlay.position,
+                start_ms=overlay.start_ms,
+                end_ms=overlay.end_ms,
+                opacity=overlay.opacity,
+                font_size=overlay.font_size,
+                text_color=overlay.text_color,
+                bg_color=overlay.bg_color,
+                bg_opacity=overlay.bg_opacity,
+                animation=overlay.animation,
+                animation_duration_ms=overlay.animation_duration_ms,
+            )
+            for filt in ov_filters:
+                out_label = f"ov{overlay_idx}"
+                filter_parts.append(
+                    f"[{final_video}]{filt}[{out_label}]"
+                )
+                final_video = out_label
+                overlay_idx += 1
 
     # Apply subtitles to final composited video
     if ass_path is not None:
@@ -991,6 +1081,7 @@ def _build_segment_canvas_chain(
     cw: int,
     ch: int,
     canvas: SegmentCanvasSpec,
+    removals: list | None = None,
 ) -> None:
     """Build filter chain for one segment with canvas regions.
 
@@ -1006,6 +1097,7 @@ def _build_segment_canvas_chain(
         cw: Canvas width.
         ch: Canvas height.
         canvas: Canvas spec with regions for this segment.
+        removals: Regions to remove via FFmpeg delogo filter.
     """
     start_s = seg.source_start_ms / 1000.0
     end_s = seg.source_end_ms / 1000.0
@@ -1014,10 +1106,16 @@ def _build_segment_canvas_chain(
     n_regions = len(regions)
     seg_dur_s = (end_s - start_s) / seg.speed
 
-    # 1. Trim source
+    # Build delogo chain for removals (applied after trim)
+    delogo_chain = ""
+    if removals:
+        for rem in removals:
+            delogo_chain += f",delogo=x={rem.x}:y={rem.y}:w={rem.width}:h={rem.height}:band=10"
+
+    # 1. Trim source (with delogo if removals present)
     filters.append(
         f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-        f"setpts=PTS-STARTPTS[seg{idx}_src]"
+        f"setpts=PTS-STARTPTS{delogo_chain}[seg{idx}_src]"
     )
 
     # 2+3. Background + split into copies for regions
@@ -1071,13 +1169,35 @@ def _build_segment_canvas_chain(
     # 5. Overlay each region onto canvas
     current = f"seg{idx}_bg"
     for j, region in enumerate(regions):
-        out = f"seg{idx}_ov{j}" if j < n_regions - 1 else f"v{idx}"
+        out = f"seg{idx}_ov{j}" if j < n_regions - 1 else f"seg{idx}_composed"
         filters.append(
             f"[{current}][seg{idx}_cr{j}]"
             f"overlay=x={region.output_x}:y={region.output_y}"
             f":shortest=1[{out}]"
         )
         current = out
+
+    # 6. Apply per-segment color grading
+    color_in = f"seg{idx}_composed"
+    if seg.color is not None:
+        from clipcannon.editing.motion import build_color_filters
+
+        color_filter = build_color_filters(
+            brightness=seg.color.brightness,
+            contrast=seg.color.contrast,
+            saturation=seg.color.saturation,
+            gamma=seg.color.gamma,
+            hue_shift=seg.color.hue_shift,
+        )
+        if color_filter:
+            filters.append(
+                f"[{color_in}]{color_filter}[seg{idx}_colored]"
+            )
+            color_in = f"seg{idx}_colored"
+
+    # Final label for this segment
+    if color_in != f"v{idx}":
+        filters.append(f"[{color_in}]null[v{idx}]")
 
 
 def _build_segment_zoom_chain(
@@ -1087,6 +1207,7 @@ def _build_segment_zoom_chain(
     profile: EncodingProfile,
     cw: int,
     ch: int,
+    removals: list | None = None,
 ) -> None:
     """Build filter chain for one segment with animated zoom.
 
@@ -1101,16 +1222,23 @@ def _build_segment_zoom_chain(
         profile: Encoding profile.
         cw: Canvas width.
         ch: Canvas height.
+        removals: Regions to remove via FFmpeg delogo filter.
     """
     start_s = seg.source_start_ms / 1000.0
     end_s = seg.source_end_ms / 1000.0
     zoom = seg.canvas.zoom  # type: ignore[union-attr]
     seg_dur_s = (end_s - start_s) / seg.speed
 
-    # Trim and reset PTS so t starts at 0
+    # Build delogo chain for removals (applied after trim)
+    delogo_chain = ""
+    if removals:
+        for rem in removals:
+            delogo_chain += f",delogo=x={rem.x}:y={rem.y}:w={rem.width}:h={rem.height}:band=10"
+
+    # Trim and reset PTS so t starts at 0 (with delogo if removals present)
     filters.append(
         f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-        f"setpts=PTS-STARTPTS[seg{idx}_src]"
+        f"setpts=PTS-STARTPTS{delogo_chain}[seg{idx}_src]"
     )
 
     # Build easing progress expression
@@ -1137,12 +1265,38 @@ def _build_segment_zoom_chain(
     crop_x = lerp(zoom.start_x, zoom.end_x)
     crop_y = lerp(zoom.start_y, zoom.end_y)
 
-    filters.append(
-        f"[seg{idx}_src]"
-        f"crop=w='{crop_w}':h='{crop_h}':x='{crop_x}':y='{crop_y}',"
-        f"scale={cw}:{ch},setsar=1"
-        f"[v{idx}]"
-    )
+    # Apply zoom crop and scale
+    zoom_out_label = f"seg{idx}_zoomed"
+    if seg.color is not None:
+        filters.append(
+            f"[seg{idx}_src]"
+            f"crop=w='{crop_w}':h='{crop_h}':x='{crop_x}':y='{crop_y}',"
+            f"scale={cw}:{ch},setsar=1"
+            f"[{zoom_out_label}]"
+        )
+        # Apply per-segment color grading
+        from clipcannon.editing.motion import build_color_filters
+
+        color_filter = build_color_filters(
+            brightness=seg.color.brightness,
+            contrast=seg.color.contrast,
+            saturation=seg.color.saturation,
+            gamma=seg.color.gamma,
+            hue_shift=seg.color.hue_shift,
+        )
+        if color_filter:
+            filters.append(
+                f"[{zoom_out_label}]{color_filter}[v{idx}]"
+            )
+        else:
+            filters.append(f"[{zoom_out_label}]null[v{idx}]")
+    else:
+        filters.append(
+            f"[seg{idx}_src]"
+            f"crop=w='{crop_w}':h='{crop_h}':x='{crop_x}':y='{crop_y}',"
+            f"scale={cw}:{ch},setsar=1"
+            f"[v{idx}]"
+        )
 
 
 def _build_segment_plain_chain(
@@ -1150,6 +1304,7 @@ def _build_segment_plain_chain(
     seg: SegmentSpec,
     idx: int,
     profile: EncodingProfile,
+    removals: list | None = None,
 ) -> None:
     """Build filter chain for a segment with no canvas: trim + scale.
 
@@ -1158,16 +1313,47 @@ def _build_segment_plain_chain(
         seg: Segment specification.
         idx: Segment index for label naming.
         profile: Encoding profile.
+        removals: Regions to remove via FFmpeg delogo filter.
     """
     start_s = seg.source_start_ms / 1000.0
     end_s = seg.source_end_ms / 1000.0
 
-    filters.append(
-        f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-        f"setpts=PTS-STARTPTS,"
-        f"scale={profile.width}:{profile.height},setsar=1"
-        f"[v{idx}]"
-    )
+    # Build delogo chain for removals (applied after trim)
+    delogo_chain = ""
+    if removals:
+        for rem in removals:
+            delogo_chain += f",delogo=x={rem.x}:y={rem.y}:w={rem.width}:h={rem.height}:band=10"
+
+    if seg.color is not None:
+        filters.append(
+            f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
+            f"setpts=PTS-STARTPTS{delogo_chain},"
+            f"scale={profile.width}:{profile.height},setsar=1"
+            f"[seg{idx}_scaled]"
+        )
+        # Apply per-segment color grading
+        from clipcannon.editing.motion import build_color_filters
+
+        color_filter = build_color_filters(
+            brightness=seg.color.brightness,
+            contrast=seg.color.contrast,
+            saturation=seg.color.saturation,
+            gamma=seg.color.gamma,
+            hue_shift=seg.color.hue_shift,
+        )
+        if color_filter:
+            filters.append(
+                f"[seg{idx}_scaled]{color_filter}[v{idx}]"
+            )
+        else:
+            filters.append(f"[seg{idx}_scaled]null[v{idx}]")
+    else:
+        filters.append(
+            f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
+            f"setpts=PTS-STARTPTS{delogo_chain},"
+            f"scale={profile.width}:{profile.height},setsar=1"
+            f"[v{idx}]"
+        )
 
 
 # ============================================================

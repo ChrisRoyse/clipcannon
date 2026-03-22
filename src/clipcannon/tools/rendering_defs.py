@@ -198,4 +198,76 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
             ],
         },
     ),
+    Tool(
+        name="clipcannon_measure_layout",
+        description=(
+            "Measure exact layout coordinates using face detection. "
+            "Runs face detection on a frame and computes mathematically "
+            "precise source crop and output placement coordinates. "
+            "Returns ready-to-use canvas regions for create_edit. "
+            "Layout A = 30/70 speaker+screen split. "
+            "Layout B = 40/60 split. "
+            "Layout C = PIP (small speaker circle over screen). "
+            "Layout D = full-screen face."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+                "timestamp_ms": {
+                    "type": "integer",
+                    "description": "Source timestamp to analyze (ms)",
+                },
+                "layout": {
+                    "type": "string",
+                    "enum": ["A", "B", "C", "D"],
+                    "description": (
+                        "Layout type: A (30/70 split), "
+                        "B (40/60 split), C (PIP), "
+                        "D (full-screen face)"
+                    ),
+                    "default": "A",
+                },
+            },
+            "required": ["project_id", "timestamp_ms"],
+        },
+    ),
+    Tool(
+        name="clipcannon_get_storyboard",
+        description=(
+            "Get a contact sheet of ALL video frames in one image. "
+            "Shows every frame at 2fps as tiny thumbnails (160x90px) "
+            "with timestamp labels in a 20-column grid. Each row = 10 seconds. "
+            "Returns the ENTIRE video in one inline image (~9K tokens) "
+            "plus the full transcript with timestamps for speech alignment. "
+            "One call = complete visual understanding of the video."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+                "start_s": {
+                    "type": "integer",
+                    "description": (
+                        "Start time in seconds. Shows 5 seconds "
+                        "of frames (10 frames at 2fps) from this point. "
+                        "Omit to get the full overview contact sheet."
+                    ),
+                },
+                "end_s": {
+                    "type": "integer",
+                    "description": (
+                        "End time in seconds. Defaults to start_s + 5."
+                    ),
+                },
+            },
+            "required": ["project_id"],
+        },
+    ),
 ]

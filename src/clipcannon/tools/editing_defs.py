@@ -362,4 +362,116 @@ EDITING_TOOL_DEFINITIONS: list[Tool] = [
             "required": ["project_id", "edit_id", "overlay_type", "text", "start_ms", "end_ms"],
         },
     ),
+    Tool(
+        name="clipcannon_extract_subject",
+        description=(
+            "Extract the subject (person/speaker) from video frames using "
+            "AI background removal (rembg). Generates alpha mask frames and "
+            "a mask video for use in background replacement. "
+            "Runs locally on GPU. Processing time: ~0.5s per frame."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+                "model": {
+                    "type": "string",
+                    "description": (
+                        "rembg model: u2net (general), "
+                        "u2net_human_seg (humans), "
+                        "isnet-general-use (general v2)"
+                    ),
+                    "default": "u2net_human_seg",
+                    "enum": [
+                        "u2net", "u2net_human_seg",
+                        "isnet-general-use",
+                    ],
+                },
+            },
+            "required": ["project_id"],
+        },
+    ),
+    Tool(
+        name="clipcannon_replace_background",
+        description=(
+            "Replace the video background. Requires extract_subject to be "
+            "run first. Supports: 'blur' (gaussian blur of original bg), "
+            "'color' (solid color replacement). "
+            "Stores the result as an audio asset for the edit."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+                "edit_id": {
+                    "type": "string",
+                    "description": "Edit identifier",
+                },
+                "background_type": {
+                    "type": "string",
+                    "description": "Background type",
+                    "enum": ["blur", "color"],
+                },
+                "background_value": {
+                    "type": "string",
+                    "description": (
+                        "For blur: sigma value (default 40). "
+                        "For color: hex color (e.g. '#1a1a2e')"
+                    ),
+                    "default": "40",
+                },
+            },
+            "required": ["project_id", "edit_id", "background_type"],
+        },
+    ),
+    Tool(
+        name="clipcannon_remove_region",
+        description=(
+            "Remove a rectangular region from the source video. "
+            "Uses FFmpeg delogo filter to blur/interpolate the area using "
+            "surrounding pixels. Use to remove browser chrome, taskbars, "
+            "watermarks, or logos. Applied before crop/scale in the render pipeline."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+                "edit_id": {
+                    "type": "string",
+                    "description": "Edit identifier",
+                },
+                "x": {
+                    "type": "integer",
+                    "description": "Left edge of region to remove (px in source)",
+                },
+                "y": {
+                    "type": "integer",
+                    "description": "Top edge of region to remove (px in source)",
+                },
+                "width": {
+                    "type": "integer",
+                    "description": "Width of region (px)",
+                },
+                "height": {
+                    "type": "integer",
+                    "description": "Height of region (px)",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "What is being removed (e.g., 'browser chrome')",
+                    "default": "",
+                },
+            },
+            "required": ["project_id", "edit_id", "x", "y", "width", "height"],
+        },
+    ),
 ]

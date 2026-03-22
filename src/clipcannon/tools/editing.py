@@ -775,6 +775,237 @@ async def clipcannon_add_overlay(
 
 
 # ============================================================
+# TOOL 9: clipcannon_extract_subject
+# ============================================================
+async def clipcannon_extract_subject(
+    project_id: str,
+    model: str = "u2net_human_seg",
+) -> dict[str, object]:
+    """Extract subject masks from video frames using rembg."""
+    from clipcannon.editing.subject_extraction import extract_subject_masks
+
+    err = validate_project(project_id)
+    if err is not None:
+        return err
+
+    proj_dir = project_dir(project_id)
+    frames_dir = proj_dir / "frames"
+    if not frames_dir.exists():
+        return error_response("FRAMES_NOT_FOUND", "No frames directory")
+
+    processing_dir = proj_dir / "processing"
+
+    try:
+        result = await extract_subject_masks(
+            frames_dir=frames_dir,
+            output_dir=processing_dir,
+            model_name=model,
+        )
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        logger.exception("Subject extraction failed for %s", project_id)
+        return error_response("EXTRACTION_FAILED", str(exc))
+
+    return {
+        "project_id": project_id,
+        "mask_video_path": str(result.mask_video_path),
+        "frame_count": result.frame_count,
+        "duration_ms": result.duration_ms,
+        "model_used": result.model_used,
+        "elapsed_ms": result.elapsed_ms,
+        "message": (
+            f"Extracted {result.frame_count} masks using {model}. "
+            f"Mask video at {result.mask_video_path}"
+        ),
+    }
+
+
+# ============================================================
+# TOOL 10: clipcannon_replace_background
+# ============================================================
+async def clipcannon_replace_background(
+    project_id: str,
+    edit_id: str,
+    background_type: str,
+    background_value: str = "40",
+) -> dict[str, object]:
+    """Replace video background using extracted subject masks."""
+    import asyncio as aio
+    import time as time_mod
+
+    from clipcannon.editing.subject_extraction import (
+        build_background_replace_filters,
+    )
+
+    err = validate_project(project_id)
+    if err is not None:
+        return err
+
+    proj_dir = project_dir(project_id)
+    processing_dir = proj_dir / "processing"
+    masks_dir = processing_dir / "masks"
+
+    if not masks_dir.exists() or not any(masks_dir.glob("mask_*.png")):
+        return error_response(
+            "NO_MASKS",
+            "No subject masks found. Run clipcannon_extract_subject first.",
+        )
+
+    # Find the mask video
+    mask_videos = sorted(processing_dir.glob("mask_*.mp4"))
+    if not mask_videos:
+        return error_response(
+            "NO_MASK_VIDEO",
+            "No mask video found. Run clipcannon_extract_subject first.",
+        )
+    mask_video = mask_videos[-1]  # Latest
+
+    # Find source video
+    source_dir = proj_dir / "source"
+    source_files = list(source_dir.glob("*"))
+    if not source_files:
+        return error_response("SOURCE_NOT_FOUND", "No source video")
+    source_path = source_files[0]
+
+    output_dir = proj_dir / "processing" / "bg_replaced"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"bg_{background_type}_{secrets.token_hex(4)}.mp4"
+
+    # Default resolution
+    w, h = 2560, 1440
+
+    # Get actual source resolution
+    conn = get_connection(str(db_path(project_id)), enable_vec=False, dict_rows=True)
+    try:
+        row = fetch_one(
+            conn,
+            "SELECT resolution FROM project WHERE project_id = ?",
+            (project_id,),
+        )
+    finally:
+        conn.close()
+
+    if row and row.get("resolution"):
+        res = str(row["resolution"]).split("x")
+        w, h = int(res[0]), int(res[1])
+
+    filters = build_background_replace_filters(
+        mask_video_input_idx=1,
+        background_type=background_type,
+        background_value=background_value,
+        output_w=w,
+        output_h=h,
+    )
+
+    filter_complex = ";".join(filters)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(source_path),
+        "-i", str(mask_video),
+        "-filter_complex", filter_complex,
+        "-map", "[composed]",
+        "-map", "0:a",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-c:a", "aac",
+        "-shortest",
+        str(output_path),
+    ]
+
+    t0 = time_mod.monotonic()
+    proc = await aio.create_subprocess_exec(
+        *cmd,
+        stdout=aio.subprocess.PIPE,
+        stderr=aio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    elapsed_ms = int((time_mod.monotonic() - t0) * 1000)
+
+    if proc.returncode != 0:
+        error_msg = stderr.decode(errors="replace")[-500:]
+        return error_response(
+            "BG_REPLACE_FAILED",
+            f"Background replacement failed: {error_msg}",
+        )
+
+    if not output_path.exists():
+        return error_response(
+            "BG_REPLACE_FAILED",
+            "Output file not created",
+        )
+
+    return {
+        "project_id": project_id,
+        "edit_id": edit_id,
+        "output_path": str(output_path),
+        "background_type": background_type,
+        "file_size_bytes": output_path.stat().st_size,
+        "elapsed_ms": elapsed_ms,
+        "message": (
+            f"Background replaced with {background_type}. "
+            f"Output at {output_path}"
+        ),
+    }
+
+
+# ============================================================
+# TOOL 11: clipcannon_remove_region
+# ============================================================
+async def clipcannon_remove_region(
+    project_id: str,
+    edit_id: str,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    description: str = "",
+) -> dict[str, object]:
+    """Remove a rectangular region from the source video."""
+    from clipcannon.editing.edl import RemovalSpec
+
+    err = validate_project(project_id)
+    if err is not None:
+        return err
+
+    try:
+        removal = RemovalSpec(x=x, y=y, width=width, height=height, description=description)
+    except Exception as exc:
+        return error_response("INVALID_PARAMETER", f"Invalid removal spec: {exc}")
+
+    conn = get_connection(str(db_path(project_id)), enable_vec=False, dict_rows=True)
+    try:
+        row = fetch_one(
+            conn,
+            "SELECT edl_json, status FROM edits "
+            "WHERE edit_id = ? AND project_id = ?",
+            (edit_id, project_id),
+        )
+        if row is None:
+            return error_response("EDIT_NOT_FOUND", f"Edit not found: {edit_id}")
+        if row["status"] != "draft":
+            return error_response("INVALID_STATE", f"Edit must be draft, is: {row['status']}")
+
+        edl = EditDecisionList(**json.loads(row["edl_json"]))
+        edl.removals.append(removal)
+
+        execute(
+            conn,
+            "UPDATE edits SET edl_json = ?, updated_at = datetime('now') "
+            "WHERE edit_id = ?",
+            (edl.model_dump_json(), edit_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "edit_id": edit_id,
+        "removal_count": len(edl.removals),
+        "removal": removal.model_dump(),
+        "message": f"Region removed: {width}x{height} at ({x},{y})",
+    }
+
+
+# ============================================================
 # DISPATCH
 # ============================================================
 async def dispatch_editing_tool(
@@ -865,6 +1096,30 @@ async def dispatch_editing_tool(
             float(arguments.get("bg_opacity", 0.7)),
             str(arguments.get("animation", "fade_in")),
             int(arguments.get("animation_duration_ms", 500)),
+        )
+
+    if name == "clipcannon_extract_subject":
+        return await clipcannon_extract_subject(
+            str(arguments["project_id"]),
+            str(arguments.get("model", "u2net_human_seg")),
+        )
+    if name == "clipcannon_replace_background":
+        return await clipcannon_replace_background(
+            str(arguments["project_id"]),
+            str(arguments["edit_id"]),
+            str(arguments["background_type"]),
+            str(arguments.get("background_value", "40")),
+        )
+
+    if name == "clipcannon_remove_region":
+        return await clipcannon_remove_region(
+            str(arguments["project_id"]),
+            str(arguments["edit_id"]),
+            int(arguments["x"]),
+            int(arguments["y"]),
+            int(arguments["width"]),
+            int(arguments["height"]),
+            str(arguments.get("description", "")),
         )
 
     return error_response("INTERNAL_ERROR", f"Unknown editing tool: {name}")

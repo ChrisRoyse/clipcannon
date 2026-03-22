@@ -232,14 +232,21 @@ def build_cta_filter(
     btn_w = len(text) * font_size + 40
     btn_h = font_size + 20
 
+    # drawbox needs pixel expressions, not drawtext variables like tw/th
+    # For centered positions, calculate using btn_w directly
+    box_x = f"(w-{btn_w})/2" if "center" in position else pos[0]
+    box_y = f"h-{btn_h}-40" if "bottom" in position else pos[1]
+    text_x = f"(w-{btn_w})/2+20" if "center" in position else f"{pos[0]}+20"
+    text_y = f"h-{btn_h}-40+10" if "bottom" in position else f"{pos[1]}+10"
+
     return [
-        f"drawbox=x={pos[0]}:y={pos[1]}:w={btn_w}:h={btn_h}"
+        f"drawbox=x={box_x}:y={box_y}:w={btn_w}:h={btn_h}"
         f":color={bg_color_fmt}:t=fill:{time_enable}",
         f"drawtext=text='{escaped_text}'"
         f":fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
         f":fontsize={font_size}"
         f":fontcolor={text_color_fmt}"
-        f":x={pos[0]}+20:y={pos[1]}+10"
+        f":x={text_x}:y={text_y}"
         f":{time_enable}",
     ]
 

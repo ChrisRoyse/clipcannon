@@ -576,6 +576,23 @@ class ColorSpec(BaseModel):
     hue_shift: float = Field(default=0.0, ge=-180.0, le=180.0)
 
 
+class RemovalSpec(BaseModel):
+    """A rectangular region to remove/mask from the source video.
+
+    Uses FFmpeg delogo filter to blur the specified region using
+    surrounding pixel data. Applied before any crop/scale operations.
+    """
+
+    x: int = Field(ge=0, description="Left edge of region to remove (px)")
+    y: int = Field(ge=0, description="Top edge of region to remove (px)")
+    width: int = Field(ge=1, description="Width of region to remove (px)")
+    height: int = Field(ge=1, description="Height of region to remove (px)")
+    description: str = Field(
+        default="",
+        description="What is being removed (e.g., 'browser chrome')",
+    )
+
+
 class MetadataSpec(BaseModel):
     """Platform metadata for the rendered clip."""
 
@@ -623,6 +640,10 @@ class EditDecisionList(BaseModel):
     color: ColorSpec | None = Field(
         default=None,
         description="Global color grading applied to entire edit.",
+    )
+    removals: list[RemovalSpec] = Field(
+        default_factory=list,
+        description="Regions to remove from source (delogo filter).",
     )
     overlays: list[OverlaySpec] = Field(
         default_factory=list,

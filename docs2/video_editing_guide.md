@@ -1,6 +1,6 @@
 # ClipCannon AI Video Editing Guide
 
-Canvas: **1080x1920** (9:16). All values in pixels. Platforms: TikTok, Instagram Reels, YouTube Shorts, Facebook Reels, LinkedIn.
+Supported canvases: **1080x1920** (9:16), **1920x1080** (16:9), **3840x2160** (4K 16:9), **1080x1080** (1:1). All values in pixels. Platforms: TikTok, Instagram Reels, YouTube Shorts, Facebook Reels, LinkedIn.
 
 ## Core Directive
 
@@ -359,7 +359,10 @@ Workflow: decide coords → preview_layout → adjust → repeat → render → 
 
 | Measurement | Value |
 |---|---|
-| Canvas | 1080x1920, center (540,960) |
+| Canvas (9:16) | 1080x1920, center (540,960) |
+| Canvas (16:9) | 1920x1080, center (960,540) |
+| Canvas (4K 16:9) | 3840x2160, center (1920,1080) |
+| Canvas (1:1) | 1080x1080, center (540,540) |
 | Third lines | y=640, y=1280 |
 | Universal safe zone | (60,108)→(940,1560) |
 | Layout A face/screen | (0,0,1080,576) / (0,576,1080,1344) |

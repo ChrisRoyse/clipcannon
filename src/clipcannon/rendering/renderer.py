@@ -152,6 +152,9 @@ class RenderEngine:
                 ass_path=ass_path,
                 encoding_args=encoding_args,
                 canvas=canvas_spec,
+                global_color=edl.color,
+                overlays=edl.overlays or None,
+                removals=edl.removals or None,
             )
             await self._execute_ffmpeg(cmd, render_id)
 

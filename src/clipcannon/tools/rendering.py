@@ -800,6 +800,257 @@ async def clipcannon_inspect_render(
 
 
 # ============================================================
+# TOOL 9: clipcannon_measure_layout
+# ============================================================
+async def clipcannon_measure_layout(
+    project_id: str,
+    timestamp_ms: int,
+    layout: str = "A",
+) -> dict[str, object]:
+    """Measure exact layout coordinates using face detection.
+
+    Runs face detection and computes mathematically precise
+    source crop and output coordinates for the requested layout.
+
+    Args:
+        project_id: Project identifier.
+        timestamp_ms: Source timestamp in milliseconds.
+        layout: Layout type (A, B, C, D).
+
+    Returns:
+        Dict with face bbox, canvas regions, and placement metrics.
+    """
+    from clipcannon.editing.measure_layout import measure_layout
+
+    proj_dir = _project_dir(project_id)
+    if not proj_dir.exists():
+        return _error(
+            "PROJECT_NOT_FOUND",
+            f"Project not found: {project_id}",
+        )
+
+    db = _db_path(project_id)
+    conn = get_connection(str(db), enable_vec=False, dict_rows=True)
+    try:
+        row = fetch_one(
+            conn,
+            "SELECT resolution FROM project WHERE project_id = ?",
+            (project_id,),
+        )
+    finally:
+        conn.close()
+
+    if row is None:
+        return _error("PROJECT_NOT_FOUND", f"No project record: {project_id}")
+
+    res = str(row["resolution"]).split("x")
+    frame_w = int(res[0])
+    frame_h = int(res[1])
+
+    # Find nearest frame
+    frames_dir = proj_dir / "frames"
+    if not frames_dir.exists():
+        return _error("FRAMES_NOT_FOUND", "No frames directory")
+
+    fps = 2
+    frame_num = max(1, round(timestamp_ms / 1000.0 * fps))
+    frame_path = frames_dir / f"frame_{frame_num:06d}.jpg"
+
+    if not frame_path.exists():
+        frames = sorted(frames_dir.glob("frame_*.jpg"))
+        if not frames:
+            return _error("FRAMES_NOT_FOUND", "No frames available")
+        frame_path = frames[min(frame_num - 1, len(frames) - 1)]
+
+    try:
+        result = measure_layout(
+            frame_path=str(frame_path),
+            frame_w=frame_w,
+            frame_h=frame_h,
+            layout=layout,
+        )
+    except ValueError as exc:
+        return _error("INVALID_PARAMETER", str(exc))
+
+    response: dict[str, object] = {
+        "project_id": project_id,
+        "timestamp_ms": timestamp_ms,
+        "layout": result.layout,
+        "face_detected": result.face_detected,
+        "source_resolution": f"{frame_w}x{frame_h}",
+    }
+
+    if result.face_detected:
+        response["face_bbox"] = result.face_bbox
+        response["eye_line_y"] = result.eye_line_y
+        response["headroom_px"] = result.headroom_px
+        response["face_width_pct"] = result.face_width_pct
+        response["speaker_source_crop"] = result.speaker_region
+        if result.screen_region:
+            response["screen_source_crop"] = result.screen_region
+        response["canvas_regions"] = result.canvas_regions
+        response["message"] = (
+            f"Layout {layout}: face detected at "
+            f"({result.face_bbox['x']}, {result.face_bbox['y']}), "
+            f"eye line at y={result.eye_line_y}px in output. "
+            f"Use canvas_regions directly in create_edit segments."
+        )
+    else:
+        response["message"] = (
+            "No face detected. Cannot compute layout. "
+            "Try a different timestamp where the speaker is visible."
+        )
+
+    return response
+
+
+# ============================================================
+# TOOL 10: clipcannon_get_storyboard
+# ============================================================
+async def clipcannon_get_storyboard(
+    project_id: str,
+    start_s: int | None = None,
+    end_s: int | None = None,
+) -> dict[str, object]:
+    """Generate a storyboard contact sheet from video frames.
+
+    Two modes:
+    - No start_s: Returns full video overview at 128x72 thumbnails
+      (entire video in one image, ~6K tokens)
+    - With start_s: Returns a 5-second window at 256x144 thumbnails
+      (10 frames, readable text, ~5K tokens). Use this to verify
+      exact screen content at specific timestamps before editing.
+
+    Args:
+        project_id: Project identifier.
+        start_s: Start second for zoomed view. Omit for full overview.
+        end_s: End second (default: start_s + 5).
+
+    Returns:
+        Dict with inline _image and aligned transcript.
+    """
+    from clipcannon.tools.storyboard import build_contact_sheet
+
+    proj_dir = _project_dir(project_id)
+    if not proj_dir.exists():
+        return _error(
+            "PROJECT_NOT_FOUND",
+            f"Project not found: {project_id}",
+        )
+
+    frames_dir = proj_dir / "frames"
+    if not frames_dir.exists():
+        return _error("FRAMES_NOT_FOUND", "No frames directory")
+
+    storyboard_dir = proj_dir / "storyboards"
+    fps = 2.0
+
+    if start_s is not None:
+        # Zoomed mode: 5-second window at high resolution
+        if end_s is None:
+            end_s = start_s + 5
+        start_frame = max(1, int(start_s * fps) + 1)
+        end_frame = int(end_s * fps) + 1
+
+        sheet_name = f"zoom_{start_s}s_{end_s}s.jpg"
+        sheet_path = storyboard_dir / sheet_name
+
+        try:
+            result = build_contact_sheet(
+                frames_dir=frames_dir,
+                output_path=sheet_path,
+                cols=10,
+                thumb_w=256,
+                thumb_h=144,
+                start_frame=start_frame,
+                end_frame=end_frame,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            return _error("STORYBOARD_FAILED", str(exc))
+    else:
+        # Full overview mode: entire video at low resolution
+        sheet_path = storyboard_dir / "contact_sheet.jpg"
+
+        try:
+            result = build_contact_sheet(
+                frames_dir=frames_dir,
+                output_path=sheet_path,
+                cols=20,
+                thumb_w=128,
+                thumb_h=72,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            return _error("STORYBOARD_FAILED", str(exc))
+
+    # Get transcript for the relevant time range
+    transcript: list[dict[str, object]] = []
+    db = _db_path(project_id)
+    if db.exists():
+        conn = get_connection(str(db), enable_vec=False, dict_rows=True)
+        try:
+            if start_s is not None:
+                rows = fetch_all(
+                    conn,
+                    "SELECT start_ms, end_ms, text "
+                    "FROM transcript_segments "
+                    "WHERE project_id = ? "
+                    "AND end_ms >= ? AND start_ms <= ? "
+                    "ORDER BY start_ms",
+                    (project_id, start_s * 1000, (end_s or 0) * 1000),
+                )
+            else:
+                rows = fetch_all(
+                    conn,
+                    "SELECT start_ms, end_ms, text "
+                    "FROM transcript_segments "
+                    "WHERE project_id = ? ORDER BY start_ms",
+                    (project_id,),
+                )
+            for row in rows:
+                transcript.append({
+                    "start_ms": int(row["start_ms"]),
+                    "end_ms": int(row["end_ms"]),
+                    "text": str(row["text"]),
+                })
+        finally:
+            conn.close()
+
+    response: dict[str, object] = {
+        "project_id": project_id,
+        "total_frames": result["total_frames"],
+        "grid_layout": result["grid"],
+        "image_size": result["image_size"],
+        "duration_ms": result["duration_ms"],
+        "seconds_per_row": result["seconds_per_row"],
+        "transcript": transcript,
+    }
+
+    if start_s is not None:
+        response["time_range"] = f"{start_s}s - {end_s}s"
+        response["reading_guide"] = (
+            f"Zoomed view: {start_s}s to {end_s}s, "
+            f"256x144 thumbnails, {result['total_frames']} frames. "
+            f"Read timestamps to identify exact screen content."
+        )
+    else:
+        response["reading_guide"] = (
+            f"Full overview: {result['grid']} grid, "
+            f"each row = {result['seconds_per_row']}s. "
+            f"Use start_s parameter to zoom into specific times."
+        )
+
+    if sheet_path.exists():
+        response["_image"] = {
+            "data": base64.b64encode(
+                sheet_path.read_bytes()
+            ).decode("ascii"),
+            "mimeType": "image/jpeg",
+        }
+
+    return response
+
+
+# ============================================================
 # DISPATCH
 # ============================================================
 async def dispatch_rendering_tool(
@@ -858,6 +1109,22 @@ async def dispatch_rendering_tool(
             canvas_height=int(arguments.get("canvas_height", 1920)),  # type: ignore[arg-type]
             background_color=str(arguments.get("background_color", "#000000")),
             regions=list(arguments["regions"]),  # type: ignore[arg-type]
+        )
+
+    if name == "clipcannon_measure_layout":
+        return await clipcannon_measure_layout(
+            str(arguments["project_id"]),
+            int(arguments["timestamp_ms"]),  # type: ignore[arg-type]
+            str(arguments.get("layout", "A")),
+        )
+
+    if name == "clipcannon_get_storyboard":
+        start_raw = arguments.get("start_s")
+        end_raw = arguments.get("end_s")
+        return await clipcannon_get_storyboard(
+            str(arguments["project_id"]),
+            int(start_raw) if start_raw is not None else None,
+            int(end_raw) if end_raw is not None else None,
         )
 
     return _error("INTERNAL_ERROR", f"Unknown rendering tool: {name}")
