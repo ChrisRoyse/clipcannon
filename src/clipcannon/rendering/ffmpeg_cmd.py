@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from clipcannon.editing.edl import SegmentCanvasSpec
+from clipcannon.editing.edl import CanvasRegion, SegmentCanvasSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -953,6 +953,42 @@ def _build_per_segment_canvas_cmd(
     return cmd
 
 
+def _build_region_scale(region: CanvasRegion) -> str:
+    """Build FFmpeg scale filter for a canvas region respecting fit_mode.
+
+    - stretch: Force exact output dimensions (may distort aspect ratio)
+    - contain: Fit inside output dimensions, pad with black (no distort)
+    - cover: Fill output dimensions completely, center-crop excess (no distort)
+
+    Args:
+        region: Canvas region with source and output dimensions + fit_mode.
+
+    Returns:
+        FFmpeg filter expression string (scale + optional pad/crop).
+    """
+    ow = region.output_width
+    oh = region.output_height
+    fit = region.fit_mode
+
+    if fit == "stretch":
+        return f"scale={ow}:{oh},setsar=1"
+
+    if fit == "contain":
+        # Scale to fit inside output, preserving aspect ratio.
+        # Then pad to exact output size (centered, black padding).
+        return (
+            f"scale={ow}:{oh}:force_original_aspect_ratio=decrease,"
+            f"pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1"
+        )
+
+    # cover (default): Scale to fill output, preserving aspect ratio.
+    # Then center-crop to exact output size.
+    return (
+        f"scale={ow}:{oh}:force_original_aspect_ratio=increase,"
+        f"crop={ow}:{oh},setsar=1"
+    )
+
+
 def _build_segment_canvas_chain(
     filters: list[str],
     seg: SegmentSpec,
@@ -1003,14 +1039,14 @@ def _build_segment_canvas_chain(
         split_out = "".join(f"[seg{idx}_r{j}]" for j in range(n_regions))
         filters.append(f"[seg{idx}_src]split={n_regions}{split_out}")
 
-    # 4. Crop and scale each region
+    # 4. Crop and scale each region (respecting fit_mode)
     for j, region in enumerate(regions):
+        scale_filter = _build_region_scale(region)
         filters.append(
             f"[seg{idx}_r{j}]"
             f"crop={region.source_width}:{region.source_height}"
             f":{region.source_x}:{region.source_y},"
-            f"scale={region.output_width}:{region.output_height},"
-            f"setsar=1"
+            f"{scale_filter}"
             f"[seg{idx}_cr{j}]"
         )
 

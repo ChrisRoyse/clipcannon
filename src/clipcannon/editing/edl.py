@@ -372,6 +372,17 @@ class CanvasRegion(BaseModel):
     )
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
 
+    # SCALING
+    fit_mode: Literal["stretch", "contain", "cover"] = Field(
+        default="cover",
+        description=(
+            "How to scale the source into the output dimensions. "
+            "'stretch' = force exact dimensions (may distort). "
+            "'contain' = fit inside output, pad with background (no crop, no distort). "
+            "'cover' = fill output completely, crop excess (no distort, no padding)."
+        ),
+    )
+
     # STYLING
     border_px: int = Field(default=0, ge=0, le=20)
     border_color: str = "#FFFFFF"
