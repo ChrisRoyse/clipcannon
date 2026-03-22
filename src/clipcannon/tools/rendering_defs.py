@@ -63,6 +63,32 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
         },
     ),
     Tool(
+        name="clipcannon_analyze_frame",
+        description=(
+            "Analyze a frame for content regions and webcam PIP "
+            "overlay. Returns bounding boxes of detected content "
+            "regions (text, UI panels, images) and PIP webcam "
+            "position. Use before editing to understand frame "
+            "layout. ~125ms per frame. No credits charged."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+                "timestamp_ms": {
+                    "type": "integer",
+                    "description": (
+                        "Source video timestamp to analyze (ms)"
+                    ),
+                },
+            },
+            "required": ["project_id", "timestamp_ms"],
+        },
+    ),
+    Tool(
         name="clipcannon_preview_layout",
         description=(
             "Generate a single preview frame showing what a canvas "

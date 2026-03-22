@@ -700,6 +700,11 @@ async def dispatch_rendering_tool(
             project_id=str(arguments["project_id"]),
             edit_ids=[str(e) for e in list(arguments["edit_ids"])],  # type: ignore[union-attr]
         )
+    if name == "clipcannon_analyze_frame":
+        return await clipcannon_analyze_frame(
+            project_id=str(arguments["project_id"]),
+            timestamp_ms=int(arguments["timestamp_ms"]),  # type: ignore[arg-type]
+        )
     if name == "clipcannon_preview_layout":
         return await clipcannon_preview_layout(
             project_id=str(arguments["project_id"]),
@@ -711,3 +716,72 @@ async def dispatch_rendering_tool(
         )
 
     return _error("INTERNAL_ERROR", f"Unknown rendering tool: {name}")
+
+
+# ============================================================
+# TOOL 5: clipcannon_analyze_frame
+# ============================================================
+async def clipcannon_analyze_frame(
+    project_id: str,
+    timestamp_ms: int,
+) -> dict[str, object]:
+    """Analyze a frame for content regions and PIP overlay.
+
+    Runs lightweight CV analysis (~125ms) to detect content
+    regions, webcam PIP overlay position, and classify region
+    types (text, ui_panel, image, empty).
+
+    Args:
+        project_id: Project identifier.
+        timestamp_ms: Source timestamp in milliseconds.
+
+    Returns:
+        Dict with frame dimensions, content regions, and PIP info.
+    """
+    import time
+
+    from clipcannon.pipeline.screen_layout import analyze_frame
+
+    start_time = time.monotonic()
+
+    err = _validate_project(project_id)
+    if err is not None:
+        return err
+
+    # Find the nearest frame
+    project_dir = _project_dir(project_id)
+    frames_dir = project_dir / "frames"
+    if not frames_dir.exists():
+        return _error("NOT_FOUND", "Frames directory not found")
+
+    # Calculate frame number from timestamp (2fps)
+    frame_num = (timestamp_ms // 500) + 1
+    frame_path = frames_dir / f"frame_{frame_num:06d}.jpg"
+
+    # Search nearby if exact frame doesn't exist
+    if not frame_path.exists():
+        for offset in range(-5, 6):
+            candidate = frames_dir / f"frame_{frame_num + offset:06d}.jpg"
+            if candidate.exists():
+                frame_path = candidate
+                break
+        else:
+            return _error(
+                "NOT_FOUND",
+                f"No frame found near timestamp {timestamp_ms}ms",
+            )
+
+    result = analyze_frame(frame_path)
+    elapsed_ms = int((time.monotonic() - start_time) * 1000)
+
+    return {
+        "project_id": project_id,
+        "timestamp_ms": timestamp_ms,
+        "frame_path": str(frame_path),
+        "frame_width": result["frame_width"],
+        "frame_height": result["frame_height"],
+        "content_regions": result["content_regions"],
+        "pip_overlay": result["pip_overlay"],
+        "region_count": result["region_count"],
+        "elapsed_ms": elapsed_ms,
+    }
