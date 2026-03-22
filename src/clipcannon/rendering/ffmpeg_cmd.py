@@ -1215,24 +1215,36 @@ def build_preview_cmd(
         raise ValueError(msg)
 
     seek_s = timestamp_ms / 1000.0
-    bg_hex = background_color.lstrip("#")
     sorted_regions = sorted(regions, key=lambda r: r.z_index)
     n_regions = len(sorted_regions)
+    use_blur = background_color.lower() == "blur"
 
     filters: list[str] = []
 
-    # Background canvas (short duration -- only need 1 frame)
-    filters.append(
-        f"color=c=0x{bg_hex}:s={canvas_width}x{canvas_height}"
-        f":d=0.1:r={fps},setsar=1[bg]"
-    )
-
-    # Split source into N copies
-    if n_regions == 1:
-        filters.append("[0:v]null[r0]")
+    if use_blur:
+        # Blur background: split into N+1 copies (1 for bg, N for regions)
+        total = n_regions + 1
+        split_out = "[bgcopy]" + "".join(f"[r{j}]" for j in range(n_regions))
+        filters.append(f"[0:v]split={total}{split_out}")
+        filters.append(
+            f"[bgcopy]scale={canvas_width}:{canvas_height}"
+            f":force_original_aspect_ratio=increase,"
+            f"crop={canvas_width}:{canvas_height},"
+            f"gblur=sigma=40,setsar=1[bg]"
+        )
     else:
-        split_out = "".join(f"[r{j}]" for j in range(n_regions))
-        filters.append(f"[0:v]split={n_regions}{split_out}")
+        # Solid color background
+        bg_hex = background_color.lstrip("#")
+        filters.append(
+            f"color=c=0x{bg_hex}:s={canvas_width}x{canvas_height}"
+            f":d=0.1:r={fps},setsar=1[bg]"
+        )
+        # Split source into N copies
+        if n_regions == 1:
+            filters.append("[0:v]null[r0]")
+        else:
+            split_out = "".join(f"[r{j}]" for j in range(n_regions))
+            filters.append(f"[0:v]split={n_regions}{split_out}")
 
     # Crop and scale each region
     for j, region in enumerate(sorted_regions):
