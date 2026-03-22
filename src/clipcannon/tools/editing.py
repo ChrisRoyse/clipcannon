@@ -15,6 +15,7 @@ import time
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all, fetch_one
 from clipcannon.editing.edl import (
+    CanvasSpec,
     EditDecisionList,
     OverlaySpec,
     RenderSettingsSpec,
@@ -58,6 +59,7 @@ async def clipcannon_create_edit(
     segments: list[dict[str, object]],
     captions: dict[str, object] | None = None,
     crop: dict[str, object] | None = None,
+    canvas: dict[str, object] | None = None,
     audio: dict[str, object] | None = None,
     metadata: dict[str, object] | None = None,
 ) -> dict[str, object]:
@@ -73,6 +75,7 @@ async def clipcannon_create_edit(
         segments: Array of segment dicts with source_start_ms, source_end_ms, etc.
         captions: Optional caption configuration.
         crop: Optional crop configuration.
+        canvas: Optional canvas compositing configuration for full layout control.
         audio: Optional audio configuration.
         metadata: Optional metadata (title, description, hashtags).
 
@@ -137,6 +140,9 @@ async def clipcannon_create_edit(
     metadata_spec = build_metadata_spec(metadata)
     target_profile = PLATFORM_PROFILES.get(target_platform, "tiktok_vertical")
 
+    # Build canvas spec if provided (full AI compositing control)
+    canvas_spec = CanvasSpec(**(canvas or {})) if canvas else CanvasSpec()
+
     try:
         edl = EditDecisionList(
             edit_id=edit_id,
@@ -149,6 +155,7 @@ async def clipcannon_create_edit(
             segments=segment_specs,
             captions=caption_spec,
             crop=crop_spec,
+            canvas=canvas_spec,
             audio=audio_spec,
             overlays=OverlaySpec(),
             metadata=metadata_spec,
@@ -538,6 +545,7 @@ async def dispatch_editing_tool(
             segments=list(arguments["segments"]),  # type: ignore[arg-type]
             captions=arguments.get("captions"),  # type: ignore[arg-type]
             crop=arguments.get("crop"),  # type: ignore[arg-type]
+            canvas=arguments.get("canvas"),  # type: ignore[arg-type]
             audio=arguments.get("audio"),  # type: ignore[arg-type]
             metadata=arguments.get("metadata"),  # type: ignore[arg-type]
         )

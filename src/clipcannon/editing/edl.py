@@ -106,6 +106,55 @@ class TransitionSpec(BaseModel):
     duration_ms: int = Field(ge=100, le=2000)
 
 
+class ZoomSpec(BaseModel):
+    """Animated zoom/crop specification for a segment.
+
+    Interpolates from a wide crop to a tight crop (or vice versa)
+    over the segment duration. Uses FFmpeg time-varying crop
+    expressions. After setpts=PTS-STARTPTS, the t variable resets
+    to 0 per segment, making expressions self-contained.
+    """
+
+    start_x: int = Field(ge=0, description="Starting crop X position")
+    start_y: int = Field(ge=0, description="Starting crop Y position")
+    start_w: int = Field(ge=1, description="Starting crop width")
+    start_h: int = Field(ge=1, description="Starting crop height")
+
+    end_x: int = Field(ge=0, description="Ending crop X position (zoom target)")
+    end_y: int = Field(ge=0, description="Ending crop Y position (zoom target)")
+    end_w: int = Field(ge=1, description="Ending crop width (zoom target)")
+    end_h: int = Field(ge=1, description="Ending crop height (zoom target)")
+
+    easing: Literal["linear", "ease_in", "ease_out", "ease_in_out"] = "ease_in_out"
+
+
+class SegmentCanvasSpec(BaseModel):
+    """Per-segment canvas override.
+
+    When attached to a SegmentSpec, replaces the top-level canvas
+    for that segment only. Enables the AI to use different visual
+    layouts at different timestamps within a single clip.
+
+    Use regions[] for multi-region compositing (speaker + screen).
+    Use zoom for animated crop (zoom into a UI element).
+    Regions and zoom are mutually exclusive.
+    """
+
+    regions: list[CanvasRegion] = Field(
+        default_factory=list,
+        description="Regions to composite for this segment.",
+    )
+    background_color: str = Field(
+        default="#000000",
+        description="Canvas background for this segment.",
+    )
+    zoom: ZoomSpec | None = Field(
+        default=None,
+        description="Animated zoom for this segment. "
+        "Mutually exclusive with regions[].",
+    )
+
+
 class SegmentSpec(BaseModel):
     """A contiguous time range extracted from the source video."""
 
@@ -116,6 +165,13 @@ class SegmentSpec(BaseModel):
     speed: float = Field(ge=0.25, le=4.0, default=1.0)
     transition_in: TransitionSpec | None = None
     transition_out: TransitionSpec | None = None
+
+    canvas: SegmentCanvasSpec | None = Field(
+        default=None,
+        description="Per-segment canvas override. When set, replaces "
+        "the top-level CanvasSpec for this segment only. "
+        "Enables different layouts per segment.",
+    )
 
     @field_validator("source_end_ms")
     @classmethod

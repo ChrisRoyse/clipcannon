@@ -9,10 +9,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from clipcannon.editing.edl import SegmentCanvasSpec
+
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from clipcannon.editing.edl import CanvasSpec, SegmentSpec
+    from clipcannon.editing.edl import (
+        CanvasSpec,
+        SegmentSpec,
+    )
     from clipcannon.editing.smart_crop import (
         CropRegion,
         PipLayout,
@@ -80,14 +85,19 @@ def build_ffmpeg_cmd(
     Returns:
         FFmpeg command as a list of strings.
     """
-    # Canvas compositing: full AI creative control (highest priority)
-    if canvas is not None and canvas.enabled and canvas.regions:
-        return _build_canvas_cmd(
+    # Per-segment canvas: check if ANY segment has its own canvas override
+    has_per_segment_canvas = any(seg.canvas is not None for seg in segments)
+
+    # Route to per-segment canvas builder if:
+    # 1. Any segment has a per-segment canvas override, OR
+    # 2. Top-level canvas is enabled with regions
+    if has_per_segment_canvas or (canvas is not None and canvas.enabled and canvas.regions):
+        return _build_per_segment_canvas_cmd(
             source_path, output_path, segments,
             profile, canvas, ass_path, encoding_args,
         )
 
-    # Split-screen layout takes priority over single crop
+    # Split-screen layout
     if split_layout is not None:
         return _build_split_screen_cmd(
             source_path, output_path, segments,
@@ -816,121 +826,291 @@ def _build_pip_cmd(
     return cmd
 
 
+
+
 # ============================================================
-# CANVAS COMPOSITING -- Full AI creative control
+# PER-SEGMENT CANVAS -- Full AI creative control
 # ============================================================
-def _build_canvas_cmd(
+def _build_per_segment_canvas_cmd(
     source_path: Path,
     output_path: Path,
     segments: list[SegmentSpec],
     profile: EncodingProfile,
-    canvas: CanvasSpec,
+    top_level_canvas: CanvasSpec | None,
     ass_path: Path | None,
     encoding_args: list[str],
 ) -> list[str]:
-    """Build FFmpeg command for free-form canvas compositing.
+    """Build FFmpeg command with per-segment canvas compositing.
 
-    The AI defines arbitrary regions from the source and places them
-    anywhere on the output canvas. Each region is independently
-    cropped, scaled, and positioned via overlay filters.
+    Each segment gets its own independent filter chain based on its
+    layout configuration. Segments are then concatenated.
+
+    Resolution priority per segment:
+      segment.canvas (if set)
+        -> top-level canvas (if enabled)
+          -> plain scale fallback
 
     Args:
         source_path: Source video path.
         output_path: Output file path.
-        segments: EDL segments (first segment used for time range).
+        segments: EDL segments, each optionally with its own canvas.
         profile: Encoding profile.
-        canvas: Canvas spec with regions to composite.
+        top_level_canvas: Global canvas spec (fallback).
         ass_path: Optional ASS subtitle path.
         encoding_args: Encoding arguments.
 
     Returns:
         FFmpeg command as argument list.
     """
-    seg = segments[0]
-    start_s = seg.source_start_ms / 1000.0
-    end_s = seg.source_end_ms / 1000.0
+    cw = profile.width
+    ch = profile.height
 
-    cw = canvas.canvas_width
-    ch = canvas.canvas_height
-    bg_hex = canvas.background_color.lstrip("#")
+    # Use top-level canvas dimensions if available
+    if top_level_canvas is not None and top_level_canvas.enabled:
+        cw = top_level_canvas.canvas_width
+        ch = top_level_canvas.canvas_height
 
-    # Sort regions by z_index (lowest first = rendered first = background)
-    sorted_regions = sorted(canvas.regions, key=lambda r: r.z_index)
+    filter_parts: list[str] = []
+    video_labels: list[str] = []
+    audio_labels: list[str] = []
 
-    filters: list[str] = []
+    for i, seg in enumerate(segments):
+        # Build video chain for this segment based on its layout
+        if seg.canvas is not None and seg.canvas.zoom is not None:
+            _build_segment_zoom_chain(filter_parts, seg, i, profile, cw, ch)
+        elif seg.canvas is not None and seg.canvas.regions:
+            _build_segment_canvas_chain(
+                filter_parts, seg, i, profile, cw, ch, seg.canvas,
+            )
+        elif (
+            top_level_canvas is not None
+            and top_level_canvas.enabled
+            and top_level_canvas.regions
+        ):
+            # Convert top-level CanvasSpec to SegmentCanvasSpec for reuse
+            seg_canvas = SegmentCanvasSpec(
+                regions=list(top_level_canvas.regions),
+                background_color=top_level_canvas.background_color,
+            )
+            _build_segment_canvas_chain(
+                filter_parts, seg, i, profile, cw, ch, seg_canvas,
+            )
+        else:
+            _build_segment_plain_chain(filter_parts, seg, i, profile)
 
-    # Create background canvas
-    filters.append(
-        f"color=c=0x{bg_hex}:s={cw}x{ch}:d=99999,setsar=1[canvas]"
-    )
+        video_labels.append(f"v{i}")
 
-    # Split the source into N copies, one per region
-    n_regions = len(sorted_regions)
-    if n_regions == 1:
-        filters.append("[0:v]null[reg0_src]")
+        # Audio chain for this segment
+        start_s = seg.source_start_ms / 1000.0
+        end_s = seg.source_end_ms / 1000.0
+        achain = (
+            f"[0:a]atrim=start={start_s:.3f}:end={end_s:.3f},"
+            f"asetpts=PTS-STARTPTS"
+        )
+        if seg.speed != 1.0:
+            achain += f",atempo={seg.speed}"
+        alabel = f"a{i}"
+        achain += f"[{alabel}]"
+        filter_parts.append(achain)
+        audio_labels.append(alabel)
+
+    # Concatenate all segments
+    if len(video_labels) == 1:
+        final_video = video_labels[0]
+        final_audio = audio_labels[0]
     else:
-        split_outputs = "".join(f"[reg{i}_src]" for i in range(n_regions))
-        filters.append(f"[0:v]split={n_regions}{split_outputs}")
-
-    # Crop and scale each region
-    for i, region in enumerate(sorted_regions):
-        filters.append(
-            f"[reg{i}_src]"
-            f"crop={region.source_width}:{region.source_height}"
-            f":{region.source_x}:{region.source_y},"
-            f"scale={region.output_width}:{region.output_height},"
-            f"setsar=1"
-            f"[reg{i}]"
+        concat_inputs = "".join(
+            f"[{v}][{a}]"
+            for v, a in zip(video_labels, audio_labels, strict=True)
         )
-
-    # Overlay each region onto the canvas in z_index order
-    current_label = "canvas"
-    for i, region in enumerate(sorted_regions):
-        out_label = f"comp{i}" if i < n_regions - 1 else "composed"
-        filters.append(
-            f"[{current_label}][reg{i}]"
-            f"overlay=x={region.output_x}:y={region.output_y}"
-            f"[{out_label}]"
+        n = len(video_labels)
+        filter_parts.append(
+            f"{concat_inputs}concat=n={n}:v=1:a=1[outv][outa]"
         )
-        current_label = out_label
+        final_video = "outv"
+        final_audio = "outa"
 
-    final_v = "composed"
-
-    # Speed adjustment
-    if seg.speed != 1.0:
-        filters.append(
-            f"[composed]setpts={1.0 / seg.speed}*PTS[speeded]"
-        )
-        final_v = "speeded"
-
-    # Subtitles
+    # Apply subtitles to final composited video
     if ass_path is not None:
         escaped = _escape_subtitle_path(ass_path)
-        filters.append(
-            f"[{final_v}]subtitles='{escaped}'[subbed]"
+        filter_parts.append(
+            f"[{final_video}]subtitles='{escaped}'[subbed]"
         )
-        final_v = "subbed"
+        final_video = "subbed"
 
-    filter_complex = ";".join(filters)
-
-    afilters: list[str] = []
-    if seg.speed != 1.0:
-        afilters.append(f"atempo={seg.speed}")
+    filter_complex = ";".join(filter_parts)
 
     cmd: list[str] = [
         "ffmpeg", "-y",
-        "-ss", f"{start_s:.3f}",
-        "-to", f"{end_s:.3f}",
         "-i", str(source_path),
         "-filter_complex", filter_complex,
-        "-map", f"[{final_v}]",
-        "-map", "0:a",
+        "-map", f"[{final_video}]",
+        "-map", f"[{final_audio}]",
     ]
-
-    if afilters:
-        cmd.extend(["-af", ",".join(afilters)])
-
     cmd.extend(encoding_args)
     cmd.append(str(output_path))
 
     return cmd
+
+
+def _build_segment_canvas_chain(
+    filters: list[str],
+    seg: SegmentSpec,
+    idx: int,
+    profile: EncodingProfile,
+    cw: int,
+    ch: int,
+    canvas: SegmentCanvasSpec,
+) -> None:
+    """Build filter chain for one segment with canvas regions.
+
+    Creates an independent compositing pipeline: trim source,
+    create background, split into N copies, crop+scale each
+    region, overlay onto background.
+
+    Args:
+        filters: Accumulating filter parts (modified in place).
+        seg: Segment specification.
+        idx: Segment index for label naming.
+        profile: Encoding profile.
+        cw: Canvas width.
+        ch: Canvas height.
+        canvas: Canvas spec with regions for this segment.
+    """
+    start_s = seg.source_start_ms / 1000.0
+    end_s = seg.source_end_ms / 1000.0
+    bg_hex = canvas.background_color.lstrip("#")
+    regions = sorted(canvas.regions, key=lambda r: r.z_index)
+    n_regions = len(regions)
+    seg_dur_s = (end_s - start_s) / seg.speed
+
+    # 1. Trim source
+    filters.append(
+        f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
+        f"setpts=PTS-STARTPTS[seg{idx}_src]"
+    )
+
+    # 2. Per-segment background canvas
+    filters.append(
+        f"color=c=0x{bg_hex}:s={cw}x{ch}:d={seg_dur_s + 1:.1f}"
+        f":r={profile.fps},setsar=1[seg{idx}_bg]"
+    )
+
+    # 3. Split trimmed source into N copies
+    if n_regions == 1:
+        filters.append(f"[seg{idx}_src]null[seg{idx}_r0]")
+    else:
+        split_out = "".join(f"[seg{idx}_r{j}]" for j in range(n_regions))
+        filters.append(f"[seg{idx}_src]split={n_regions}{split_out}")
+
+    # 4. Crop and scale each region
+    for j, region in enumerate(regions):
+        filters.append(
+            f"[seg{idx}_r{j}]"
+            f"crop={region.source_width}:{region.source_height}"
+            f":{region.source_x}:{region.source_y},"
+            f"scale={region.output_width}:{region.output_height},"
+            f"setsar=1"
+            f"[seg{idx}_cr{j}]"
+        )
+
+    # 5. Overlay each region onto canvas
+    current = f"seg{idx}_bg"
+    for j, region in enumerate(regions):
+        out = f"seg{idx}_ov{j}" if j < n_regions - 1 else f"v{idx}"
+        filters.append(
+            f"[{current}][seg{idx}_cr{j}]"
+            f"overlay=x={region.output_x}:y={region.output_y}"
+            f":shortest=1[{out}]"
+        )
+        current = out
+
+
+def _build_segment_zoom_chain(
+    filters: list[str],
+    seg: SegmentSpec,
+    idx: int,
+    profile: EncodingProfile,
+    cw: int,
+    ch: int,
+) -> None:
+    """Build filter chain for one segment with animated zoom.
+
+    Uses FFmpeg time-varying crop expressions to interpolate from
+    the start crop region to the end crop region over the segment
+    duration. After setpts=PTS-STARTPTS, t resets to 0 per segment.
+
+    Args:
+        filters: Accumulating filter parts (modified in place).
+        seg: Segment specification with canvas.zoom set.
+        idx: Segment index for label naming.
+        profile: Encoding profile.
+        cw: Canvas width.
+        ch: Canvas height.
+    """
+    start_s = seg.source_start_ms / 1000.0
+    end_s = seg.source_end_ms / 1000.0
+    zoom = seg.canvas.zoom  # type: ignore[union-attr]
+    seg_dur_s = (end_s - start_s) / seg.speed
+
+    # Trim and reset PTS so t starts at 0
+    filters.append(
+        f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
+        f"setpts=PTS-STARTPTS[seg{idx}_src]"
+    )
+
+    # Build easing progress expression
+    d = f"{seg_dur_s:.3f}"
+    p_raw = f"min(t/{d}\\,1)"
+
+    if zoom.easing == "ease_in":
+        progress = f"pow({p_raw}\\,2)"
+    elif zoom.easing == "ease_out":
+        progress = f"(2*{p_raw}-pow({p_raw}\\,2))"
+    elif zoom.easing == "ease_in_out":
+        progress = f"(3*pow({p_raw}\\,2)-2*pow({p_raw}\\,3))"
+    else:  # linear
+        progress = p_raw
+
+    def lerp(start_val: int, end_val: int) -> str:
+        delta = end_val - start_val
+        if delta == 0:
+            return str(start_val)
+        return f"({start_val}+{delta}*{progress})"
+
+    crop_w = lerp(zoom.start_w, zoom.end_w)
+    crop_h = lerp(zoom.start_h, zoom.end_h)
+    crop_x = lerp(zoom.start_x, zoom.end_x)
+    crop_y = lerp(zoom.start_y, zoom.end_y)
+
+    filters.append(
+        f"[seg{idx}_src]"
+        f"crop=w='{crop_w}':h='{crop_h}':x='{crop_x}':y='{crop_y}',"
+        f"scale={cw}:{ch},setsar=1"
+        f"[v{idx}]"
+    )
+
+
+def _build_segment_plain_chain(
+    filters: list[str],
+    seg: SegmentSpec,
+    idx: int,
+    profile: EncodingProfile,
+) -> None:
+    """Build filter chain for a segment with no canvas: trim + scale.
+
+    Args:
+        filters: Accumulating filter parts (modified in place).
+        seg: Segment specification.
+        idx: Segment index for label naming.
+        profile: Encoding profile.
+    """
+    start_s = seg.source_start_ms / 1000.0
+    end_s = seg.source_end_ms / 1000.0
+
+    filters.append(
+        f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
+        f"setpts=PTS-STARTPTS,"
+        f"scale={profile.width}:{profile.height},setsar=1"
+        f"[v{idx}]"
+    )

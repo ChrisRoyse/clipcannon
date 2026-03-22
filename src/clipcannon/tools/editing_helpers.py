@@ -31,6 +31,7 @@ from clipcannon.editing.edl import (
     EditDecisionList,
     MetadataSpec,
     RenderSettingsSpec,
+    SegmentCanvasSpec,
     SegmentSpec,
     TransitionSpec,
 )
@@ -194,6 +195,12 @@ def build_segments(
             raw.get("transition_out")  # type: ignore[arg-type]
         )
 
+        # Parse optional per-segment canvas override
+        raw_canvas = raw.get("canvas")
+        seg_canvas: SegmentCanvasSpec | None = None
+        if isinstance(raw_canvas, dict):
+            seg_canvas = SegmentCanvasSpec(**raw_canvas)
+
         seg = SegmentSpec(
             segment_id=idx,
             source_start_ms=source_start,
@@ -202,6 +209,7 @@ def build_segments(
             speed=speed,
             transition_in=transition_in,
             transition_out=transition_out,
+            canvas=seg_canvas,
         )
         specs.append(seg)
         output_cursor_ms += seg.output_duration_ms

@@ -61,6 +61,14 @@ EDITING_TOOL_DEFINITIONS: list[Tool] = [
                                 "type": "object",
                                 "description": "Transition at end",
                             },
+                            "canvas": {
+                                "type": "object",
+                                "description": (
+                                    "Per-segment canvas override. "
+                                    "Use regions[] for compositing, "
+                                    "zoom{} for animated crop"
+                                ),
+                            },
                         },
                         "required": ["source_start_ms", "source_end_ms"],
                     },
@@ -73,6 +81,14 @@ EDITING_TOOL_DEFINITIONS: list[Tool] = [
                 "crop": {
                     "type": "object",
                     "description": "Crop config",
+                },
+                "canvas": {
+                    "type": "object",
+                    "description": (
+                        "Canvas compositing for full AI layout control. "
+                        "Keys: enabled, canvas_width, canvas_height, "
+                        "background_color, regions[]"
+                    ),
                 },
                 "audio": {
                     "type": "object",
