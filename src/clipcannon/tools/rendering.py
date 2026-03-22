@@ -1051,6 +1051,141 @@ async def clipcannon_get_storyboard(
 
 
 # ============================================================
+# TOOL 11: clipcannon_get_scene_map
+# ============================================================
+async def clipcannon_get_scene_map(
+    project_id: str,
+) -> dict[str, object]:
+    """Get the complete scene map with pre-computed canvas regions.
+
+    Returns everything needed for editing in one call: scenes,
+    face positions, content regions, transcript, and ready-to-use
+    canvas_regions for all layout types.
+    """
+    import json as json_mod
+
+    proj_dir = _project_dir(project_id)
+    if not proj_dir.exists():
+        return _error(
+            "PROJECT_NOT_FOUND",
+            f"Project not found: {project_id}",
+        )
+
+    db = _db_path(project_id)
+    if not db.exists():
+        return _error("DB_NOT_FOUND", "Project database not found")
+
+    conn = get_connection(str(db), enable_vec=False, dict_rows=True)
+    try:
+        # Get project info
+        proj = fetch_one(
+            conn,
+            "SELECT resolution, duration_ms, fps FROM project "
+            "WHERE project_id = ?",
+            (project_id,),
+        )
+        if proj is None:
+            return _error(
+                "PROJECT_NOT_FOUND",
+                f"No project record: {project_id}",
+            )
+
+        # Get scene map
+        scenes_raw = fetch_all(
+            conn,
+            "SELECT * FROM scene_map WHERE project_id = ? "
+            "ORDER BY start_ms",
+            (project_id,),
+        )
+    except Exception as exc:
+        conn.close()
+        # scene_map table may not exist yet
+        return _error(
+            "SCENE_MAP_NOT_FOUND",
+            f"Scene map not available. Run ingest first. Error: {exc}",
+        )
+    finally:
+        conn.close()
+
+    if not scenes_raw:
+        return _error(
+            "SCENE_MAP_EMPTY",
+            "No scenes in scene map. Run ingest first.",
+        )
+
+    # Build response
+    scenes: list[dict[str, object]] = []
+    webcam_info: dict[str, object] | None = None
+
+    for row in scenes_raw:
+        scene: dict[str, object] = {
+            "id": int(row["scene_id"]),
+            "start_ms": int(row["start_ms"]),
+            "end_ms": int(row["end_ms"]),
+            "duration_ms": int(row["end_ms"]) - int(row["start_ms"]),
+            "transcript": str(row.get("transcript_text", "")),
+            "layout": str(row.get("layout_recommendation", "A")),
+        }
+
+        # Face
+        if row.get("face_x") is not None:
+            scene["face"] = {
+                "x": int(row["face_x"]),
+                "y": int(row["face_y"]),
+                "w": int(row["face_w"]),
+                "h": int(row["face_h"]),
+                "conf": float(row.get("face_confidence") or 0),
+            }
+
+        # Content region
+        if row.get("content_x") is not None:
+            scene["content"] = {
+                "x": int(row["content_x"]),
+                "y": int(row["content_y"]),
+                "w": int(row["content_w"]),
+                "h": int(row["content_h"]),
+            }
+
+        # Canvas regions (pre-computed for all layouts)
+        canvas_json = str(row.get("canvas_regions_json", "{}"))
+        try:
+            scene["canvas"] = json_mod.loads(canvas_json)
+        except (json_mod.JSONDecodeError, TypeError):
+            scene["canvas"] = {}
+
+        scenes.append(scene)
+
+        # Extract webcam info from first scene that has it
+        if webcam_info is None and row.get("webcam_x") is not None:
+            webcam_info = {
+                "detected": True,
+                "x": int(row["webcam_x"]),
+                "y": int(row["webcam_y"]),
+                "w": int(row["webcam_w"]),
+                "h": int(row["webcam_h"]),
+            }
+
+    return {
+        "project_id": project_id,
+        "source": {
+            "resolution": str(proj["resolution"]),
+            "duration_ms": int(proj["duration_ms"]),
+            "fps": float(proj["fps"]),
+        },
+        "webcam": webcam_info or {"detected": False},
+        "scene_count": len(scenes),
+        "scenes": scenes,
+        "usage_guide": (
+            "Each scene has pre-computed canvas regions for layouts "
+            "A (30/70 split), B (40/60), C (PIP), D (full face). "
+            "Use scene.canvas.A as the canvas regions in create_edit "
+            "segments. The AI picks scenes and layouts - coordinates "
+            "are already computed."
+        ),
+    }
+
+
+# ============================================================
 # DISPATCH
 # ============================================================
 async def dispatch_rendering_tool(
@@ -1125,6 +1260,11 @@ async def dispatch_rendering_tool(
             str(arguments["project_id"]),
             int(start_raw) if start_raw is not None else None,
             int(end_raw) if end_raw is not None else None,
+        )
+
+    if name == "clipcannon_get_scene_map":
+        return await clipcannon_get_scene_map(
+            str(arguments["project_id"]),
         )
 
     return _error("INTERNAL_ERROR", f"Unknown rendering tool: {name}")

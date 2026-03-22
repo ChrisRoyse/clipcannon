@@ -21,6 +21,7 @@ from clipcannon.pipeline.probe import run_probe
 from clipcannon.pipeline.profanity import run_profanity
 from clipcannon.pipeline.quality import run_quality
 from clipcannon.pipeline.reactions import run_reactions
+from clipcannon.pipeline.scene_analysis import run_scene_analysis
 from clipcannon.pipeline.semantic_embed import run_semantic_embed
 from clipcannon.pipeline.shot_type import run_shot_type
 from clipcannon.pipeline.source_separation import run_source_separation
@@ -125,6 +126,13 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": False,
         "depends_on": ["frame_extract"],
         "run": run_storyboard,
+    },
+    {
+        "name": "scene_analysis",
+        "operation": "scene_analysis",
+        "required": False,
+        "depends_on": ["frame_extract"],
+        "run": run_scene_analysis,
     },
     {
         "name": "semantic_embed",

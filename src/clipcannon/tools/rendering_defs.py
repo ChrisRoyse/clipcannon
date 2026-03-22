@@ -270,4 +270,27 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
             "required": ["project_id"],
         },
     ),
+    Tool(
+        name="clipcannon_get_scene_map",
+        description=(
+            "Get the complete scene map for a project. Returns EVERYTHING "
+            "needed for editing in ONE call: every scene with boundaries, "
+            "face positions, webcam region, content area coordinates, "
+            "pre-computed canvas regions for layouts A/B/C/D, "
+            "transcript aligned per scene, and layout recommendations. "
+            "The AI uses canvas_regions directly in create_edit - "
+            "zero manual coordinate measurement needed. "
+            "Requires ingest to have been run first."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+            },
+            "required": ["project_id"],
+        },
+    ),
 ]
