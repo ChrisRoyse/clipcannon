@@ -914,21 +914,16 @@ def _build_per_segment_canvas_cmd(
         filter_parts.append(achain)
         audio_labels.append(alabel)
 
-    # Concatenate all segments
-    if len(video_labels) == 1:
-        final_video = video_labels[0]
-        final_audio = audio_labels[0]
-    else:
-        concat_inputs = "".join(
-            f"[{v}][{a}]"
-            for v, a in zip(video_labels, audio_labels, strict=True)
+    # Apply xfade transitions between segments (if specified)
+    if len(video_labels) > 1:
+        video_labels, audio_labels = _apply_xfade_transitions(
+            filter_parts, video_labels, audio_labels, segments,
         )
-        n = len(video_labels)
-        filter_parts.append(
-            f"{concat_inputs}concat=n={n}:v=1:a=1[outv][outa]"
-        )
-        final_video = "outv"
-        final_audio = "outa"
+
+    # Concatenate remaining segments
+    final_video, final_audio = _build_concat_filters(
+        filter_parts, video_labels, audio_labels,
+    )
 
     # Apply subtitles to final composited video
     if ass_path is not None:
@@ -1026,18 +1021,42 @@ def _build_segment_canvas_chain(
         f"setpts=PTS-STARTPTS[seg{idx}_src]"
     )
 
-    # 2. Per-segment background canvas
-    filters.append(
-        f"color=c=0x{bg_hex}:s={cw}x{ch}:d={seg_dur_s + 1:.1f}"
-        f":r={profile.fps},setsar=1[seg{idx}_bg]"
-    )
+    # 2+3. Background + split into copies for regions
+    use_blur_bg = canvas.background_color.lower() == "blur"
 
-    # 3. Split trimmed source into N copies
-    if n_regions == 1:
-        filters.append(f"[seg{idx}_src]null[seg{idx}_r0]")
+    if use_blur_bg:
+        # Split into N+1 copies: one for blur bg, N for regions
+        total_copies = n_regions + 1
+        split_out = (
+            f"[seg{idx}_bgcopy]"
+            + "".join(f"[seg{idx}_r{j}]" for j in range(n_regions))
+        )
+        filters.append(
+            f"[seg{idx}_src]split={total_copies}{split_out}"
+        )
+        # Blur background: scale to fill canvas, apply heavy blur
+        filters.append(
+            f"[seg{idx}_bgcopy]"
+            f"scale={cw}:{ch}:force_original_aspect_ratio=increase,"
+            f"crop={cw}:{ch},gblur=sigma=40,setsar=1"
+            f"[seg{idx}_bg]"
+        )
     else:
-        split_out = "".join(f"[seg{idx}_r{j}]" for j in range(n_regions))
-        filters.append(f"[seg{idx}_src]split={n_regions}{split_out}")
+        # Solid color background
+        filters.append(
+            f"color=c=0x{bg_hex}:s={cw}x{ch}:d={seg_dur_s + 1:.1f}"
+            f":r={profile.fps},setsar=1[seg{idx}_bg]"
+        )
+        # Split trimmed source into N copies for regions
+        if n_regions == 1:
+            filters.append(f"[seg{idx}_src]null[seg{idx}_r0]")
+        else:
+            split_out = "".join(
+                f"[seg{idx}_r{j}]" for j in range(n_regions)
+            )
+            filters.append(
+                f"[seg{idx}_src]split={n_regions}{split_out}"
+            )
 
     # 4. Crop and scale each region (respecting fit_mode)
     for j, region in enumerate(regions):

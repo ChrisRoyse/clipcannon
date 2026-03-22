@@ -657,7 +657,18 @@ async def clipcannon_preview_layout(
 
     elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
-    return {
+    # Encode preview as base64 for inline image viewing
+    import base64
+
+    try:
+        image_b64 = base64.b64encode(preview_path.read_bytes()).decode("ascii")
+        image_payload: dict[str, str] | None = {
+            "data": image_b64, "mimeType": "image/jpeg",
+        }
+    except Exception:
+        image_payload = None
+
+    result: dict[str, object] = {
         "project_id": project_id,
         "timestamp_ms": timestamp_ms,
         "preview_path": str(preview_path),
@@ -667,6 +678,9 @@ async def clipcannon_preview_layout(
         "file_size_bytes": preview_path.stat().st_size,
         "elapsed_ms": elapsed_ms,
     }
+    if image_payload is not None:
+        result["_image"] = image_payload
+    return result
 
 
 # ============================================================

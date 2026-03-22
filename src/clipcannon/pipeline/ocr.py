@@ -1,8 +1,8 @@
-"""PaddleOCR on-screen text detection pipeline stage.
+"""OCR on-screen text detection pipeline stage.
 
-Runs PaddleOCR (PP-OCRv5) on extracted frames at 1fps to detect
-on-screen text, deduplicates consecutive identical text, classifies
-text regions by position, and detects slide-transition events.
+Runs EasyOCR on extracted frames at 1fps to detect on-screen text,
+deduplicates consecutive identical text, classifies text regions by
+position, and detects slide-transition events.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 OPERATION = "ocr_detection"
-STAGE = "paddleocr"
+STAGE = "easyocr"
 
 
 def _classify_region(
@@ -142,7 +142,7 @@ def _run_ocr_on_frames(
     frame_paths: list[Path],
     extraction_fps: int,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    """Run PaddleOCR on frames and return text records + change events.
+    """Run EasyOCR on frames and return text records + change events.
 
     Args:
         frame_paths: Paths to frames to process (1fps subset).
@@ -152,18 +152,18 @@ def _run_ocr_on_frames(
         Tuple of (text_records, change_events).
 
     Raises:
-        ImportError: If PaddleOCR is not available.
+        ImportError: If EasyOCR is not available.
     """
     try:
-        from paddleocr import PaddleOCR  # type: ignore[import-untyped]
+        import easyocr  # type: ignore[import-untyped]
     except ImportError as exc:
         raise ImportError(
-            "PaddleOCR not installed. Install with: pip install paddlepaddle paddleocr"
+            "EasyOCR not installed. Install with: pip install easyocr"
         ) from exc
 
     from PIL import Image
 
-    ocr = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
+    reader = easyocr.Reader(["en"], gpu=True, verbose=False)
 
     text_records: list[dict[str, object]] = []
     change_events: list[dict[str, object]] = []
@@ -179,33 +179,29 @@ def _run_ocr_on_frames(
             logger.warning("Failed to open frame %s: %s", fp, exc)
             continue
 
-        result = ocr.ocr(str(fp), cls=True)
+        # EasyOCR returns list of (bbox, text, confidence)
+        # bbox is [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+        result = reader.readtext(str(fp))
 
-        # PaddleOCR returns list of pages, each page is list of lines
         curr_texts: list[str] = []
         frame_text_entries: list[dict[str, str]] = []
 
-        if result and result[0]:
-            for line in result[0]:
-                bbox = line[0]
-                text = line[1][0]
-                confidence = line[1][1]
+        for bbox, text, confidence in result:
+            if confidence < 0.5:
+                continue
 
-                if confidence < 0.5:
-                    continue
+            curr_texts.append(text)
+            region = _classify_region(bbox, img_width, img_height)
+            font_size = _estimate_font_size(bbox, img_height)
 
-                curr_texts.append(text)
-                region = _classify_region(bbox, img_width, img_height)
-                font_size = _estimate_font_size(bbox, img_height)
-
-                frame_text_entries.append(
-                    {
-                        "text": text,
-                        "confidence": str(round(confidence, 3)),
-                        "region": region,
-                        "font_size": font_size,
-                    }
-                )
+            frame_text_entries.append(
+                {
+                    "text": text,
+                    "confidence": str(round(confidence, 3)),
+                    "region": region,
+                    "font_size": font_size,
+                }
+            )
 
         # Deduplicate: skip if identical to previous frame
         if curr_texts == prev_texts:
@@ -362,8 +358,8 @@ async def run_ocr(
                 record_count=len(text_records),
             ),
             model_info=ModelInfo(
-                name="PaddleOCR",
-                version="PP-OCRv5",
+                name="EasyOCR",
+                version="1.7",
                 parameters={
                     "lang": "en",
                     "use_angle_cls": True,
@@ -387,7 +383,7 @@ async def run_ocr(
 
     except ImportError as exc:
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
-        error_msg = f"PaddleOCR not available: {exc}"
+        error_msg = f"EasyOCR not available: {exc}"
         logger.warning("OCR stage skipped: %s", error_msg)
         return StageResult(
             success=False,

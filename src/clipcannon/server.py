@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
+from mcp.types import ImageContent, TextContent, Tool
 
 from clipcannon import __version__
 from clipcannon.tools import ALL_TOOL_DEFINITIONS, TOOL_DISPATCHERS
@@ -85,18 +85,20 @@ def create_server() -> Server:
     async def call_tool(
         name: str,
         arguments: dict[str, object] | None = None,
-    ) -> list[TextContent]:
+    ) -> list[TextContent | ImageContent]:
         """Dispatch a tool call and return the result.
 
         Routes the call to the appropriate tool dispatcher based on
-        the tool name. All tool results are serialized as JSON text.
+        the tool name. Results are serialized as JSON text. If the
+        result contains a '_image' key, an ImageContent with base64
+        data is also returned so the AI can see the image directly.
 
         Args:
             name: Tool name to invoke.
             arguments: Tool arguments dictionary.
 
         Returns:
-            List containing a single TextContent with JSON result.
+            List of TextContent and optionally ImageContent.
         """
         args = arguments or {}
         logger.info("Tool call: %s", name)
@@ -129,12 +131,30 @@ def create_server() -> Server:
                 },
             }
 
-        return [
+        contents: list[TextContent | ImageContent] = []
+
+        # Extract inline image data if present
+        image_data = None
+        if isinstance(result, dict) and "_image" in result:
+            image_data = result.pop("_image")
+
+        contents.append(
             TextContent(
                 type="text",
                 text=json.dumps(result, indent=2, default=str),
             )
-        ]
+        )
+
+        if image_data is not None:
+            contents.append(
+                ImageContent(
+                    type="image",
+                    data=str(image_data["data"]),
+                    mimeType=str(image_data["mimeType"]),
+                )
+            )
+
+        return contents
 
     logger.info(
         "ClipCannon MCP server created: %d tools registered",
