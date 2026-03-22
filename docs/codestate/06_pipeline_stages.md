@@ -429,8 +429,15 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 2. **Fallback backend**: faster-whisper (no forced alignment, reduced precision).
    - Loads `WhisperModel` with `beam_size=5`, `word_timestamps=True`, `vad_filter=True`.
 3. If neither is installed, returns failure with install instructions.
-4. Inserts segments into `transcript_segments` table: `project_id`, `start_ms`, `end_ms`, `text`, `language`, `word_count`.
-5. Inserts individual words into `transcript_words` table: `segment_id`, `word`, `start_ms`, `end_ms`, `confidence`.
+4. **Anti-hallucination filtering** (Phase 2 addition):
+   - **VAD tuning**: WhisperX uses `_VAD_ONSET=0.5`, `_VAD_OFFSET=0.363`. Fallback uses `_NO_SPEECH_THRESHOLD=0.4`.
+   - **Confidence thresholds**: `_LOG_PROB_THRESHOLD=-0.7`, `_COMPRESSION_RATIO_THRESHOLD=2.0`, `_HALLUCINATION_SILENCE_THRESHOLD=2.0s`.
+   - **Word-level filtering**: `_MIN_WORD_CONFIDENCE=0.3` per word, `_MIN_SEGMENT_CONFIDENCE=0.4` per segment, `_MAX_COMPRESSION_RATIO=2.0`.
+   - **Known hallucination phrase rejection**: 35 known phrases including YouTube artifacts ("thank you for watching", "please subscribe", "click the notification bell"), repetitive patterns, and non-speech defaults ("♪♪", "[INAUDIBLE]").
+   - Segments matching known hallucination phrases are silently dropped.
+   - Words below confidence threshold are removed; segments with no remaining words are dropped.
+5. Inserts segments into `transcript_segments` table: `project_id`, `start_ms`, `end_ms`, `text`, `language`, `word_count`.
+6. Inserts individual words into `transcript_words` table: `segment_id`, `word`, `start_ms`, `end_ms`, `confidence`.
 
 **Outputs / DB writes**: `transcript_segments` (INSERT), `transcript_words` (INSERT).
 

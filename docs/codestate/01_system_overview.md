@@ -1,13 +1,13 @@
 # ClipCannon System Overview
 
-**Version**: 0.1.0 (Phase 1)
+**Version**: 0.1.0 (Phase 1 + Phase 2)
 **Python**: >=3.12
 **License**: MIT
 **Build System**: Hatchling
 
 ## What ClipCannon Is
 
-ClipCannon is an AI-powered video understanding and editing pipeline exposed as an MCP (Model Context Protocol) server. An AI assistant connects to ClipCannon over MCP, sends tool calls to analyze video files, and receives structured JSON results. The pipeline ingests a source video, runs it through a 16-stream analysis DAG (transcription, scene detection, emotion analysis, beat tracking, and more), and stores all results in a per-project SQLite database. The assistant then queries that database through additional MCP tools to retrieve summaries, transcripts, analytics, frames, and storyboards.
+ClipCannon is an AI-powered video understanding, editing, and rendering pipeline exposed as an MCP (Model Context Protocol) server. An AI assistant connects to ClipCannon over MCP, sends tool calls to analyze video files, create edits, render platform-optimized clips, and generate audio. The pipeline ingests a source video, runs it through a 16-stream analysis DAG (transcription, scene detection, emotion analysis, beat tracking, and more), and stores all results in a per-project SQLite database. The assistant then queries that database through additional MCP tools to retrieve summaries, transcripts, analytics, frames, and storyboards -- and uses the Phase 2 editing, rendering, and audio tools to produce platform-ready video clips.
 
 ## Architecture
 
@@ -15,9 +15,9 @@ ClipCannon runs as three separate processes:
 
 | Process | Port | Technology | Purpose |
 |---------|------|------------|---------|
-| MCP Server | stdio (or SSE on 3366) | `mcp` SDK + Python asyncio | Exposes 27 tools to AI assistants via MCP protocol |
+| MCP Server | stdio (or SSE on 3366) | `mcp` SDK + Python asyncio | Exposes 37 tools to AI assistants via MCP protocol |
 | License Server | 3100 | FastAPI + Uvicorn | Credit billing, HMAC balance integrity, Stripe webhooks |
-| Dashboard | 3200 | FastAPI + static HTML | Web UI for credits, projects, provenance, and system health |
+| Dashboard | 3200 | FastAPI + static HTML | Web UI for credits, projects, provenance, editing, review, and system health |
 
 The MCP server uses stdio transport by default (the `clipcannon` console script). The license server and dashboard are separate FastAPI applications.
 
@@ -26,19 +26,21 @@ The MCP server uses stdio transport by default (the `clipcannon` console script)
 | Layer | Technology |
 |-------|-----------|
 | MCP Protocol | `mcp>=1.0.0` (Server, stdio_server, Tool, TextContent) |
-| Validation | `pydantic>=2.0` (config models, provenance records, billing models) |
+| Validation | `pydantic>=2.0` (config models, provenance records, billing models, EDL models) |
 | HTTP Client | `httpx>=0.25.0` (license server communication) |
 | Web Framework | `fastapi>=0.110.0` + `uvicorn>=0.30.0` (license server, dashboard) |
 | Authentication | `python-jose[cryptography]>=3.3.0` (JWT-based dev auth) |
-| Image Processing | `Pillow>=10.0.0` (frame grid composition) |
+| Image Processing | `Pillow>=10.0.0` (frame grid composition, thumbnail generation) |
 | Numerical | `numpy>=1.26.0`, `scipy>=1.12.0` |
 | Billing | `stripe>=8.0.0` (webhook handling, credit packages) |
 | Database | SQLite3 (stdlib) + `sqlite-vec>=0.1.0` (vector KNN search) |
 | GPU (optional) | `torch>=2.3.0`, `faster-whisper>=1.0.0`, `transformers>=4.40.0`, `sentence-transformers>=3.0.0`, `demucs>=4.0.0`, `librosa>=0.10.0` |
+| Audio (Phase 2) | `pydub` (audio mixing), `pedalboard` (effects processing), `midiutil` (MIDI composition), `pyfluidsynth` (MIDI rendering), `ace-step` (AI music generation) |
+| Video (Phase 2) | `mediapipe` (face detection for smart cropping) |
 
-ML dependencies are in the `[ml]` optional extra and are not required for the MCP server to start.
+ML dependencies are in the `[ml]` optional extra and are not required for the MCP server to start. Phase 2 audio/video dependencies are in the `[phase2]` optional extra.
 
-## MCP Tools (27 Total)
+## MCP Tools (37 Total)
 
 ### Project Management (5 tools)
 
@@ -98,6 +100,31 @@ ML dependencies are in the `[ml]` optional extra and are not required for the MC
 |------|-------------|
 | `clipcannon_search_content` | Search video content by semantic similarity (sqlite-vec + Nomic embeddings) or text match (SQL LIKE fallback). |
 
+### Editing (4 tools) -- Phase 2
+
+| Tool | Description |
+|------|-------------|
+| `clipcannon_create_edit` | Create a new edit from an EDL specification. Auto-generates captions from transcript words, validates segments against source. |
+| `clipcannon_modify_edit` | Modify a draft edit via deep merge. Re-validates and regenerates captions if segments change. |
+| `clipcannon_list_edits` | List edits for a project with optional status filtering (draft, rendering, rendered, approved, rejected, failed). |
+| `clipcannon_generate_metadata` | Generate platform-specific title, description, hashtags, and thumbnail timestamp from VUD data. |
+
+### Rendering (3 tools) -- Phase 2
+
+| Tool | Description |
+|------|-------------|
+| `clipcannon_render` | Render a single edit to a platform-optimized video file. Charges 2 credits. Supports NVENC GPU acceleration with software fallback. |
+| `clipcannon_render_status` | Check the status and metadata of a completed or in-progress render. |
+| `clipcannon_render_batch` | Render multiple edits concurrently (max 3 parallel). Charges 2 credits per edit. |
+
+### Audio Generation (3 tools) -- Phase 2
+
+| Tool | Description |
+|------|-------------|
+| `clipcannon_generate_music` | Generate AI music from a text prompt using ACE-Step v1.5 diffusion model (requires GPU). |
+| `clipcannon_compose_midi` | Compose MIDI from 6 presets (ambient_pad, upbeat_pop, corporate, dramatic, minimal_piano, intro_jingle) and render to WAV via FluidSynth. |
+| `clipcannon_generate_sfx` | Generate programmatic DSP sound effects (9 types: whoosh, riser, downer, impact, chime, tick, bass_drop, shimmer, stinger). |
+
 ### Billing (4 tools)
 
 | Tool | Description |
@@ -121,11 +148,13 @@ Each project lives under `~/.clipcannon/projects/{project_id}/`:
 
 ```
 ~/.clipcannon/projects/proj_a1b2c3d4/
-    analysis.db          # SQLite database (all analysis results + provenance)
+    analysis.db          # SQLite database (all analysis results + provenance + edits + renders)
     source/              # Original source video (copied on project create)
     stems/               # Audio stems from source separation (vocal, music, etc.)
     frames/              # Extracted frames (frame_000001.jpg, frame_000002.jpg, ...)
     storyboards/         # Storyboard grid images and frame strips
+    edits/               # Phase 2: Edit working directories (captions, metadata)
+    renders/             # Phase 2: Rendered output video files and thumbnails
 ```
 
 ### Storage Tier Classification
@@ -140,13 +169,15 @@ The disk management system classifies files into three tiers:
 
 ## Database Schema
 
-Each project's `analysis.db` contains 22 core tables and 4 vector virtual tables:
+Each project's `analysis.db` contains 26 core tables and 4 vector virtual tables:
 
-**Core tables**: `schema_version`, `project`, `transcript_segments`, `transcript_words`, `scenes`, `speakers`, `emotion_curve`, `topics`, `highlights`, `reactions`, `silence_gaps`, `acoustic`, `music_sections`, `beats`, `beat_sections`, `on_screen_text`, `text_change_events`, `profanity_events`, `content_safety`, `pacing`, `storyboard_grids`, `stream_status`, `provenance`
+**Phase 1 tables (22)**: `schema_version`, `project`, `transcript_segments`, `transcript_words`, `scenes`, `speakers`, `emotion_curve`, `topics`, `highlights`, `reactions`, `silence_gaps`, `acoustic`, `music_sections`, `beats`, `beat_sections`, `on_screen_text`, `text_change_events`, `profanity_events`, `content_safety`, `pacing`, `storyboard_grids`, `stream_status`, `provenance`
+
+**Phase 2 tables (4)**: `edits`, `edit_segments`, `renders`, `audio_assets`
 
 **Vector tables** (sqlite-vec `vec0`): `vec_frames` (float[1152]), `vec_semantic` (float[768]), `vec_emotion` (float[1024]), `vec_speakers` (float[512])
 
-Schema version: 1. Connection pragmas: WAL journal mode, NORMAL synchronous, 64MB cache, foreign keys ON, temp store in memory.
+Schema version: 2 (migrated from v1 via `migrate_to_v2()`). Connection pragmas: WAL journal mode, NORMAL synchronous, 64MB cache, foreign keys ON, temp store in memory.
 
 ## Exception Hierarchy
 
@@ -179,7 +210,7 @@ All exceptions carry a `message` string and a `details` dictionary.
 | metadata | 1 |
 | publish | 1 |
 
-Phase 1 only uses the `analyze` operation. Credit packages: Starter (50/$5), Creator (250/$20), Pro (1000/$60), Studio (5000/$200). Dev mode starts with 100 credits. Balances are HMAC-SHA256 signed using a machine-derived key to prevent tampering. The license server stores balances in `~/.clipcannon/license.db`.
+Phase 1 uses the `analyze` operation. Phase 2 adds the `render` operation (2 credits per render). Credit packages: Starter (50/$5), Creator (250/$20), Pro (1000/$60), Studio (5000/$200). Dev mode starts with 100 credits. Balances are HMAC-SHA256 signed using a machine-derived key to prevent tampering. The license server stores balances in `~/.clipcannon/license.db`.
 
 ## Supported Video Formats
 
@@ -196,3 +227,19 @@ mp4, mov, mkv, webm, avi, ts, mts
 | No GPU | CPU fallback | fp32 |
 
 The `ModelManager` in the GPU module uses an LRU eviction strategy. GPUs with >16 GB VRAM run models concurrently; smaller GPUs load models sequentially.
+
+## Phase 2 Subsystems
+
+Phase 2 adds three major subsystems built on top of the Phase 1 analysis pipeline:
+
+### Editing Engine (`src/clipcannon/editing/`)
+
+Declarative Edit Decision List (EDL) architecture supporting segment-based editing, adaptive caption generation, content-aware smart cropping (face tracking, split-screen, picture-in-picture), and platform-specific metadata generation for 7 target platforms.
+
+### Rendering Engine (`src/clipcannon/rendering/`)
+
+Async FFmpeg-based rendering pipeline with 7 platform-optimized encoding profiles, GPU acceleration (NVENC/HEVC), transition effects (xfade), caption burn-in (ASS subtitles), thumbnail generation, and batch rendering with concurrency control.
+
+### Audio Engine (`src/clipcannon/audio/`)
+
+Three-tier audio generation: AI music via ACE-Step v1.5 diffusion model (GPU), MIDI composition from 6 presets with FluidSynth rendering, and 9 programmatic DSP sound effects. Includes speech-aware audio mixing with automatic ducking and peak normalization.

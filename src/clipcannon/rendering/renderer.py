@@ -140,6 +140,9 @@ class RenderEngine:
                 else None
             )
             encoding_args = build_encoding_args(profile, nvenc_preset)
+            # Pass canvas spec if enabled (full AI compositing control)
+            canvas_spec = edl.canvas if edl.canvas.enabled else None
+
             cmd = build_ffmpeg_cmd(
                 source_path=source_path,
                 output_path=output_path,
@@ -148,6 +151,7 @@ class RenderEngine:
                 crop_region=crop_region,
                 ass_path=ass_path,
                 encoding_args=encoding_args,
+                canvas=canvas_spec,
             )
             await self._execute_ffmpeg(cmd, render_id)
 

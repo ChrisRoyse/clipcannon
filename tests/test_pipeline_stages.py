@@ -4,131 +4,31 @@ Tests probe, audio extraction, and frame extraction against the
 real test video file. Does NOT test model inference stages
 (source_separation, transcribe) as those require model downloads.
 
-Uses module-scoped fixtures so that expensive FFmpeg operations
-(probe, audio extract, frame extract) run only once per module.
+Uses session-scoped fixtures from conftest.py so that expensive
+FFmpeg operations run only ONCE across all test modules.
 """
 
 from __future__ import annotations
 
 import asyncio
-import shutil
-import uuid
 from pathlib import Path
 
 import pytest
 
-from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
-from clipcannon.db.queries import execute, fetch_all, fetch_one
-from clipcannon.db.schema import create_project_db, init_project_directory
+from clipcannon.db.queries import fetch_all, fetch_one
 from clipcannon.pipeline.orchestrator import (
     PipelineOrchestrator,
     PipelineStage,
-    StageResult,
     _topological_sort,
 )
-from clipcannon.pipeline.probe import run_probe
-from clipcannon.pipeline.audio_extract import run_audio_extract
-from clipcannon.pipeline.frame_extract import run_frame_extract
 from clipcannon.pipeline.source_resolution import resolve_source_path
 
 TEST_VIDEO = Path("/home/cabdru/clipcannon/testdata/2026-03-20 14-43-20.mp4")
 
 
 # ============================================================
-# MODULE-SCOPED FIXTURES: expensive operations run once
-# ============================================================
-
-
-@pytest.fixture(scope="module")
-def shared_project_dir(tmp_path_factory) -> Path:
-    """Create a single temp directory shared across the entire module."""
-    return tmp_path_factory.mktemp("pipeline_stages")
-
-
-@pytest.fixture(scope="module")
-def shared_config() -> ClipCannonConfig:
-    """Load config once for the module."""
-    return ClipCannonConfig.load()
-
-
-@pytest.fixture(scope="module")
-def probed_project(shared_project_dir: Path, shared_config: ClipCannonConfig):
-    """Run probe once and share the result across all tests that need it.
-
-    Returns:
-        Tuple of (project_id, db_path, project_dir, config, probe_result).
-    """
-    if not TEST_VIDEO.exists():
-        pytest.skip(f"Test video not found at {TEST_VIDEO}")
-
-    project_id = f"test_{uuid.uuid4().hex[:8]}"
-    project_dir = shared_project_dir / project_id
-    project_dir.mkdir(parents=True)
-
-    db_path = create_project_db(project_id, base_dir=shared_project_dir)
-
-    for subdir in ["source", "stems", "frames", "storyboards"]:
-        (project_dir / subdir).mkdir(exist_ok=True)
-
-    conn = get_connection(db_path, enable_vec=False, dict_rows=True)
-    try:
-        execute(
-            conn,
-            """INSERT INTO project (
-                project_id, name, source_path, source_sha256,
-                duration_ms, resolution, fps, codec, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                project_id,
-                "Test Project",
-                str(TEST_VIDEO),
-                "pending",
-                0,
-                "0x0",
-                0.0,
-                "unknown",
-                "created",
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    result = asyncio.run(run_probe(project_id, db_path, project_dir, shared_config))
-    return project_id, db_path, project_dir, shared_config, result
-
-
-@pytest.fixture(scope="module")
-def audio_extracted_project(probed_project):
-    """Run audio extraction once (depends on probe), share the result.
-
-    Returns:
-        Tuple of (project_id, db_path, project_dir, config, audio_result).
-    """
-    project_id, db_path, project_dir, config, probe_result = probed_project
-    assert probe_result.success, f"Probe must succeed first: {probe_result.error_message}"
-
-    result = asyncio.run(run_audio_extract(project_id, db_path, project_dir, config))
-    return project_id, db_path, project_dir, config, result
-
-
-@pytest.fixture(scope="module")
-def frames_extracted_project(probed_project):
-    """Run frame extraction once (depends on probe), share the result.
-
-    Returns:
-        Tuple of (project_id, db_path, project_dir, config, frame_result).
-    """
-    project_id, db_path, project_dir, config, probe_result = probed_project
-    assert probe_result.success, f"Probe must succeed first: {probe_result.error_message}"
-
-    result = asyncio.run(run_frame_extract(project_id, db_path, project_dir, config))
-    return project_id, db_path, project_dir, config, result
-
-
-# ============================================================
-# PROBE TESTS (use shared probed_project)
+# PROBE TESTS (use session_probed_project from conftest)
 # ============================================================
 
 
@@ -139,9 +39,10 @@ def frames_extracted_project(probed_project):
 class TestProbeStage:
     """Tests for the probe pipeline stage."""
 
-    def test_probe_extracts_metadata(self, probed_project):
+    def test_probe_extracts_metadata(self, session_probed_project):
         """Probe should extract correct metadata from the test video."""
-        project_id, db_path, project_dir, config, result = probed_project
+        assert session_probed_project is not None
+        project_id, db_path, project_dir, config, result = session_probed_project
 
         assert result.success is True
         assert result.operation == "probe"
@@ -165,9 +66,10 @@ class TestProbeStage:
         assert row["source_sha256"] != "pending"
         assert row["status"] == "probed"
 
-    def test_probe_writes_provenance(self, probed_project):
+    def test_probe_writes_provenance(self, session_probed_project):
         """Probe should write a provenance record."""
-        project_id, db_path, project_dir, config, result = probed_project
+        assert session_probed_project is not None
+        project_id, db_path, *_ = session_probed_project
 
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
@@ -187,7 +89,7 @@ class TestProbeStage:
 
 
 # ============================================================
-# AUDIO EXTRACT TESTS (use shared audio_extracted_project)
+# AUDIO EXTRACT TESTS (use session_audio_extracted from conftest)
 # ============================================================
 
 
@@ -198,9 +100,10 @@ class TestProbeStage:
 class TestAudioExtractStage:
     """Tests for the audio extraction pipeline stage."""
 
-    def test_audio_extract_produces_files(self, audio_extracted_project):
+    def test_audio_extract_produces_files(self, session_audio_extracted):
         """Audio extract should produce 16k and original WAV files."""
-        project_id, db_path, project_dir, config, result = audio_extracted_project
+        assert session_audio_extracted is not None
+        project_id, db_path, project_dir, config, result = session_audio_extracted
 
         assert result.success is True
         assert result.operation == "audio_extract"
@@ -214,9 +117,10 @@ class TestAudioExtractStage:
         assert audio_16k.stat().st_size > 0
         assert audio_orig.stat().st_size > 0
 
-    def test_audio_extract_writes_provenance(self, audio_extracted_project):
+    def test_audio_extract_writes_provenance(self, session_audio_extracted):
         """Audio extract should write a provenance record."""
-        project_id, db_path, project_dir, config, result = audio_extracted_project
+        assert session_audio_extracted is not None
+        project_id, db_path, *_ = session_audio_extracted
 
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
@@ -233,7 +137,7 @@ class TestAudioExtractStage:
 
 
 # ============================================================
-# FRAME EXTRACT TESTS (use shared frames_extracted_project)
+# FRAME EXTRACT TESTS (use session_frames_extracted from conftest)
 # ============================================================
 
 
@@ -244,9 +148,10 @@ class TestAudioExtractStage:
 class TestFrameExtractStage:
     """Tests for the frame extraction pipeline stage."""
 
-    def test_frame_extract_produces_frames(self, frames_extracted_project):
+    def test_frame_extract_produces_frames(self, session_frames_extracted):
         """Frame extract should produce approximately duration*2 frames."""
-        project_id, db_path, project_dir, config, result = frames_extracted_project
+        assert session_frames_extracted is not None
+        project_id, db_path, project_dir, config, result = session_frames_extracted
 
         assert result.success is True
         assert result.operation == "frame_extract"
@@ -258,9 +163,10 @@ class TestFrameExtractStage:
         assert frame_count > 400
         assert frame_count < 440
 
-    def test_frame_extract_writes_provenance(self, frames_extracted_project):
+    def test_frame_extract_writes_provenance(self, session_frames_extracted):
         """Frame extract should write a provenance record."""
-        project_id, db_path, project_dir, config, result = frames_extracted_project
+        assert session_frames_extracted is not None
+        project_id, db_path, *_ = session_frames_extracted
 
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
@@ -277,7 +183,7 @@ class TestFrameExtractStage:
 
 
 # ============================================================
-# SOURCE RESOLUTION (uses probed_project)
+# SOURCE RESOLUTION (uses session_probed_project)
 # ============================================================
 
 
@@ -288,9 +194,10 @@ class TestFrameExtractStage:
 class TestSourceResolution:
     """Tests for source file resolution."""
 
-    def test_resolves_to_original(self, probed_project):
+    def test_resolves_to_original(self, session_probed_project):
         """Should resolve to original when no VFR normalization."""
-        project_id, db_path, project_dir, config, result = probed_project
+        assert session_probed_project is not None
+        project_id, db_path, project_dir, config, result = session_probed_project
         assert result.success is True
 
         resolved = asyncio.run(resolve_source_path(project_id, db_path))
@@ -350,10 +257,9 @@ class TestTopologicalSort:
 class TestOrchestratorRegistration:
     """Tests for PipelineOrchestrator stage registration."""
 
-    def test_register_and_list(self):
+    def test_register_and_list(self, clipcannon_config):
         """Should register stages and maintain order."""
-        config = ClipCannonConfig.load()
-        orch = PipelineOrchestrator(config)
+        orch = PipelineOrchestrator(clipcannon_config)
 
         orch.register_stage(PipelineStage(
             name="stage_a", operation="op_a", required=True,
@@ -366,11 +272,11 @@ class TestOrchestratorRegistration:
         assert orch.stages[0].name == "stage_a"
         assert orch.stages[1].name == "stage_b"
 
-    def test_duplicate_registration_raises(self):
+    def test_duplicate_registration_raises(self, clipcannon_config):
         """Duplicate stage name should raise PipelineError."""
         from clipcannon.exceptions import PipelineError as PE
-        config = ClipCannonConfig.load()
-        orch = PipelineOrchestrator(config)
+
+        orch = PipelineOrchestrator(clipcannon_config)
 
         orch.register_stage(PipelineStage(
             name="stage_a", operation="op_a", required=True,

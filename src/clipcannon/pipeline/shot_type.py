@@ -153,13 +153,8 @@ async def run_shot_type(
 
     try:
         device = str(config.get("gpu.device"))
-        hf_token = os.environ.get(
-            "HF_TOKEN",
-            os.environ.get(
-                "HUGGING_FACE_HUB_TOKEN",
-                "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",
-            ),
-        )
+        # Models are pre-cached locally. No HF token needed at runtime.
+        hf_token = os.environ.get("HF_TOKEN")
 
         # Fetch scenes with key frames
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)

@@ -353,13 +353,8 @@ async def run_visual_embed(
         batch_size = int(config.get("processing.batch_size_visual"))
         threshold = float(config.get("processing.scene_change_threshold"))
         device = str(config.get("gpu.device"))
-        hf_token = os.environ.get(
-            "HF_TOKEN",
-            os.environ.get(
-                "HUGGING_FACE_HUB_TOKEN",
-                "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",
-            ),
-        )
+        # Models are pre-cached locally. No HF token needed at runtime.
+        hf_token = os.environ.get("HF_TOKEN")
 
         logger.info(
             "Starting visual embedding: %d frames, batch_size=%d, device=%s",

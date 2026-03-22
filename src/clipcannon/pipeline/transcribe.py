@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import zlib
 from typing import TYPE_CHECKING
 
@@ -51,8 +50,6 @@ logger = logging.getLogger(__name__)
 OPERATION = "transcription"
 STAGE = "whisperx"
 
-# HuggingFace token: read from environment
-_HF_TOKEN_ENV = "HF_TOKEN"
 
 # ============================================================
 # ANTI-HALLUCINATION CONFIGURATION
@@ -409,9 +406,6 @@ async def _transcribe_whisperx(
     import whisperx
 
     def _run() -> dict[str, object]:
-        # Ensure HF token is set for wav2vec2 model downloads
-        os.environ.setdefault(_HF_TOKEN_ENV, "")
-
         # 1. Load model with tuned VAD and anti-hallucination options
         model = whisperx.load_model(
             model_name,

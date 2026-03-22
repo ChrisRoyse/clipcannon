@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from clipcannon.editing.edl import SegmentSpec
+    from clipcannon.editing.edl import CanvasSpec, SegmentSpec
     from clipcannon.editing.smart_crop import (
         CropRegion,
         PipLayout,
@@ -58,6 +58,7 @@ def build_ffmpeg_cmd(
     encoding_args: list[str],
     split_layout: SplitScreenLayout | None = None,
     pip_layout: PipLayout | None = None,
+    canvas: CanvasSpec | None = None,
 ) -> list[str]:
     """Build the FFmpeg command as a list of arguments.
 
@@ -74,10 +75,18 @@ def build_ffmpeg_cmd(
         encoding_args: Pre-built encoding arguments.
         split_layout: Split-screen layout (for "split_screen" layout).
         pip_layout: PIP layout (for "pip" layout).
+        canvas: Canvas compositing spec (full AI creative control).
 
     Returns:
         FFmpeg command as a list of strings.
     """
+    # Canvas compositing: full AI creative control (highest priority)
+    if canvas is not None and canvas.enabled and canvas.regions:
+        return _build_canvas_cmd(
+            source_path, output_path, segments,
+            profile, canvas, ass_path, encoding_args,
+        )
+
     # Split-screen layout takes priority over single crop
     if split_layout is not None:
         return _build_split_screen_cmd(
@@ -768,6 +777,126 @@ def _build_pip_cmd(
     final_v = "composed"
 
     # Speed
+    if seg.speed != 1.0:
+        filters.append(
+            f"[composed]setpts={1.0 / seg.speed}*PTS[speeded]"
+        )
+        final_v = "speeded"
+
+    # Subtitles
+    if ass_path is not None:
+        escaped = _escape_subtitle_path(ass_path)
+        filters.append(
+            f"[{final_v}]subtitles='{escaped}'[subbed]"
+        )
+        final_v = "subbed"
+
+    filter_complex = ";".join(filters)
+
+    afilters: list[str] = []
+    if seg.speed != 1.0:
+        afilters.append(f"atempo={seg.speed}")
+
+    cmd: list[str] = [
+        "ffmpeg", "-y",
+        "-ss", f"{start_s:.3f}",
+        "-to", f"{end_s:.3f}",
+        "-i", str(source_path),
+        "-filter_complex", filter_complex,
+        "-map", f"[{final_v}]",
+        "-map", "0:a",
+    ]
+
+    if afilters:
+        cmd.extend(["-af", ",".join(afilters)])
+
+    cmd.extend(encoding_args)
+    cmd.append(str(output_path))
+
+    return cmd
+
+
+# ============================================================
+# CANVAS COMPOSITING -- Full AI creative control
+# ============================================================
+def _build_canvas_cmd(
+    source_path: Path,
+    output_path: Path,
+    segments: list[SegmentSpec],
+    profile: EncodingProfile,
+    canvas: CanvasSpec,
+    ass_path: Path | None,
+    encoding_args: list[str],
+) -> list[str]:
+    """Build FFmpeg command for free-form canvas compositing.
+
+    The AI defines arbitrary regions from the source and places them
+    anywhere on the output canvas. Each region is independently
+    cropped, scaled, and positioned via overlay filters.
+
+    Args:
+        source_path: Source video path.
+        output_path: Output file path.
+        segments: EDL segments (first segment used for time range).
+        profile: Encoding profile.
+        canvas: Canvas spec with regions to composite.
+        ass_path: Optional ASS subtitle path.
+        encoding_args: Encoding arguments.
+
+    Returns:
+        FFmpeg command as argument list.
+    """
+    seg = segments[0]
+    start_s = seg.source_start_ms / 1000.0
+    end_s = seg.source_end_ms / 1000.0
+
+    cw = canvas.canvas_width
+    ch = canvas.canvas_height
+    bg_hex = canvas.background_color.lstrip("#")
+
+    # Sort regions by z_index (lowest first = rendered first = background)
+    sorted_regions = sorted(canvas.regions, key=lambda r: r.z_index)
+
+    filters: list[str] = []
+
+    # Create background canvas
+    filters.append(
+        f"color=c=0x{bg_hex}:s={cw}x{ch}:d=99999,setsar=1[canvas]"
+    )
+
+    # Split the source into N copies, one per region
+    n_regions = len(sorted_regions)
+    if n_regions == 1:
+        filters.append("[0:v]null[reg0_src]")
+    else:
+        split_outputs = "".join(f"[reg{i}_src]" for i in range(n_regions))
+        filters.append(f"[0:v]split={n_regions}{split_outputs}")
+
+    # Crop and scale each region
+    for i, region in enumerate(sorted_regions):
+        filters.append(
+            f"[reg{i}_src]"
+            f"crop={region.source_width}:{region.source_height}"
+            f":{region.source_x}:{region.source_y},"
+            f"scale={region.output_width}:{region.output_height},"
+            f"setsar=1"
+            f"[reg{i}]"
+        )
+
+    # Overlay each region onto the canvas in z_index order
+    current_label = "canvas"
+    for i, region in enumerate(sorted_regions):
+        out_label = f"comp{i}" if i < n_regions - 1 else "composed"
+        filters.append(
+            f"[{current_label}][reg{i}]"
+            f"overlay=x={region.output_x}:y={region.output_y}"
+            f"[{out_label}]"
+        )
+        current_label = out_label
+
+    final_v = "composed"
+
+    # Speed adjustment
     if seg.speed != 1.0:
         filters.append(
             f"[composed]setpts={1.0 / seg.speed}*PTS[speeded]"
