@@ -461,7 +461,125 @@ AUDIO_TOOL_DEFINITIONS: list[Tool] = [
             "required": ["project_id", "edit_id", "sfx_type"],
         },
     ),
+    Tool(
+        name="clipcannon_audio_cleanup",
+        description=(
+            "Clean up audio by removing noise, hum, sibilance, or normalizing loudness. "
+            "Operations: noise_reduction (gentle denoising), de_hum (remove 50/60Hz hum), "
+            "de_ess (reduce sibilance), normalize_loudness (EBU R128 normalization). "
+            "Creates cleaned audio file stored as audio asset."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": _PID,
+                "edit_id": _EID,
+                "operations": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "noise_reduction", "de_hum",
+                            "de_ess", "normalize_loudness",
+                        ],
+                    },
+                    "minItems": 1,
+                    "description": "Cleanup operations to apply",
+                },
+                "hum_frequency": {
+                    "type": "integer",
+                    "default": 50,
+                    "description": "Hum frequency: 50 (EU) or 60 (US) Hz",
+                },
+            },
+            "required": ["project_id", "edit_id", "operations"],
+        },
+    ),
 ]
+
+
+async def clipcannon_audio_cleanup(
+    project_id: str,
+    edit_id: str,
+    operations: list[str],
+    hum_frequency: int = 50,
+) -> dict[str, object]:
+    """Clean up audio with FFmpeg filters."""
+    from clipcannon.audio.cleanup import SUPPORTED_CLEANUP_OPS, cleanup_audio
+
+    err = _validate_project(project_id)
+    if err is not None:
+        return err
+    err = _validate_edit(project_id, edit_id)
+    if err is not None:
+        return err
+
+    # Validate operations
+    invalid = [op for op in operations if op not in SUPPORTED_CLEANUP_OPS]
+    if invalid:
+        return _error("INVALID_PARAMETER", f"Unknown operations: {invalid}")
+
+    # Find source audio
+    proj_dir = _project_dir(project_id)
+    audio_dir = proj_dir / "edits" / edit_id / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+
+    # Use vocal stem if available, otherwise extracted audio
+    source_audio = proj_dir / "stems" / "vocals.wav"
+    if not source_audio.exists():
+        source_audio = proj_dir / "stems" / "audio_original.wav"
+    if not source_audio.exists():
+        source_audio = proj_dir / "stems" / "audio_16k.wav"
+    if not source_audio.exists():
+        # Try any WAV in project (stems/ first, then root)
+        wavs = list((proj_dir / "stems").glob("*.wav")) if (proj_dir / "stems").exists() else []
+        if not wavs:
+            wavs = list(proj_dir.glob("*.wav"))
+        if wavs:
+            source_audio = wavs[0]
+        else:
+            return _error("AUDIO_NOT_FOUND", "No audio file found in project")
+
+    output_path = audio_dir / f"cleaned_{secrets.token_hex(4)}.wav"
+
+    start = time.monotonic()
+    try:
+        result = await cleanup_audio(
+            input_path=source_audio,
+            output_path=output_path,
+            operations=operations,
+            hum_frequency=hum_frequency,
+        )
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        return _error("CLEANUP_FAILED", str(exc))
+
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+
+    # Store as audio asset
+    _store_audio_asset(
+        project_id=project_id,
+        edit_id=edit_id,
+        asset_id=result.asset_id,
+        asset_type="cleaned",
+        file_path=str(result.file_path),
+        duration_ms=result.duration_ms,
+        sample_rate=result.sample_rate,
+        model_used="ffmpeg",
+        generation_params={
+            "operations": operations,
+            "hum_frequency": hum_frequency,
+        },
+        seed=None,
+        volume_db=0.0,
+    )
+
+    return {
+        "asset_id": result.asset_id,
+        "file_path": str(result.file_path),
+        "duration_ms": result.duration_ms,
+        "operations_applied": result.operations_applied,
+        "elapsed_ms": elapsed_ms,
+    }
 
 
 async def dispatch_audio_tool(
@@ -496,5 +614,12 @@ async def dispatch_audio_tool(
             sfx_type=str(arguments["sfx_type"]),
             duration_ms=int(arguments.get("duration_ms", 500)),  # type: ignore[arg-type]
             params=arguments.get("params"),  # type: ignore[arg-type]
+        )
+    if name == "clipcannon_audio_cleanup":
+        return await clipcannon_audio_cleanup(
+            project_id=str(arguments["project_id"]),
+            edit_id=str(arguments["edit_id"]),
+            operations=list(arguments["operations"]),  # type: ignore[arg-type]
+            hum_frequency=int(arguments.get("hum_frequency", 50)),  # type: ignore[arg-type]
         )
     return _error("INTERNAL_ERROR", f"Unknown audio tool: {name}")

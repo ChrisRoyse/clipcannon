@@ -7,6 +7,8 @@ charges 2 credits via the license server.
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 import logging
 import time
@@ -15,7 +17,7 @@ from pathlib import Path
 from clipcannon.billing.license_client import LicenseClient
 from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
-from clipcannon.db.queries import execute, fetch_one
+from clipcannon.db.queries import execute, fetch_all, fetch_one
 from clipcannon.editing.edl import EditDecisionList
 from clipcannon.exceptions import ClipCannonError
 from clipcannon.rendering.batch import render_batch
@@ -104,9 +106,6 @@ def _resolve_source(project_id: str) -> Path | None:
     Returns:
         Path to the source video, or None if not found.
     """
-    from clipcannon.db.connection import get_connection
-    from clipcannon.db.queries import fetch_one
-
     db = _db_path(project_id)
     if not db.exists():
         return None
@@ -581,9 +580,6 @@ async def clipcannon_preview_layout(
     Returns:
         Result dict with preview_path and elapsed_ms.
     """
-    import asyncio
-    import time
-
     from clipcannon.editing.edl import CanvasRegion
     from clipcannon.rendering.ffmpeg_cmd import build_preview_cmd
 
@@ -658,8 +654,6 @@ async def clipcannon_preview_layout(
     elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
     # Encode preview as base64 for inline image viewing
-    import base64
-
     try:
         image_b64 = base64.b64encode(preview_path.read_bytes()).decode("ascii")
         image_payload: dict[str, str] | None = {
@@ -681,6 +675,128 @@ async def clipcannon_preview_layout(
     if image_payload is not None:
         result["_image"] = image_payload
     return result
+
+
+# ============================================================
+# TOOL 5: clipcannon_preview_clip
+# ============================================================
+async def clipcannon_preview_clip(
+    project_id: str,
+    start_ms: int,
+    duration_ms: int = 3000,
+) -> dict[str, object]:
+    """Render a short low-quality preview clip."""
+    from clipcannon.rendering.preview import render_preview
+
+    proj_dir = _project_dir(project_id)
+    if not proj_dir.exists():
+        return _error(
+            "PROJECT_NOT_FOUND",
+            f"Project not found: {project_id}",
+        )
+
+    source = _resolve_source(project_id)
+    if source is None:
+        return _error(
+            "SOURCE_NOT_FOUND",
+            "No source video found",
+        )
+
+    preview_dir = proj_dir / "renders" / "previews"
+
+    try:
+        result = await render_preview(
+            source_path=source,
+            output_dir=preview_dir,
+            start_ms=start_ms,
+            duration_ms=duration_ms,
+        )
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        return _error("PREVIEW_FAILED", str(exc))
+
+    response: dict[str, object] = {
+        "preview_path": str(result.preview_path),
+        "duration_ms": result.duration_ms,
+        "file_size_bytes": result.file_size_bytes,
+        "elapsed_ms": result.elapsed_ms,
+    }
+    if result.thumbnail_base64:
+        response["_image"] = {
+            "data": result.thumbnail_base64,
+            "mimeType": "image/jpeg",
+        }
+
+    return response
+
+
+# ============================================================
+# TOOL 6: clipcannon_inspect_render
+# ============================================================
+async def clipcannon_inspect_render(
+    project_id: str,
+    render_id: str,
+) -> dict[str, object]:
+    """Inspect a rendered video output with frame extraction and metadata checks."""
+    from clipcannon.rendering.inspector import inspect_render
+
+    db = _db_path(project_id)
+    if not db.exists():
+        return _error(
+            "PROJECT_NOT_FOUND",
+            f"Project not found: {project_id}",
+        )
+
+    conn = get_connection(db, enable_vec=False, dict_rows=True)
+    try:
+        row = fetch_one(
+            conn,
+            "SELECT * FROM renders WHERE render_id = ? AND project_id = ?",
+            (render_id, project_id),
+        )
+    finally:
+        conn.close()
+
+    if row is None:
+        return _error(
+            "RENDER_NOT_FOUND",
+            f"Render not found: {render_id}",
+        )
+
+    output_path = row.get("output_path")
+    if not output_path or not Path(output_path).exists():
+        return _error(
+            "OUTPUT_NOT_FOUND",
+            "Rendered file not found on disk",
+        )
+
+    try:
+        result = await inspect_render(
+            render_output_path=Path(output_path),
+            expected_duration_ms=row.get("duration_ms"),
+            expected_width=row.get("resolution_width"),
+            expected_height=row.get("resolution_height"),
+            expected_codec=row.get("codec"),
+        )
+        result.render_id = render_id
+    except (FileNotFoundError, RuntimeError) as exc:
+        return _error("INSPECTION_FAILED", str(exc))
+
+    return {
+        "render_id": result.render_id,
+        "output_path": result.output_path,
+        "all_checks_passed": result.all_passed,
+        "checks": result.checks,
+        "metadata": result.metadata,
+        "frames": [
+            {
+                "timestamp_ms": f["timestamp_ms"],
+                "frame_path": f.get("frame_path", ""),
+            }
+            for f in result.frames
+        ],
+        "frame_count": len(result.frames),
+        "elapsed_ms": result.elapsed_ms,
+    }
 
 
 # ============================================================
@@ -723,6 +839,17 @@ async def dispatch_rendering_tool(
             project_id=str(arguments["project_id"]),
             timestamp_ms=int(arguments["timestamp_ms"]),  # type: ignore[arg-type]
         )
+    if name == "clipcannon_preview_clip":
+        return await clipcannon_preview_clip(
+            str(arguments["project_id"]),
+            int(arguments["start_ms"]),
+            int(arguments.get("duration_ms", 3000)),
+        )
+    if name == "clipcannon_inspect_render":
+        return await clipcannon_inspect_render(
+            str(arguments["project_id"]),
+            str(arguments["render_id"]),
+        )
     if name == "clipcannon_preview_layout":
         return await clipcannon_preview_layout(
             project_id=str(arguments["project_id"]),
@@ -737,7 +864,7 @@ async def dispatch_rendering_tool(
 
 
 # ============================================================
-# TOOL 5: clipcannon_analyze_frame
+# TOOL 7: clipcannon_analyze_frame
 # ============================================================
 async def clipcannon_analyze_frame(
     project_id: str,
@@ -756,8 +883,6 @@ async def clipcannon_analyze_frame(
     Returns:
         Dict with frame dimensions, content regions, and PIP info.
     """
-    import time
-
     from clipcannon.pipeline.screen_layout import analyze_frame
 
     start_time = time.monotonic()
@@ -806,7 +931,7 @@ async def clipcannon_analyze_frame(
 
 
 # ============================================================
-# TOOL 6: clipcannon_get_editing_context
+# TOOL 8: clipcannon_get_editing_context
 # ============================================================
 async def clipcannon_get_editing_context(
     project_id: str,
@@ -823,11 +948,6 @@ async def clipcannon_get_editing_context(
     Returns:
         Dict with all editing-relevant data.
     """
-    import time
-
-    from clipcannon.db.connection import get_connection
-    from clipcannon.db.queries import fetch_all, fetch_one
-
     start_time = time.monotonic()
 
     err = _validate_project(project_id)

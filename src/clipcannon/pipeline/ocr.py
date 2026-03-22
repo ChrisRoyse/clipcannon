@@ -60,12 +60,11 @@ def _classify_region(
 
     if relative_y < 0.25:
         return "center_top"
-    elif relative_y < 0.67:
+    if relative_y < 0.67:
         return "center_middle"
-    elif relative_y < 0.85:
+    if relative_y < 0.85:
         return "bottom_third"
-    else:
-        return "full_screen"
+    return "full_screen"
 
 
 def _estimate_font_size(bbox: list[list[float]], img_height: int) -> str:
@@ -87,10 +86,9 @@ def _estimate_font_size(bbox: list[list[float]], img_height: int) -> str:
 
     if relative_height < 0.03:
         return "small"
-    elif relative_height < 0.08:
+    if relative_height < 0.08:
         return "medium"
-    else:
-        return "large"
+    return "large"
 
 
 def _frame_timestamp_ms(frame_path: Path, fps: int) -> int:
@@ -242,7 +240,7 @@ async def run_ocr(
     project_dir: Path,
     config: ClipCannonConfig,
 ) -> StageResult:
-    """Execute PaddleOCR text detection on extracted frames.
+    """Execute EasyOCR text detection on extracted frames.
 
     Processes frames at 1fps (every other frame from 2fps extraction),
     deduplicates consecutive identical text, and detects slide transitions.

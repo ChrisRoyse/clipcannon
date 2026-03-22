@@ -154,17 +154,16 @@ async def get_packages() -> dict[str, object]:
     Returns:
         Dictionary with available packages and credit rates.
     """
-    packages = []
-    for name, info in CREDIT_PACKAGES.items():
-        packages.append(
-            {
-                "name": name,
-                "credits": info["credits"],
-                "price_cents": info["price_cents"],
-                "price_display": f"${info['price_cents'] / 100:.2f}",
-                "per_credit_cents": round(info["price_cents"] / info["credits"], 2),
-            }
-        )
+    packages = [
+        {
+            "name": name,
+            "credits": info["credits"],
+            "price_cents": info["price_cents"],
+            "price_display": f"${info['price_cents'] / 100:.2f}",
+            "per_credit_cents": round(info["price_cents"] / info["credits"], 2),
+        }
+        for name, info in CREDIT_PACKAGES.items()
+    ]
 
     return {
         "packages": packages,

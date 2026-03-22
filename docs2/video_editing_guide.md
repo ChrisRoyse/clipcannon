@@ -151,7 +151,7 @@ Dead space signals low production quality. Techniques ranked by visual quality:
 
 | Rank | Technique | Status |
 |------|-----------|--------|
-| 1 | **Blurred background fill** -- Gaussian blur (r=40-60px) of source frame behind sharp content | Not yet supported |
+| 1 | **Blurred background fill** -- Gaussian blur (r=40-60px) of source frame behind sharp content | Supported via `preview_layout` and render pipeline |
 | 2 | **Cover fit** -- Scale to fill, center-crop. `fit_mode: "cover"`. Loses edge content. | Default when edges are expendable |
 | 3 | **Solid dark fill** -- #0D0D0D background. `fit_mode: "contain"`, `background_color: "#0D0D0D"`. | Fallback when edges are critical |
 | 4 | **Branded frame template** -- Pre-designed frame with brand assets | Requires template assets; not in default pipeline |
@@ -630,6 +630,343 @@ Verify every item before rendering. Failed checks must be corrected.
 
 ---
 
+## 11. Auto-Trim: Removing Filler Words and Pauses
+
+Use `clipcannon_auto_trim` to automatically detect and remove filler words (um, uh, like, basically, you know, I mean, etc.) and long pauses from the transcript. Returns optimized segments ready for `clipcannon_create_edit`.
+
+### 11.1 Usage
+
+```json
+{
+  "project_id": "proj_xxx",
+  "pause_threshold_ms": 800,
+  "merge_gap_ms": 200,
+  "min_segment_ms": 500
+}
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `pause_threshold_ms` | 800 | Pauses longer than this are removed |
+| `merge_gap_ms` | 200 | Segments separated by less than this are merged |
+| `min_segment_ms` | 500 | Segments shorter than this are dropped |
+
+### 11.2 What Gets Removed
+
+**20 filler words/phrases:** um, uh, uhm, uhh, hmm, hm, like, basically, literally, actually, you know, i mean, right, okay, ok, so, well, yeah, yep, erm
+
+**Multi-word detection:** "you know" and "i mean" are detected as consecutive word pairs, not just individual words.
+
+**Silence gaps:** Any pause exceeding `pause_threshold_ms` (from the `silence_gaps` table).
+
+### 11.3 Workflow
+
+1. Call `clipcannon_auto_trim` to get optimized segments
+2. Review the `time_saved_pct` and `removed_fillers` count
+3. Feed the returned `segments` directly into `clipcannon_create_edit`
+
+```
+auto_trim → returns segments[] → create_edit(segments=segments)
+```
+
+### 11.4 Tuning
+
+- **Aggressive trim** (TikTok/Reels): `pause_threshold_ms: 500, min_segment_ms: 300`
+- **Gentle trim** (LinkedIn/YouTube): `pause_threshold_ms: 1200, min_segment_ms: 1000`
+- **Default**: Good for most content, removes ~5-15% of duration
+
+---
+
+## 12. Color Grading
+
+Use `clipcannon_color_adjust` to apply color correction globally or per-segment. Changes are stored in the EDL and applied during rendering via FFmpeg eq and hue filters.
+
+### 12.1 Parameters
+
+| Parameter | Range | Default | Effect |
+|-----------|-------|---------|--------|
+| `brightness` | -1.0 to 1.0 | 0.0 | Darker (negative) to brighter (positive) |
+| `contrast` | 0.0 to 3.0 | 1.0 | Flat (0) to punchy (>1) |
+| `saturation` | 0.0 to 3.0 | 1.0 | Grayscale (0) to vivid (>1) |
+| `gamma` | 0.1 to 10.0 | 1.0 | Shadow lift (<1) or crush (>1) |
+| `hue_shift` | -180 to 180 | 0.0 | Rotate color wheel in degrees |
+
+### 12.2 Global vs Per-Segment
+
+**Global** (omit `segment_id`): Applies to entire edit. Use for consistent color grade.
+
+**Per-segment** (include `segment_id`): Overrides global for that segment. Use for:
+- Warming a face close-up while keeping screen content neutral
+- Desaturating B-roll sections
+- Different color temperatures for different scenes
+
+### 12.3 Platform Recommendations
+
+| Platform | Recommended Grade |
+|----------|-------------------|
+| TikTok | contrast=1.2, saturation=1.15 (punchy, vibrant) |
+| Instagram | contrast=1.1, saturation=1.1 (polished, warm) |
+| YouTube | contrast=1.05, brightness=0.05 (clean, natural) |
+| LinkedIn | contrast=1.0, saturation=0.95 (muted, professional) |
+
+---
+
+## 13. Motion Effects
+
+Use `clipcannon_add_motion` to add camera-like movement to segments. Applied per-segment via FFmpeg zoompan filter.
+
+### 13.1 Available Effects
+
+| Effect | Description | Best For |
+|--------|-------------|----------|
+| `zoom_in` | Gradually zoom into center | Drawing attention, emphasis |
+| `zoom_out` | Gradually zoom out from center | Reveal, establishing shots |
+| `pan_left` | Slide view left to right | Following content, scanning |
+| `pan_right` | Slide view right to left | Following content, scanning |
+| `pan_up` | Slide view upward | Scrolling content, reveals |
+| `pan_down` | Slide view downward | Scrolling content, reveals |
+| `ken_burns` | Zoom + diagonal pan simultaneously | Cinematic feel, still images |
+
+### 13.2 Parameters
+
+| Parameter | Range | Default | Description |
+|-----------|-------|---------|-------------|
+| `start_scale` | 0.5 - 3.0 | 1.0 | Starting zoom factor |
+| `end_scale` | 0.5 - 3.0 | 1.3 | Ending zoom factor |
+| `easing` | linear, ease_in, ease_out, ease_in_out | linear | Speed curve |
+
+### 13.3 Usage Guidelines
+
+- **Subtle zoom (1.0 -> 1.1):** Adds life to static shots without being distracting
+- **Moderate zoom (1.0 -> 1.3):** Good for emphasis, ken burns on screenshots
+- **Strong zoom (1.0 -> 2.0):** Dramatic push-in, use sparingly
+- **Zoom out (1.3 -> 1.0):** Good reveal effect for opening shots
+- **Ken Burns:** Best for still images, screenshots, or slow moments
+- **Panning:** Best when content extends beyond the visible area
+
+### 13.4 Combining with Other Features
+
+Motion effects combine with color grading and overlays. The rendering pipeline applies them in order: motion (zoompan) -> color (eq/hue) -> captions (ASS) -> overlays (drawtext).
+
+---
+
+## 14. Text and Graphic Overlays
+
+Use `clipcannon_add_overlay` to add lower thirds, title cards, logos, watermarks, and call-to-action buttons. Multiple overlays can be stacked on a single edit.
+
+### 14.1 Overlay Types
+
+| Type | Description | Typical Use |
+|------|-------------|-------------|
+| `lower_third` | Name + subtitle on semi-transparent bar | Speaker identification |
+| `title_card` | Large centered text on full background | Chapter titles, intro screens |
+| `logo` | Text or image at specified position | Brand identity |
+| `watermark` | Semi-transparent text at corner | Attribution, branding |
+| `cta` | Button-style text with background | "Subscribe", "Learn More" |
+
+### 14.2 Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `text` | (required) | Main text content |
+| `subtitle` | "" | Second line (lower_third only) |
+| `position` | bottom_left | bottom_left/center/right, top_left/center/right, center |
+| `start_ms` | (required) | When overlay appears (output timeline) |
+| `end_ms` | (required) | When overlay disappears |
+| `font_size` | 36 | Font size (8-200) |
+| `text_color` | #FFFFFF | Text color |
+| `bg_color` | #000000 | Background color |
+| `bg_opacity` | 0.7 | Background transparency (0-1) |
+| `opacity` | 1.0 | Overall overlay transparency |
+| `animation` | fade_in | none, fade_in, fade_out, slide_up, slide_down |
+| `animation_duration_ms` | 500 | Animation duration (0-3000ms) |
+
+### 14.3 Lower Third Placement
+
+Lower thirds must sit within the platform safe zone. Recommended placement:
+
+| Platform | Position | Notes |
+|----------|----------|-------|
+| TikTok | bottom_left, y < 1500 | Avoid right-side buttons |
+| Instagram | bottom_left, y < 1460 | Avoid right-side + bottom |
+| YouTube | bottom_left, y < 1480 | Above subscribe button |
+| LinkedIn | bottom_left, y < 1520 | Above author info |
+
+**Timing rule:** Show lower third for 3-5 seconds. Fade in within first 500ms.
+
+### 14.4 Overlay Combinations
+
+Common overlay patterns:
+
+```
+Edit start:
+  title_card "Product Demo" (0-3000ms)
+
+Speaker appears:
+  lower_third "Jane Doe" / "Product Manager" (3000-8000ms)
+
+Full video:
+  watermark "@YourBrand" (0-end, opacity=0.3, top_right)
+
+Call to action:
+  cta "Try it free" (last 5 seconds, bottom_center)
+```
+
+---
+
+## 15. Audio Cleanup
+
+Use `clipcannon_audio_cleanup` to remove noise, hum, sibilance, or normalize loudness before mixing. Processes the source audio via FFmpeg filters and saves a cleaned copy.
+
+### 15.1 Operations
+
+| Operation | FFmpeg Filter | Description |
+|-----------|---------------|-------------|
+| `noise_reduction` | anlmdn | Gentle non-local means denoising for background noise |
+| `de_hum` | bandreject (3 harmonics) | Remove electrical hum at 50Hz (EU) or 60Hz (US) |
+| `de_ess` | highpass + lowpass | Reduce harsh sibilance (s, sh, ch sounds) |
+| `normalize_loudness` | loudnorm (EBU R128) | Normalize to -16 LUFS broadcast standard |
+
+### 15.2 Usage
+
+```json
+{
+  "project_id": "proj_xxx",
+  "edit_id": "edit_xxx",
+  "operations": ["noise_reduction", "normalize_loudness"],
+  "hum_frequency": 60
+}
+```
+
+**Audio source priority:** vocals.wav (stem) > audio_original.wav > audio_16k.wav > any .wav in stems/
+
+### 15.3 When to Use Each Operation
+
+| Scenario | Operations |
+|----------|-----------|
+| Office recording (AC hum, keyboard) | noise_reduction, de_hum |
+| Laptop mic (tinny, sibilant) | de_ess, normalize_loudness |
+| Quiet room, good mic | normalize_loudness only |
+| Noisy environment (fan, traffic) | noise_reduction, normalize_loudness |
+| All-purpose cleanup | noise_reduction, de_hum, normalize_loudness |
+
+### 15.4 Order of Operations
+
+Filters are applied in this order: noise_reduction -> de_hum -> de_ess -> normalize_loudness. This order prevents the normalizer from amplifying noise that should have been removed first.
+
+---
+
+## 16. Clip Preview
+
+Use `clipcannon_preview_clip` to render a quick 2-5 second preview at low quality before committing to a full render. No credits charged.
+
+### 16.1 Specs
+
+| Property | Value |
+|----------|-------|
+| Resolution | 540 x 960 (half of 1080x1920) |
+| Bitrate | 1 Mbps |
+| Preset | ultrafast |
+| Max duration | 5 seconds |
+| Cost | 0 credits |
+| Typical render time | 500-1000ms |
+
+### 16.2 Usage
+
+```json
+{
+  "project_id": "proj_xxx",
+  "start_ms": 5000,
+  "duration_ms": 3000
+}
+```
+
+Returns the preview video path and an inline thumbnail image.
+
+### 16.3 When to Preview
+
+- After setting up segments, before rendering
+- After applying color grading, to check the look
+- At key timestamps (hook, CTA, transitions)
+- When testing different crop/layout options
+
+---
+
+## 17. Render Inspection
+
+Use `clipcannon_inspect_render` after rendering to verify the output quality. Extracts frames at 5 key points and runs automated quality checks.
+
+### 17.1 What It Checks
+
+| Check | Pass Criteria |
+|-------|---------------|
+| File size | > 1 KB |
+| Duration match | Within 5% or 500ms of expected |
+| Resolution match | Exact match to profile |
+| Codec match | Matches encoding profile |
+| Has audio | Audio stream present |
+
+### 17.2 Frame Extraction Points
+
+Frames are extracted at: **start (0ms)**, **25%**, **50%**, **75%**, **end (-100ms)**
+
+### 17.3 Workflow
+
+```
+render → get render_id → inspect_render(render_id)
+         → check all_checks_passed
+         → review frame images at key timestamps
+         → if issues found, modify edit and re-render
+```
+
+---
+
+## 18. Complete Editing Workflow
+
+End-to-end workflow combining all features:
+
+```
+1. PROJECT SETUP
+   clipcannon_project_create → clipcannon_ingest → wait for "ready"
+
+2. UNDERSTAND CONTENT
+   clipcannon_get_editing_context → one call for all editing data
+   clipcannon_get_vud_summary → overview of content
+   clipcannon_analyze_frame → detect webcam/screen regions
+
+3. PLAN THE EDIT
+   clipcannon_auto_trim → remove fillers/pauses → get clean segments
+   Review highlights, pacing, topics for best moments
+
+4. CREATE THE EDIT
+   clipcannon_create_edit → segments from auto_trim or manual selection
+   Captions auto-generated from transcript words
+
+5. ENHANCE THE EDIT
+   clipcannon_color_adjust → global and per-segment color grading
+   clipcannon_add_motion → ken burns, zoom, pan per segment
+   clipcannon_add_overlay → lower third, title card, watermark, CTA
+
+6. CLEAN THE AUDIO
+   clipcannon_audio_cleanup → noise reduction, de-hum, normalize
+
+7. PREVIEW
+   clipcannon_preview_clip → quick 3s check at key timestamps
+   clipcannon_preview_layout → validate canvas compositing
+
+8. GENERATE METADATA
+   clipcannon_generate_metadata → title, description, hashtags
+
+9. RENDER
+   clipcannon_render → full quality platform-optimized output
+
+10. VERIFY
+    clipcannon_inspect_render → check frames, metadata, quality
+    If issues → modify_edit → re-render
+```
+
+---
+
 ## Appendix A: Pixel Reference Quick Sheet
 
 | Measurement | Value |
@@ -666,3 +1003,78 @@ Verify every item before rendering. Failed checks must be corrected.
 | Subtitle bar bg (LinkedIn) | #1A1A1A @ 80% |
 | Word highlight (TikTok) | #FFD700 or #00E5FF |
 | PIP border | #FFFFFF, 3px solid |
+
+## Appendix D: Complete Tool Reference (45 Tools)
+
+### Project Management (5)
+| Tool | Purpose |
+|------|---------|
+| `clipcannon_project_create` | Create project from source video |
+| `clipcannon_project_open` | Open existing project |
+| `clipcannon_project_list` | List projects (filter by status) |
+| `clipcannon_project_status` | Detailed status with pipeline progress |
+| `clipcannon_project_delete` | Delete project (optionally keep source) |
+
+### Understanding (7)
+| Tool | Purpose |
+|------|---------|
+| `clipcannon_ingest` | Run 16-stream analysis pipeline |
+| `clipcannon_get_vud_summary` | Compact summary (~8K tokens) |
+| `clipcannon_get_analytics` | Detailed analytics by section |
+| `clipcannon_get_transcript` | Word-level timestamps, paginated |
+| `clipcannon_get_segment_detail` | All stream data for a time range |
+| `clipcannon_get_frame` | Frame + moment context at timestamp |
+| `clipcannon_search_content` | Semantic or text search |
+
+### Editing (8)
+| Tool | Purpose |
+|------|---------|
+| `clipcannon_create_edit` | Create edit from segment spec |
+| `clipcannon_modify_edit` | Update draft edit |
+| `clipcannon_list_edits` | List edits (filter by status) |
+| `clipcannon_generate_metadata` | Auto-generate title/description/hashtags |
+| `clipcannon_auto_trim` | Remove filler words and long pauses |
+| `clipcannon_color_adjust` | Apply color grading (global or per-segment) |
+| `clipcannon_add_motion` | Add zoom/pan/ken burns to segment |
+| `clipcannon_add_overlay` | Add lower third, title card, watermark, CTA |
+
+### Rendering (8)
+| Tool | Purpose |
+|------|---------|
+| `clipcannon_render` | Full-quality render (2 credits) |
+| `clipcannon_render_status` | Check render job status |
+| `clipcannon_render_batch` | Render multiple edits concurrently |
+| `clipcannon_get_editing_context` | All editing data in one call |
+| `clipcannon_analyze_frame` | Detect content regions and PIP overlay |
+| `clipcannon_preview_clip` | Low-quality 2-5s preview (0 credits) |
+| `clipcannon_inspect_render` | Verify rendered output with frame extraction |
+| `clipcannon_preview_layout` | Single-frame canvas layout preview |
+
+### Audio (4)
+| Tool | Purpose |
+|------|---------|
+| `clipcannon_generate_music` | AI music from text prompt (GPU) |
+| `clipcannon_compose_midi` | MIDI from presets (CPU) |
+| `clipcannon_generate_sfx` | DSP sound effects (CPU, instant) |
+| `clipcannon_audio_cleanup` | Noise/hum/ess removal, loudness normalization |
+
+### Billing (4)
+| Tool | Purpose |
+|------|---------|
+| `clipcannon_credits_balance` | Current balance and spending |
+| `clipcannon_credits_history` | Transaction history |
+| `clipcannon_credits_estimate` | Cost estimate for operation |
+| `clipcannon_spending_limit` | Set monthly spending limit |
+
+### System (9)
+| Tool | Purpose |
+|------|---------|
+| `clipcannon_provenance_verify` | Verify hash chain integrity |
+| `clipcannon_provenance_query` | Query provenance records |
+| `clipcannon_provenance_chain` | Walk chain from genesis |
+| `clipcannon_provenance_timeline` | Chronological provenance events |
+| `clipcannon_disk_status` | Disk usage by tier |
+| `clipcannon_disk_cleanup` | Free disk space |
+| `clipcannon_config_get` | Get config value |
+| `clipcannon_config_set` | Set config value |
+| `clipcannon_config_list` | List all config values |

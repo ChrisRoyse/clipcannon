@@ -108,6 +108,42 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
         },
     ),
     Tool(
+        name="clipcannon_preview_clip",
+        description=(
+            "Render a short (2-5 second) low-quality preview of an edit at a specific time range. "
+            "No credits charged. Uses 540p resolution and fast encoding for quick validation."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string", "description": "Project identifier"},
+                "start_ms": {"type": "integer", "description": "Start time in source video (ms)"},
+                "duration_ms": {
+                    "type": "integer",
+                    "description": "Preview duration (ms, max 5000)",
+                    "default": 3000,
+                },
+            },
+            "required": ["project_id", "start_ms"],
+        },
+    ),
+    Tool(
+        name="clipcannon_inspect_render",
+        description=(
+            "Inspect a rendered video output. Extracts frames at 5 key timestamps "
+            "(start, 25%%, 50%%, 75%%, end), probes metadata, and runs quality checks. "
+            "Returns inline frame images, metadata comparison, and pass/fail results."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string", "description": "Project identifier"},
+                "render_id": {"type": "string", "description": "Render identifier to inspect"},
+            },
+            "required": ["project_id", "render_id"],
+        },
+    ),
+    Tool(
         name="clipcannon_preview_layout",
         description=(
             "Generate a single preview frame showing what a canvas "

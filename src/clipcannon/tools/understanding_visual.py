@@ -6,6 +6,7 @@ visual and temporal data.
 
 from __future__ import annotations
 
+import base64
 import logging
 from typing import TYPE_CHECKING
 
@@ -119,8 +120,6 @@ async def clipcannon_get_frame(project_id: str, timestamp_ms: int) -> dict[str, 
     context = _get_moment_context(_db_path(project_id), project_id, actual_ms)
 
     # Encode frame as base64 for inline image viewing
-    import base64
-
     try:
         image_b64 = base64.b64encode(frame_path.read_bytes()).decode("ascii")
         image_payload = {"data": image_b64, "mimeType": "image/jpeg"}
@@ -137,7 +136,6 @@ async def clipcannon_get_frame(project_id: str, timestamp_ms: int) -> dict[str, 
     if image_payload is not None:
         result["_image"] = image_payload
     return result
-
 
 
 async def clipcannon_get_segment_detail(

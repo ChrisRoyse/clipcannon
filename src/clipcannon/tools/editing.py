@@ -16,7 +16,9 @@ from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all, fetch_one
 from clipcannon.editing.edl import (
     CanvasSpec,
+    ColorSpec,
     EditDecisionList,
+    MotionSpec,
     OverlaySpec,
     RenderSettingsSpec,
     compute_total_duration,
@@ -157,7 +159,7 @@ async def clipcannon_create_edit(
             crop=crop_spec,
             canvas=canvas_spec,
             audio=audio_spec,
-            overlays=OverlaySpec(),
+            overlays=[],
             metadata=metadata_spec,
             render_settings=RenderSettingsSpec(profile=target_profile),
         )
@@ -522,6 +524,257 @@ async def clipcannon_generate_metadata(
 
 
 # ============================================================
+# TOOL 5: clipcannon_auto_trim
+# ============================================================
+async def clipcannon_auto_trim(
+    project_id: str,
+    pause_threshold_ms: int = 800,
+    merge_gap_ms: int = 200,
+    min_segment_ms: int = 500,
+) -> dict[str, object]:
+    """Analyze transcript and generate trimmed segments removing fillers and pauses."""
+    from clipcannon.editing.auto_trim import auto_trim
+
+    err = validate_project(project_id)
+    if err is not None:
+        return err
+
+    try:
+        result = auto_trim(
+            db_path=str(db_path(project_id)),
+            project_id=project_id,
+            pause_threshold_ms=pause_threshold_ms,
+            merge_gap_ms=merge_gap_ms,
+            min_segment_ms=min_segment_ms,
+        )
+        return result
+    except ValueError as exc:
+        return error_response("INVALID_PARAMETER", str(exc))
+    except Exception as exc:
+        logger.exception("auto_trim failed for %s", project_id)
+        return error_response("INTERNAL_ERROR", f"Auto-trim failed: {exc}")
+
+
+# ============================================================
+# TOOL 6: clipcannon_color_adjust
+# ============================================================
+async def clipcannon_color_adjust(
+    project_id: str,
+    edit_id: str,
+    brightness: float = 0.0,
+    contrast: float = 1.0,
+    saturation: float = 1.0,
+    gamma: float = 1.0,
+    hue_shift: float = 0.0,
+    segment_id: int | None = None,
+) -> dict[str, object]:
+    """Apply color grading to an edit globally or per-segment."""
+    err = validate_project(project_id)
+    if err is not None:
+        return err
+
+    try:
+        color = ColorSpec(
+            brightness=brightness, contrast=contrast,
+            saturation=saturation, gamma=gamma, hue_shift=hue_shift,
+        )
+    except Exception as exc:
+        return error_response("INVALID_PARAMETER", f"Invalid color values: {exc}")
+
+    # Load existing EDL
+    db = db_path(project_id)
+    conn = get_connection(db, enable_vec=False, dict_rows=True)
+    try:
+        row = fetch_one(
+            conn,
+            "SELECT edl_json, status FROM edits "
+            "WHERE edit_id = ? AND project_id = ?",
+            (edit_id, project_id),
+        )
+        if row is None:
+            return error_response("EDIT_NOT_FOUND", f"Edit not found: {edit_id}")
+        if row["status"] != "draft":
+            return error_response("INVALID_STATE", f"Edit must be draft, is: {row['status']}")
+
+        edl = EditDecisionList(**json.loads(row["edl_json"]))
+
+        if segment_id is not None:
+            # Apply to specific segment
+            found = False
+            for seg in edl.segments:
+                if seg.segment_id == segment_id:
+                    seg.color = color
+                    found = True
+                    break
+            if not found:
+                return error_response("SEGMENT_NOT_FOUND", f"Segment {segment_id} not found")
+            scope = f"segment {segment_id}"
+        else:
+            # Apply globally
+            edl.color = color
+            scope = "global"
+
+        # Save back
+        execute(
+            conn,
+            "UPDATE edits SET edl_json = ?,"
+            " updated_at = datetime('now') WHERE edit_id = ?",
+            (edl.model_dump_json(), edit_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "edit_id": edit_id,
+        "scope": scope,
+        "color": color.model_dump(),
+        "message": f"Color grading applied ({scope})",
+    }
+
+
+# ============================================================
+# TOOL 7: clipcannon_add_motion
+# ============================================================
+async def clipcannon_add_motion(
+    project_id: str,
+    edit_id: str,
+    segment_id: int,
+    effect: str,
+    start_scale: float = 1.0,
+    end_scale: float = 1.3,
+    easing: str = "linear",
+) -> dict[str, object]:
+    """Add motion effect to a segment."""
+    err = validate_project(project_id)
+    if err is not None:
+        return err
+
+    try:
+        motion = MotionSpec(
+            effect=effect,
+            start_scale=start_scale,
+            end_scale=end_scale,
+            easing=easing,
+        )
+    except Exception as exc:
+        return error_response("INVALID_PARAMETER", f"Invalid motion values: {exc}")
+
+    db = db_path(project_id)
+    conn = get_connection(db, enable_vec=False, dict_rows=True)
+    try:
+        row = fetch_one(
+            conn,
+            "SELECT edl_json, status FROM edits "
+            "WHERE edit_id = ? AND project_id = ?",
+            (edit_id, project_id),
+        )
+        if row is None:
+            return error_response("EDIT_NOT_FOUND", f"Edit not found: {edit_id}")
+        if row["status"] != "draft":
+            return error_response("INVALID_STATE", f"Edit must be draft, is: {row['status']}")
+
+        edl = EditDecisionList(**json.loads(row["edl_json"]))
+
+        found = False
+        for seg in edl.segments:
+            if seg.segment_id == segment_id:
+                seg.motion = motion
+                found = True
+                break
+        if not found:
+            return error_response("SEGMENT_NOT_FOUND", f"Segment {segment_id} not found")
+
+        execute(
+            conn,
+            "UPDATE edits SET edl_json = ?,"
+            " updated_at = datetime('now') WHERE edit_id = ?",
+            (edl.model_dump_json(), edit_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "edit_id": edit_id,
+        "segment_id": segment_id,
+        "motion": motion.model_dump(),
+        "message": f"Motion effect '{effect}' applied to segment {segment_id}",
+    }
+
+
+# ============================================================
+# TOOL 8: clipcannon_add_overlay
+# ============================================================
+async def clipcannon_add_overlay(
+    project_id: str,
+    edit_id: str,
+    overlay_type: str,
+    text: str,
+    start_ms: int,
+    end_ms: int,
+    subtitle: str = "",
+    position: str = "bottom_left",
+    opacity: float = 1.0,
+    font_size: int = 36,
+    text_color: str = "#FFFFFF",
+    bg_color: str = "#000000",
+    bg_opacity: float = 0.7,
+    animation: str = "fade_in",
+    animation_duration_ms: int = 500,
+) -> dict[str, object]:
+    """Add a visual overlay to an edit."""
+    err = validate_project(project_id)
+    if err is not None:
+        return err
+
+    try:
+        overlay = OverlaySpec(
+            overlay_type=overlay_type, text=text, subtitle=subtitle,
+            position=position, start_ms=start_ms, end_ms=end_ms,
+            opacity=opacity, font_size=font_size, text_color=text_color,
+            bg_color=bg_color, bg_opacity=bg_opacity, animation=animation,
+            animation_duration_ms=animation_duration_ms,
+        )
+    except Exception as exc:
+        return error_response("INVALID_PARAMETER", f"Invalid overlay: {exc}")
+
+    db = db_path(project_id)
+    conn = get_connection(db, enable_vec=False, dict_rows=True)
+    try:
+        row = fetch_one(
+            conn,
+            "SELECT edl_json, status FROM edits "
+            "WHERE edit_id = ? AND project_id = ?",
+            (edit_id, project_id),
+        )
+        if row is None:
+            return error_response("EDIT_NOT_FOUND", f"Edit not found: {edit_id}")
+        if row["status"] != "draft":
+            return error_response("INVALID_STATE", f"Edit must be draft, is: {row['status']}")
+
+        edl = EditDecisionList(**json.loads(row["edl_json"]))
+        edl.overlays.append(overlay)
+
+        execute(
+            conn,
+            "UPDATE edits SET edl_json = ?,"
+            " updated_at = datetime('now') WHERE edit_id = ?",
+            (edl.model_dump_json(), edit_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "edit_id": edit_id,
+        "overlay_count": len(edl.overlays),
+        "overlay": overlay.model_dump(),
+        "message": f"Added {overlay_type} overlay to edit",
+    }
+
+
+# ============================================================
 # DISPATCH
 # ============================================================
 async def dispatch_editing_tool(
@@ -566,6 +819,52 @@ async def dispatch_editing_tool(
             project_id=str(arguments["project_id"]),
             edit_id=str(arguments["edit_id"]),
             target_platform=str(platform_raw) if platform_raw is not None else None,
+        )
+    if name == "clipcannon_auto_trim":
+        return await clipcannon_auto_trim(
+            str(arguments["project_id"]),
+            int(arguments.get("pause_threshold_ms", 800)),
+            int(arguments.get("merge_gap_ms", 200)),
+            int(arguments.get("min_segment_ms", 500)),
+        )
+    if name == "clipcannon_color_adjust":
+        return await clipcannon_color_adjust(
+            str(arguments["project_id"]),
+            str(arguments["edit_id"]),
+            float(arguments.get("brightness", 0.0)),
+            float(arguments.get("contrast", 1.0)),
+            float(arguments.get("saturation", 1.0)),
+            float(arguments.get("gamma", 1.0)),
+            float(arguments.get("hue_shift", 0.0)),
+            int(arguments["segment_id"]) if arguments.get("segment_id") is not None else None,
+        )
+    if name == "clipcannon_add_motion":
+        return await clipcannon_add_motion(
+            str(arguments["project_id"]),
+            str(arguments["edit_id"]),
+            int(arguments["segment_id"]),
+            str(arguments["effect"]),
+            float(arguments.get("start_scale", 1.0)),
+            float(arguments.get("end_scale", 1.3)),
+            str(arguments.get("easing", "linear")),
+        )
+    if name == "clipcannon_add_overlay":
+        return await clipcannon_add_overlay(
+            str(arguments["project_id"]),
+            str(arguments["edit_id"]),
+            str(arguments["overlay_type"]),
+            str(arguments["text"]),
+            int(arguments["start_ms"]),
+            int(arguments["end_ms"]),
+            str(arguments.get("subtitle", "")),
+            str(arguments.get("position", "bottom_left")),
+            float(arguments.get("opacity", 1.0)),
+            int(arguments.get("font_size", 36)),
+            str(arguments.get("text_color", "#FFFFFF")),
+            str(arguments.get("bg_color", "#000000")),
+            float(arguments.get("bg_opacity", 0.7)),
+            str(arguments.get("animation", "fade_in")),
+            int(arguments.get("animation_duration_ms", 500)),
         )
 
     return error_response("INTERNAL_ERROR", f"Unknown editing tool: {name}")

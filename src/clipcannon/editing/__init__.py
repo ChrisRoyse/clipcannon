@@ -14,8 +14,11 @@ from clipcannon.editing.captions import (
 from clipcannon.editing.edl import (
     AudioSpec,
     CaptionSpec,
+    ColorSpec,
     CropSpec,
     EditDecisionList,
+    MotionSpec,
+    OverlaySpec,
     SegmentSpec,
     compute_total_duration,
     validate_edl,
@@ -31,8 +34,11 @@ from clipcannon.editing.smart_crop import (
 __all__ = [
     "AudioSpec",
     "CaptionSpec",
+    "ColorSpec",
     "CropSpec",
     "EditDecisionList",
+    "MotionSpec",
+    "OverlaySpec",
     "PLATFORM_ASPECTS",
     "SegmentSpec",
     "chunk_transcript_words",

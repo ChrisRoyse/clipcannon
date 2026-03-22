@@ -14,6 +14,11 @@ with speech-aware ducking and loudness normalization.
 
 from __future__ import annotations
 
+from clipcannon.audio.cleanup import (
+    SUPPORTED_CLEANUP_OPS,
+    CleanupResult,
+    cleanup_audio,
+)
 from clipcannon.audio.effects import SUPPORTED_EFFECTS, apply_effects
 from clipcannon.audio.midi_compose import (
     PRESETS,
@@ -31,15 +36,18 @@ from clipcannon.audio.sfx import (
 )
 
 __all__ = [
+    "CleanupResult",
     "MidiResult",
     "MixResult",
     "MusicResult",
     "PRESETS",
     "SAMPLE_RATE",
+    "SUPPORTED_CLEANUP_OPS",
     "SUPPORTED_EFFECTS",
     "SUPPORTED_SFX_TYPES",
     "SfxResult",
     "apply_effects",
+    "cleanup_audio",
     "compose_midi",
     "generate_music",
     "generate_sfx",

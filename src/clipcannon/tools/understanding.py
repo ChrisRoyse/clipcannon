@@ -90,11 +90,6 @@ async def clipcannon_ingest(
             " WHERE project_id = ?",
             (project_id,),
         )
-        fetch_one(
-            conn,
-            "SELECT duration_ms FROM project WHERE project_id = ?",
-            (project_id,),
-        )
         conn.commit()
     finally:
         conn.close()

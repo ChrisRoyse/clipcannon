@@ -172,6 +172,14 @@ class SegmentSpec(BaseModel):
         "the top-level CanvasSpec for this segment only. "
         "Enables different layouts per segment.",
     )
+    motion: MotionSpec | None = Field(
+        default=None,
+        description="Motion effect (zoom, pan, ken burns) for this segment.",
+    )
+    color: ColorSpec | None = Field(
+        default=None,
+        description="Per-segment color grading override.",
+    )
 
     @field_validator("source_end_ms")
     @classmethod
@@ -460,13 +468,112 @@ class AudioSpec(BaseModel):
     ducking: DuckingSpec = Field(default_factory=DuckingSpec)
 
 
-class OverlaySpec(BaseModel):
-    """Visual overlay configuration (placeholder for Phase 3)."""
+# Overlay type literals
+OverlayType = Literal[
+    "lower_third",
+    "title_card",
+    "logo",
+    "watermark",
+    "cta",
+]
 
-    lower_third: dict[str, object] | None = None
-    title_card: dict[str, object] | None = None
-    animations: list[dict[str, object]] = Field(default_factory=list)
-    watermark: dict[str, object] | None = None
+# Overlay position literals
+OverlayPosition = Literal[
+    "bottom_left",
+    "bottom_center",
+    "bottom_right",
+    "top_left",
+    "top_center",
+    "top_right",
+    "center",
+]
+
+# Overlay animation literals
+OverlayAnimation = Literal[
+    "none",
+    "fade_in",
+    "fade_out",
+    "slide_up",
+    "slide_down",
+]
+
+
+class OverlaySpec(BaseModel):
+    """Visual overlay specification for text, graphics, or images.
+
+    Supports lower thirds (speaker name/title), title cards,
+    logos, watermarks, and call-to-action buttons. Each overlay
+    has position, timing, styling, and optional animation.
+    """
+
+    overlay_type: OverlayType
+    text: str = ""
+    subtitle: str = ""
+    image_path: str | None = None
+    position: OverlayPosition = "bottom_left"
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+    opacity: float = Field(default=1.0, ge=0.0, le=1.0)
+    font: str = "Montserrat"
+    font_size: int = Field(default=36, ge=8, le=200)
+    text_color: str = "#FFFFFF"
+    bg_color: str = "#000000"
+    bg_opacity: float = Field(default=0.7, ge=0.0, le=1.0)
+    animation: OverlayAnimation = "fade_in"
+    animation_duration_ms: int = Field(default=500, ge=0, le=3000)
+
+    @field_validator("end_ms")
+    @classmethod
+    def overlay_end_after_start(cls, v: int, info: object) -> int:
+        """Validate end_ms > start_ms for overlay timing."""
+        data = getattr(info, "data", {})
+        start = data.get("start_ms")
+        if start is not None and v <= start:
+            msg = f"end_ms ({v}) must be > start_ms ({start})"
+            raise ValueError(msg)
+        return v
+
+
+# Motion effect type literals
+MotionEffect = Literal[
+    "zoom_in",
+    "zoom_out",
+    "pan_left",
+    "pan_right",
+    "pan_up",
+    "pan_down",
+    "ken_burns",
+]
+
+# Motion easing literals
+MotionEasing = Literal["linear", "ease_in", "ease_out", "ease_in_out"]
+
+
+class MotionSpec(BaseModel):
+    """Motion/animation effect applied to a segment.
+
+    Generates FFmpeg zoompan filter for smooth camera-like
+    movements. Ken Burns combines zoom + pan simultaneously.
+    """
+
+    effect: MotionEffect
+    start_scale: float = Field(default=1.0, ge=0.5, le=3.0)
+    end_scale: float = Field(default=1.3, ge=0.5, le=3.0)
+    easing: MotionEasing = "linear"
+
+
+class ColorSpec(BaseModel):
+    """Color grading and visual adjustment specification.
+
+    Applied via FFmpeg eq and hue filters. Can be set globally
+    on the EDL or per-segment for targeted color correction.
+    """
+
+    brightness: float = Field(default=0.0, ge=-1.0, le=1.0)
+    contrast: float = Field(default=1.0, ge=0.0, le=3.0)
+    saturation: float = Field(default=1.0, ge=0.0, le=3.0)
+    gamma: float = Field(default=1.0, ge=0.1, le=10.0)
+    hue_shift: float = Field(default=0.0, ge=-180.0, le=180.0)
 
 
 class MetadataSpec(BaseModel):
@@ -513,7 +620,14 @@ class EditDecisionList(BaseModel):
     crop: CropSpec = Field(default_factory=CropSpec)
     canvas: CanvasSpec = Field(default_factory=CanvasSpec)
     audio: AudioSpec = Field(default_factory=AudioSpec)
-    overlays: OverlaySpec = Field(default_factory=OverlaySpec)
+    color: ColorSpec | None = Field(
+        default=None,
+        description="Global color grading applied to entire edit.",
+    )
+    overlays: list[OverlaySpec] = Field(
+        default_factory=list,
+        description="Visual overlays (lower thirds, titles, logos).",
+    )
     metadata: MetadataSpec = Field(default_factory=MetadataSpec)
     render_settings: RenderSettingsSpec = Field(
         default_factory=RenderSettingsSpec,
