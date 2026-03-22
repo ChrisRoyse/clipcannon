@@ -95,6 +95,44 @@ def _project_dir(project_id: str) -> Path:
     return _projects_dir() / project_id
 
 
+def _resolve_source(project_id: str) -> Path | None:
+    """Resolve the source video path for a project.
+
+    Args:
+        project_id: Project identifier.
+
+    Returns:
+        Path to the source video, or None if not found.
+    """
+    from clipcannon.db.connection import get_connection
+    from clipcannon.db.queries import fetch_one
+
+    db = _db_path(project_id)
+    if not db.exists():
+        return None
+
+    conn = get_connection(db, enable_vec=False, dict_rows=True)
+    try:
+        row = fetch_one(
+            conn,
+            "SELECT source_path, source_cfr_path FROM project "
+            "WHERE project_id = ?",
+            (project_id,),
+        )
+    finally:
+        conn.close()
+
+    if row is None:
+        return None
+
+    cfr = row.get("source_cfr_path")
+    if cfr and Path(str(cfr)).exists():
+        return Path(str(cfr))
+
+    source = Path(str(row["source_path"]))
+    return source if source.exists() else None
+
+
 def _validate_project(project_id: str) -> dict[str, object] | None:
     """Validate that a project exists.
 
@@ -517,6 +555,121 @@ async def clipcannon_render_batch(
 
 
 # ============================================================
+# TOOL 4: clipcannon_preview_layout
+# ============================================================
+async def clipcannon_preview_layout(
+    project_id: str,
+    timestamp_ms: int,
+    canvas_width: int,
+    canvas_height: int,
+    background_color: str,
+    regions: list[dict[str, object]],
+) -> dict[str, object]:
+    """Generate a single preview frame of a canvas layout.
+
+    Renders one composited JPEG at a specific timestamp to validate
+    region coordinates before committing to a full video render.
+
+    Args:
+        project_id: Project identifier.
+        timestamp_ms: Source timestamp in milliseconds.
+        canvas_width: Output canvas width.
+        canvas_height: Output canvas height.
+        background_color: Canvas background hex color.
+        regions: List of region dicts with source/output coordinates.
+
+    Returns:
+        Result dict with preview_path and elapsed_ms.
+    """
+    import asyncio
+    import time
+
+    from clipcannon.editing.edl import CanvasRegion
+    from clipcannon.rendering.ffmpeg_cmd import build_preview_cmd
+
+    start_time = time.monotonic()
+
+    err = _validate_project(project_id)
+    if err is not None:
+        return err
+
+    if not regions:
+        return _error("INVALID_PARAMETER", "At least one region is required")
+
+    if timestamp_ms < 0:
+        return _error("INVALID_PARAMETER", "timestamp_ms must be >= 0")
+
+    # Resolve source path
+    source_path = _resolve_source(project_id)
+    if source_path is None:
+        return _error("PROJECT_NOT_FOUND", f"Source not found: {project_id}")
+
+    # Build CanvasRegion objects from dicts
+    try:
+        canvas_regions = [CanvasRegion(**r) for r in regions]
+    except Exception as exc:
+        return _error(
+            "INVALID_PARAMETER",
+            f"Invalid region data: {exc}",
+            {"error": str(exc)},
+        )
+
+    # Build preview output path
+    project_dir = _project_dir(project_id)
+    preview_dir = project_dir / "previews"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    preview_path = preview_dir / f"preview_{timestamp_ms}ms.jpg"
+
+    # Build and execute FFmpeg command
+    try:
+        cmd = build_preview_cmd(
+            source_path=source_path,
+            output_path=preview_path,
+            timestamp_ms=timestamp_ms,
+            canvas_width=canvas_width,
+            canvas_height=canvas_height,
+            background_color=background_color,
+            regions=canvas_regions,
+        )
+    except ValueError as exc:
+        return _error("INVALID_PARAMETER", str(exc))
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+
+    if proc.returncode != 0:
+        stderr_text = stderr.decode("utf-8", errors="replace")
+        return _error(
+            "RENDER_ERROR",
+            f"Preview generation failed (exit {proc.returncode})",
+            {"stderr": stderr_text[:500]},
+        )
+
+    if not preview_path.exists():
+        return _error(
+            "RENDER_ERROR",
+            "FFmpeg completed but preview file not found",
+        )
+
+    elapsed_ms = int((time.monotonic() - start_time) * 1000)
+
+    return {
+        "project_id": project_id,
+        "timestamp_ms": timestamp_ms,
+        "preview_path": str(preview_path),
+        "canvas_width": canvas_width,
+        "canvas_height": canvas_height,
+        "region_count": len(canvas_regions),
+        "file_size_bytes": preview_path.stat().st_size,
+        "elapsed_ms": elapsed_ms,
+    }
+
+
+# ============================================================
 # DISPATCH
 # ============================================================
 async def dispatch_rendering_tool(
@@ -546,6 +699,15 @@ async def dispatch_rendering_tool(
         return await clipcannon_render_batch(
             project_id=str(arguments["project_id"]),
             edit_ids=[str(e) for e in list(arguments["edit_ids"])],  # type: ignore[union-attr]
+        )
+    if name == "clipcannon_preview_layout":
+        return await clipcannon_preview_layout(
+            project_id=str(arguments["project_id"]),
+            timestamp_ms=int(arguments["timestamp_ms"]),  # type: ignore[arg-type]
+            canvas_width=int(arguments.get("canvas_width", 1080)),  # type: ignore[arg-type]
+            canvas_height=int(arguments.get("canvas_height", 1920)),  # type: ignore[arg-type]
+            background_color=str(arguments.get("background_color", "#000000")),
+            regions=list(arguments["regions"]),  # type: ignore[arg-type]
         )
 
     return _error("INTERNAL_ERROR", f"Unknown rendering tool: {name}")

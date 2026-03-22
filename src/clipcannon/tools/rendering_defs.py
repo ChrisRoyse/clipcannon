@@ -62,4 +62,59 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
             "required": ["project_id", "edit_ids"],
         },
     ),
+    Tool(
+        name="clipcannon_preview_layout",
+        description=(
+            "Generate a single preview frame showing what a canvas "
+            "layout looks like at a specific timestamp. Returns a "
+            "JPEG image path in ~300ms. Use this to validate region "
+            "coordinates before committing to a full video render. "
+            "No credits charged."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+                "timestamp_ms": {
+                    "type": "integer",
+                    "description": (
+                        "Source video timestamp to preview (ms)"
+                    ),
+                },
+                "canvas_width": {
+                    "type": "integer",
+                    "description": "Output canvas width",
+                    "default": 1080,
+                },
+                "canvas_height": {
+                    "type": "integer",
+                    "description": "Output canvas height",
+                    "default": 1920,
+                },
+                "background_color": {
+                    "type": "string",
+                    "description": "Canvas background hex color",
+                    "default": "#000000",
+                },
+                "regions": {
+                    "type": "array",
+                    "description": (
+                        "Canvas regions. Each: {region_id, "
+                        "source_x, source_y, source_width, "
+                        "source_height, output_x, output_y, "
+                        "output_width, output_height, z_index, "
+                        "fit_mode}"
+                    ),
+                    "items": {"type": "object"},
+                    "minItems": 1,
+                },
+            },
+            "required": [
+                "project_id", "timestamp_ms", "regions",
+            ],
+        },
+    ),
 ]
