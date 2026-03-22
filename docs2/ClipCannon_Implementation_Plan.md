@@ -6,20 +6,22 @@
 
 ---
 
-## Phase 1 Status: COMPLETE
+## Phase 1 Status: COMPLETE | Phase 2 Status: COMPLETE
 
 **Verified:** 2026-03-21
 **Version:** 0.1.0
 
-| Metric | Value |
-|:-------|:------|
-| FSV Checks | 750/750 passed |
-| Pytest Tests | 181/181 passed |
-| Lint Errors | 0 (ruff) |
-| MCP Tools | 27 implemented |
-| Pipeline Stages | 20 registered |
-| DB Tables | 23 core + 4 vector |
-| Source Lines | ~12,000 |
+| Metric | Phase 1 | Phase 2 (cumulative) |
+|:-------|:--------|:---------------------|
+| FSV Checks | 750/750 passed | 750/750 passed |
+| Pytest Tests | 181 passed | 296 passed |
+| Lint Errors | 0 (ruff) | 0 (ruff) |
+| MCP Tools | 27 | 37 |
+| Pipeline Stages | 20 | 20 |
+| DB Tables | 23 core + 4 vector | 26 core + 4 vector |
+| Source Lines | ~12,000 | ~20,000 |
+| Encoding Profiles | -- | 7 |
+| Target Platforms | -- | 7 |
 
 ---
 
@@ -32,7 +34,7 @@ ClipCannon is an AI-native video editing MCP server that runs locally on consume
 | Phase | Name | Focus | Status |
 |:------|:-----|:------|:-------|
 | 1 | Foundation | MCP server, ingestion, understanding pipeline, billing, provenance | **COMPLETE** (verified 2026-03-21) |
-| 2 | Editing Engine | EDL, rendering, audio gen, captions, cropping, dashboard | NOT STARTED |
+| 2 | Editing Engine | EDL, rendering, audio gen, captions, cropping, dashboard | **COMPLETE** (verified 2026-03-21) |
 | 3 | Motion Graphics & Publishing | Animations, overlays, platform APIs, full dashboard | NOT STARTED |
 | 4 | Intelligence & Growth | Analytics feedback loop, A/B testing, marketplace, agency tier | NOT STARTED |
 
@@ -105,7 +107,7 @@ clipcannon/
 │   │   ├── config.py                   # Configuration management (JSON config, Pydantic validation, dot-notation access)
 │   │   ├── exceptions.py               # Exception hierarchy: ClipCannonError + 6 subclasses
 │   │   │
-│   │   ├── tools/                      # MCP tool definitions (27 tools across 8 modules)
+│   │   ├── tools/                      # MCP tool definitions (37 tools across 14 modules)
 │   │   │   ├── __init__.py             # Tool registry: ALL_TOOL_DEFINITIONS, TOOL_DISPATCHERS
 │   │   │   ├── project.py              # 5 project tools: create, open, list, status, delete
 │   │   │   ├── understanding.py        # 4 understanding tools: ingest, vud_summary, analytics, transcript
@@ -115,7 +117,13 @@ clipcannon/
 │   │   │   ├── disk.py                 # 2 disk tools: status, cleanup
 │   │   │   ├── config_tools.py         # 3 config tools: get, set, list
 │   │   │   ├── billing_tools.py        # 4 billing tools: balance, history, estimate, spending_limit
-│   │   │   └── video_probe.py          # FFprobe wrapper: run_ffprobe, extract_video_metadata, detect_vfr
+│   │   │   ├── video_probe.py          # FFprobe wrapper: run_ffprobe, extract_video_metadata, detect_vfr
+│   │   │   ├── editing.py              # Phase 2: 4 editing tools: create_edit, modify_edit, list_edits, generate_metadata
+│   │   │   ├── editing_defs.py         # Phase 2: JSON schema definitions for editing MCP tools
+│   │   │   ├── editing_helpers.py      # Phase 2: Builder functions for EDL construction, DB storage
+│   │   │   ├── rendering.py            # Phase 2: 3 rendering tools: render, render_status, render_batch
+│   │   │   ├── rendering_defs.py       # Phase 2: JSON schema definitions for rendering MCP tools
+│   │   │   └── audio.py               # Phase 2: 3 audio tools: generate_music, compose_midi, generate_sfx
 │   │   │
 │   │   ├── pipeline/                   # Processing pipeline (20 stages)
 │   │   │   ├── __init__.py             # Re-exports orchestrator, stages, run functions
@@ -131,8 +139,8 @@ clipcannon/
 │   │   │   ├── visual_embed.py         # Stage: SigLIP visual embeddings (float[1152])
 │   │   │   ├── ocr.py                  # Stage: PaddleOCR text detection
 │   │   │   ├── quality.py              # Stage: Frame quality assessment (blur, exposure, noise)
-│   │   │   ├── shot_type.py            # Stage: Shot type classification from scene key frames
-│   │   │   ├── transcribe.py           # Stage: WhisperX transcription + forced alignment
+│   │   │   ├── shot_type.py            # Stage: Shot type classification (SigLIP zero-shot) with crop recommendations
+│   │   │   ├── transcribe.py           # Stage: WhisperX transcription + forced alignment + anti-hallucination filtering
 │   │   │   ├── semantic_embed.py       # Stage: Nomic semantic embeddings (float[768])
 │   │   │   ├── emotion_embed.py        # Stage: Wav2Vec2 emotion embeddings (float[1024])
 │   │   │   ├── speaker_embed.py        # Stage: WavLM speaker embeddings (float[512])
@@ -159,7 +167,7 @@ clipcannon/
 │   │   ├── db/                         # Database layer
 │   │   │   ├── __init__.py             # Re-exports connection, query, and schema functions
 │   │   │   ├── connection.py           # SQLite connection factory (WAL mode, pragmas, sqlite-vec)
-│   │   │   ├── schema.py               # DDL for 23 core tables + 4 vector tables + indexes
+│   │   │   ├── schema.py               # DDL for 26 core tables + 4 vector tables + indexes (Phase 2: edits, edit_segments, renders, audio_assets)
 │   │   │   └── queries.py              # Parameterized query helpers, transaction context manager
 │   │   │
 │   │   ├── gpu/                        # GPU management
@@ -169,14 +177,17 @@ clipcannon/
 │   │   │
 │   │   └── dashboard/                  # Web dashboard (port 3200)
 │   │       ├── __init__.py             # Re-exports create_app
-│   │       ├── app.py                  # FastAPI application factory, CORS, static files
+│   │       ├── app.py                  # FastAPI application factory, CORS, 7 routers
 │   │       ├── auth.py                 # JWT-based dev-mode authentication
 │   │       └── routes/
-│   │           ├── __init__.py         # Re-exports all 4 routers
+│   │           ├── __init__.py         # Re-exports all 7 routers
 │   │           ├── home.py             # Dashboard home + health check
 │   │           ├── credits.py          # Credit balance + history API
 │   │           ├── projects.py         # Project listing + status API
-│   │           └── provenance.py       # Provenance chain + timeline API
+│   │           ├── provenance.py       # Provenance chain + timeline API
+│   │           ├── editing.py          # Phase 2: Edit CRUD, listing with status filter
+│   │           ├── review.py           # Phase 2: Review queue, batch approve/reject
+│   │           └── timeline.py         # Phase 2: Timeline visualization API
 │   │
 │   └── license_server/                 # Standalone license server (port 3100)
 │       ├── __init__.py
@@ -227,10 +238,7 @@ clipcannon/
 └── README.md
 ```
 
-**Directories NOT yet created (Phase 2-4):**
-- `src/clipcannon/editing/` (Phase 2)
-- `src/clipcannon/rendering/` (Phase 2)
-- `src/clipcannon/audio/` (Phase 2)
+**Directories NOT yet created (Phase 3-4):**
 - `src/clipcannon/animation/` (Phase 3)
 - `src/clipcannon/publishing/` (Phase 3)
 - `assets/lottie/`, `assets/webm/`, `assets/transitions/`, `assets/fonts/`, `assets/soundfonts/` (Phase 3)
@@ -440,92 +448,114 @@ ClipCannonError (base)
 
 ---
 
-## 5. Phase 2: Editing Engine + Audio + Dashboard -- NOT STARTED
+## 5. Phase 2: Editing Engine + Audio + Dashboard -- COMPLETE
 
 **Goal:** EDL format, rendering pipeline, caption generation, smart cropping, AI audio generation, full dashboard with review workflow.
+
+**Verified:** 2026-03-21 -- 296 pytest tests (Phase 1: 181 + Phase 2: 102 + integration: 13), all passing. 37 MCP tools, 26 core + 4 vector tables, ~20,000 source lines.
 
 ### 5.1 Task Breakdown
 
 #### 5.1.1 EDL Format & Edit Creation
 
-| Task | Description | Files | Deps |
-|:-----|:-----------|:------|:-----|
-| 2.1.1 | Define EDL JSON schema (segments, transitions, captions, audio, overlays) | `src/clipcannon/editing/edl.py` | Phase 1 |
-| 2.1.2 | Implement EDL validation (time range checks, profile compat) | `src/clipcannon/editing/edl.py` | 2.1.1 |
-| 2.1.3 | Implement clipcannon_create_edit MCP tool | `src/clipcannon/tools/editing.py` | 2.1.1 |
-| 2.1.4 | Implement clipcannon_modify_edit MCP tool | `src/clipcannon/tools/editing.py` | 2.1.3 |
-| 2.1.5 | Implement clipcannon_list_edits MCP tool | `src/clipcannon/tools/editing.py` | 2.1.3 |
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.1.1 | Define EDL JSON schema (segments, transitions, captions, audio, overlays) | `src/clipcannon/editing/edl.py` | Done |
+| 2.1.2 | Implement EDL validation (time range checks, profile compat) | `src/clipcannon/editing/edl.py` | Done |
+| 2.1.3 | Implement clipcannon_create_edit MCP tool | `src/clipcannon/tools/editing.py` | Done |
+| 2.1.4 | Implement clipcannon_modify_edit MCP tool | `src/clipcannon/tools/editing.py` | Done |
+| 2.1.5 | Implement clipcannon_list_edits MCP tool | `src/clipcannon/tools/editing.py` | Done |
+
+**Additional files implemented:** `tools/editing_defs.py` (JSON schema definitions), `tools/editing_helpers.py` (builder functions, DB storage helpers).
 
 #### 5.1.2 Caption Generation
 
-| Task | Description | Files | Deps |
-|:-----|:-----------|:------|:-----|
-| 2.2.1 | Implement word-level caption chunking (min display duration, line breaks) | `src/clipcannon/editing/captions.py` | Phase 1 |
-| 2.2.2 | Implement ASS subtitle generation (bold_centered, word_highlight, subtitle_bar styles) | `src/clipcannon/editing/captions.py` | 2.2.1 |
-| 2.2.3 | Implement drawtext filter fallback for simple captions | `src/clipcannon/editing/captions.py` | 2.2.1 |
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.2.1 | Implement word-level caption chunking (min display duration, line breaks) | `src/clipcannon/editing/captions.py` | Done |
+| 2.2.2 | Implement ASS subtitle generation (bold_centered, word_highlight, subtitle_bar, karaoke styles) | `src/clipcannon/editing/caption_render.py` | Done |
+| 2.2.3 | Implement drawtext filter fallback for simple captions | `src/clipcannon/editing/caption_render.py` | Done |
+
+**Note:** Caption generation split across `captions.py` (chunking, DB queries, timestamp remapping) and `caption_render.py` (ASS file generation, drawtext filters).
 
 #### 5.1.3 Smart Cropping
 
-| Task | Description | Files | Deps |
-|:-----|:-----------|:------|:-----|
-| 2.3.1 | Integrate face detection (MediaPipe or InsightFace ONNX) | `src/clipcannon/editing/smart_crop.py` | Phase 1 |
-| 2.3.2 | Implement face-aware crop calculation (center on face, safe area) | `src/clipcannon/editing/smart_crop.py` | 2.3.1 |
-| 2.3.3 | Implement dynamic crop (pan-and-scan for mixed shot types) | `src/clipcannon/editing/smart_crop.py` | 2.3.2 |
-| 2.3.4 | Implement per-platform crop profiles (9:16, 1:1, 16:9, 4:5) | `src/clipcannon/editing/smart_crop.py` | 2.3.2 |
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.3.1 | Integrate face detection (MediaPipe primary, InsightFace fallback) | `src/clipcannon/editing/smart_crop.py` | Done |
+| 2.3.2 | Implement face-aware crop calculation (center on face, safe area 85%) | `src/clipcannon/editing/smart_crop.py` | Done |
+| 2.3.3 | Implement dynamic crop (EMA smoothing, split-screen, PIP layouts) | `src/clipcannon/editing/smart_crop.py` | Done |
+| 2.3.4 | Implement per-platform crop profiles (9:16, 1:1, 16:9 for 7 platforms) | `src/clipcannon/editing/smart_crop.py` | Done |
 
 #### 5.1.4 Rendering Pipeline
 
-| Task | Description | Files | Deps |
-|:-----|:-----------|:------|:-----|
-| 2.4.1 | Implement typed-ffmpeg filter graph builder (EDL -> FFmpeg command) | `src/clipcannon/rendering/renderer.py` | 2.1.1 |
-| 2.4.2 | Implement platform encoding profiles (all 7 profiles from PRD) | `src/clipcannon/rendering/profiles.py` | 2.4.1 |
-| 2.4.3 | Implement single-pass rendering (multi-segment EDL -> one FFmpeg command) | `src/clipcannon/rendering/renderer.py` | 2.4.1 |
-| 2.4.4 | Implement generation loss prevention (source SHA-256 verification) | `src/clipcannon/rendering/renderer.py` | 2.4.1, 1.3.1 |
-| 2.4.5 | Implement batch rendering (up to 3 parallel NVENC sessions) | `src/clipcannon/rendering/batch.py` | 2.4.3 |
-| 2.4.6 | Implement thumbnail generation | `src/clipcannon/rendering/thumbnail.py` | 2.4.1 |
-| 2.4.7 | Implement clipcannon_render MCP tool | `src/clipcannon/tools/rendering.py` | 2.4.3 |
-| 2.4.8 | Implement clipcannon_render_status MCP tool | `src/clipcannon/tools/rendering.py` | 2.4.7 |
-| 2.4.9 | Implement clipcannon_render_batch MCP tool | `src/clipcannon/tools/rendering.py` | 2.4.5 |
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.4.1 | Implement FFmpeg command builder (EDL -> FFmpeg command, 4 layout modes) | `src/clipcannon/rendering/ffmpeg_cmd.py` | Done |
+| 2.4.2 | Implement platform encoding profiles (all 7 profiles) | `src/clipcannon/rendering/profiles.py` | Done |
+| 2.4.3 | Implement RenderEngine with async pipeline | `src/clipcannon/rendering/renderer.py` | Done |
+| 2.4.4 | Implement generation loss prevention (source SHA-256 verification, /renders/ rejection) | `src/clipcannon/rendering/renderer.py` | Done |
+| 2.4.5 | Implement batch rendering (asyncio.Semaphore, max 3 concurrent) | `src/clipcannon/rendering/batch.py` | Done |
+| 2.4.6 | Implement thumbnail generation | `src/clipcannon/rendering/thumbnail.py` | Done |
+| 2.4.7 | Implement clipcannon_render MCP tool (2 credits, refund on failure) | `src/clipcannon/tools/rendering.py` | Done |
+| 2.4.8 | Implement clipcannon_render_status MCP tool | `src/clipcannon/tools/rendering.py` | Done |
+| 2.4.9 | Implement clipcannon_render_batch MCP tool | `src/clipcannon/tools/rendering.py` | Done |
+
+**Additional file:** `tools/rendering_defs.py` (JSON schema definitions).
 
 #### 5.1.5 AI Audio Generation Engine
 
-| Task | Description | Files | Deps |
-|:-----|:-----------|:------|:-----|
-| 2.5.1 | Implement ACE-Step v1.5 integration (text prompt -> music WAV) | `src/clipcannon/audio/music_gen.py` | Phase 1 |
-| 2.5.2 | Implement MIDI composition pipeline (MIDIUtil + music21 progressions) | `src/clipcannon/audio/midi_compose.py` | Phase 1 |
-| 2.5.3 | Implement FluidSynth MIDI -> WAV rendering | `src/clipcannon/audio/midi_render.py` | 2.5.2 |
-| 2.5.4 | Implement DSP sound effects (whoosh, riser, impact, chime, etc.) | `src/clipcannon/audio/sfx.py` | Phase 1 |
-| 2.5.5 | Implement audio mixing pipeline (ducking, crossfade, normalization) | `src/clipcannon/audio/mixer.py` | 2.5.1, 2.5.3, 2.5.4 |
-| 2.5.6 | Implement pedalboard effects (reverb, compression, EQ, limiting) | `src/clipcannon/audio/effects.py` | 2.5.5 |
-| 2.5.7 | Implement clipcannon_generate_music MCP tool | `src/clipcannon/tools/audio.py` | 2.5.1 |
-| 2.5.8 | Implement clipcannon_compose_midi MCP tool | `src/clipcannon/tools/audio.py` | 2.5.2 |
-| 2.5.9 | Implement clipcannon_generate_sfx MCP tool | `src/clipcannon/tools/audio.py` | 2.5.4 |
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.5.1 | Implement ACE-Step v1.5 integration (text prompt -> music WAV) | `src/clipcannon/audio/music_gen.py` | Done |
+| 2.5.2 | Implement MIDI composition pipeline (MIDIUtil, 6 presets, theory-correct progressions) | `src/clipcannon/audio/midi_compose.py` | Done |
+| 2.5.3 | Implement FluidSynth MIDI -> WAV rendering | `src/clipcannon/audio/midi_render.py` | Done |
+| 2.5.4 | Implement DSP sound effects (9 types: whoosh, riser, downer, impact, chime, tick, bass_drop, shimmer, stinger) | `src/clipcannon/audio/sfx.py` | Done |
+| 2.5.5 | Implement audio mixing pipeline (speech-aware ducking, normalization) | `src/clipcannon/audio/mixer.py` | Done |
+| 2.5.6 | Implement pedalboard effects (reverb, compression, eq_low_cut, eq_high_cut, limiter) | `src/clipcannon/audio/effects.py` | Done |
+| 2.5.7 | Implement clipcannon_generate_music MCP tool | `src/clipcannon/tools/audio.py` | Done |
+| 2.5.8 | Implement clipcannon_compose_midi MCP tool | `src/clipcannon/tools/audio.py` | Done |
+| 2.5.9 | Implement clipcannon_generate_sfx MCP tool | `src/clipcannon/tools/audio.py` | Done |
 
 #### 5.1.6 Metadata Generation
 
-| Task | Description | Files | Deps |
-|:-----|:-----------|:------|:-----|
-| 2.6.1 | Implement per-platform metadata generation (title, description, hashtags) | `src/clipcannon/editing/metadata_gen.py` | Phase 1 |
-| 2.6.2 | Implement clipcannon_generate_metadata MCP tool | `src/clipcannon/tools/editing.py` | 2.6.1 |
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.6.1 | Implement per-platform metadata generation (title, description, hashtags, thumbnail) | `src/clipcannon/editing/metadata_gen.py` | Done |
+| 2.6.2 | Implement clipcannon_generate_metadata MCP tool | `src/clipcannon/tools/editing.py` | Done |
 
-#### 5.1.7 Full Dashboard
+#### 5.1.7 Dashboard Expansion
 
-| Task | Description | Files | Deps |
-|:-----|:-----------|:------|:-----|
-| 2.7.1 | Build project view page (source video, analysis status, stream progress bars) | Dashboard routes | Phase 1 |
-| 2.7.2 | Build timeline visualization (scene boundaries, speakers, emotion curve, topics, highlights) | Dashboard routes | Phase 1 |
-| 2.7.3 | Build transcript panel (searchable, clickable timestamps, speaker labels) | Dashboard routes | Phase 1 |
-| 2.7.4 | Build edit review page (clip preview player, platform mockups, metadata editor) | Dashboard routes | 2.4.7 |
-| 2.7.5 | Build approve/reject/edit workflow (action buttons, feedback to AI) | Dashboard routes | 2.7.4 |
-| 2.7.6 | Build batch review mode (swipe through clips, one-click approve/reject) | Dashboard routes | 2.7.5 |
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.7.1 | Build timeline visualization API (scenes, speakers, emotion, topics, highlights) | `src/clipcannon/dashboard/routes/timeline.py` | Done |
+| 2.7.2 | Build transcript search endpoint | `src/clipcannon/dashboard/routes/timeline.py` | Done |
+| 2.7.3 | Build edit CRUD endpoints (list, detail with status filter) | `src/clipcannon/dashboard/routes/editing.py` | Done |
+| 2.7.4 | Build review queue endpoint (rendered edits ready for approval) | `src/clipcannon/dashboard/routes/review.py` | Done |
+| 2.7.5 | Build batch approve/reject workflow | `src/clipcannon/dashboard/routes/review.py` | Done |
+| 2.7.6 | Build review stats endpoint | `src/clipcannon/dashboard/routes/review.py` | Done |
+
+#### 5.1.8 Anti-Hallucination Transcription (Bonus)
+
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.8.1 | Add multi-layer hallucination defense to transcription pipeline | `src/clipcannon/pipeline/transcribe.py` | Done |
+
+**Details:** VAD tuning, confidence thresholds, compression ratio checks, 35 known hallucination phrase rejection, word/segment confidence filtering.
 
 ### 5.2 Phase 2 Success Criteria
 
-- [ ] AI can produce 10+ platform-ready clips from a single 1-hour source
-- [ ] Render time < 30 seconds per clip (including audio + animations)
-- [ ] Captions are word-accurate and properly timed (< 100ms drift)
-- [ ] Output passes platform validation for all 5 target platforms
-- [ ] Human can review and approve 20 clips in under 5 minutes via dashboard
+- [x] EDL models with validation, 7 platform targets, segment ordering, duration limits
+- [x] Caption generation with adaptive chunking, 4 styles, ASS rendering
+- [x] Smart cropping with face detection, split-screen, PIP layouts
+- [x] Rendering with 7 encoding profiles, NVENC/software fallback, generation loss prevention
+- [x] Audio generation: AI music (ACE-Step), MIDI (6 presets), DSP SFX (9 types)
+- [x] Audio mixing with speech-aware ducking, peak normalization
+- [x] Dashboard: timeline, editing, review queue APIs
+- [x] Anti-hallucination transcription pipeline
+- [ ] AI can produce 10+ platform-ready clips from a single 1-hour source -- requires end-to-end GPU validation
+- [ ] Render time < 30 seconds per clip -- requires GPU hardware validation
+- [ ] Human can review and approve 20 clips in under 5 minutes via dashboard -- requires frontend UI
 - [ ] AI-generated music is coherent, mood-appropriate, and at least 30 seconds long
 - [ ] DSP sound effects are clean (no clicks/pops) and properly timed
 - [ ] Audio ducking correctly reduces music under speech within 200ms

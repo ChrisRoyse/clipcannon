@@ -21,7 +21,7 @@
 
   <!-- Runtime -->
   <language version="3.12+">Python</language>
-  <framework version="latest">FastMCP (mcp-python-sdk)</framework>
+  <framework version="1.0+">mcp library (Server class, stdio_server, Tool, TextContent)</framework>
   <database>SQLite 3.45+ (WAL mode, per-project analysis.db)</database>
   <vector_database version="0.1+">sqlite-vec (4 isolated vector tables)</vector_database>
   <video_engine version="7.x">FFmpeg (NVENC/NVDEC hardware acceleration)</video_engine>
@@ -85,15 +85,18 @@ clipcannon/
 ├── src/
 │   └── clipcannon/
 │       ├── __init__.py
-│       ├── server.py                  # MCP server entry (FastMCP)
+│       ├── server.py                  # MCP server entry (mcp library, Server class, stdio transport)
 │       ├── config.py                  # Configuration management
-│       ├── tools/                     # MCP tool definitions (60+ tools)
+│       ├── tools/                     # MCP tool definitions (37 tools implemented, 14 modules)
 │       │   ├── __init__.py
 │       │   ├── project.py             # Project CRUD
 │       │   ├── understanding.py       # Ingest, VUD, transcript, frame tools
-│       │   ├── editing.py             # EDL, edit creation (Phase 2)
-│       │   ├── rendering.py           # Render, batch render (Phase 2)
-│       │   ├── audio.py               # Music gen, SFX (Phase 2)
+│       │   ├── editing.py             # EDL, edit creation (Phase 2 -- DONE)
+│       │   ├── editing_defs.py        # JSON schema for editing tools (Phase 2 -- DONE)
+│       │   ├── editing_helpers.py     # Builder functions, DB storage (Phase 2 -- DONE)
+│       │   ├── rendering.py           # Render, batch render (Phase 2 -- DONE)
+│       │   ├── rendering_defs.py      # JSON schema for rendering tools (Phase 2 -- DONE)
+│       │   ├── audio.py               # Music gen, SFX (Phase 2 -- DONE)
 │       │   ├── animation.py           # Lower thirds, Lottie (Phase 3)
 │       │   ├── publishing.py          # Platform publish (Phase 3)
 │       │   ├── provenance.py          # Provenance query/verify
@@ -122,9 +125,9 @@ clipcannon/
 │       │   ├── highlights.py
 │       │   ├── storyboard.py
 │       │   └── finalize.py
-│       ├── editing/                   # Edit decision engine (Phase 2)
-│       ├── rendering/                 # FFmpeg rendering (Phase 2)
-│       ├── audio/                     # Audio generation (Phase 2)
+│       ├── editing/                   # Edit decision engine (Phase 2 -- DONE: edl.py, captions.py, caption_render.py, smart_crop.py, metadata_gen.py)
+│       ├── rendering/                 # FFmpeg rendering (Phase 2 -- DONE: renderer.py, ffmpeg_cmd.py, profiles.py, batch.py, thumbnail.py)
+│       ├── audio/                     # Audio generation (Phase 2 -- DONE: music_gen.py, midi_compose.py, midi_render.py, sfx.py, mixer.py, effects.py)
 │       ├── animation/                 # Motion graphics (Phase 3)
 │       ├── publishing/                # Platform APIs (Phase 3)
 │       ├── billing/                   # Credit system
@@ -257,7 +260,7 @@ clipcannon/
   </error_handling>
 
   <async_patterns>
-    <rule>MCP tools are async (FastMCP requirement)</rule>
+    <rule>MCP tools are async (mcp library requirement)</rule>
     <rule>Pipeline orchestrator uses asyncio for parallel stage execution</rule>
     <rule>GPU model inference runs in thread executor to avoid blocking event loop</rule>
     <rule>License server HTTP calls are async via httpx</rule>
