@@ -20,7 +20,6 @@ from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all, fetch_one
 from clipcannon.editing.edl import EditDecisionList
 from clipcannon.exceptions import ClipCannonError
-from clipcannon.rendering.batch import render_batch
 from clipcannon.rendering.renderer import RenderEngine
 from clipcannon.tools.rendering_defs import RENDERING_TOOL_DEFINITIONS
 
@@ -345,216 +344,7 @@ async def clipcannon_render(
 
 
 # ============================================================
-# TOOL 2: clipcannon_render_status
-# ============================================================
-async def clipcannon_render_status(
-    project_id: str,
-    render_id: str,
-) -> dict[str, object]:
-    """Check the status of a render job.
-
-    Args:
-        project_id: Project identifier.
-        render_id: Render identifier.
-
-    Returns:
-        Render status dict or error response.
-    """
-    err = _validate_project(project_id)
-    if err is not None:
-        return err
-
-    db = _db_path(project_id)
-    conn = get_connection(db, enable_vec=False, dict_rows=True)
-    try:
-        row = fetch_one(
-            conn,
-            "SELECT * FROM renders "
-            "WHERE render_id = ? AND project_id = ?",
-            (render_id, project_id),
-        )
-    finally:
-        conn.close()
-
-    if row is None:
-        return _error(
-            "RENDER_NOT_FOUND",
-            f"Render not found: {render_id}",
-            {"render_id": render_id, "project_id": project_id},
-        )
-
-    return {
-        "render_id": str(row["render_id"]),
-        "edit_id": str(row["edit_id"]),
-        "status": str(row["status"]),
-        "profile": str(row.get("profile", "")),
-        "output_path": str(row["output_path"]) if row.get("output_path") else None,
-        "output_sha256": str(row["output_sha256"]) if row.get("output_sha256") else None,
-        "file_size_bytes": int(row["file_size_bytes"]) if row.get("file_size_bytes") else 0,
-        "duration_ms": int(row["duration_ms"]) if row.get("duration_ms") else 0,
-        "resolution": str(row.get("resolution", "")),
-        "codec": str(row.get("codec", "")),
-        "thumbnail_path": str(row["thumbnail_path"]) if row.get("thumbnail_path") else None,
-        "render_duration_ms": (
-            int(row["render_duration_ms"]) if row.get("render_duration_ms") else 0
-        ),
-        "error_message": str(row["error_message"]) if row.get("error_message") else None,
-        "created_at": str(row.get("created_at", "")),
-        "completed_at": str(row["completed_at"]) if row.get("completed_at") else None,
-    }
-
-
-# ============================================================
-# TOOL 3: clipcannon_render_batch
-# ============================================================
-async def clipcannon_render_batch(
-    project_id: str,
-    edit_ids: list[str],
-) -> dict[str, object]:
-    """Render multiple edits concurrently.
-
-    Loads all EDLs, charges credits for each, and renders them
-    with concurrency limited by config.rendering.max_parallel_renders.
-
-    Args:
-        project_id: Project identifier.
-        edit_ids: List of edit identifiers to render.
-
-    Returns:
-        Batch render results dict or error response.
-    """
-    start_time = time.monotonic()
-
-    err = _validate_project(project_id)
-    if err is not None:
-        return err
-
-    if not edit_ids:
-        return _error(
-            "INVALID_PARAMETER",
-            "At least one edit_id is required",
-            {"edit_ids_count": 0},
-        )
-
-    # Load all EDLs
-    edl_list: list[EditDecisionList] = []
-    errors: list[dict[str, object]] = []
-
-    for eid in edit_ids:
-        edl, load_err = _load_edl(project_id, eid)
-        if load_err is not None:
-            errors.append({"edit_id": eid, "error": load_err})
-        elif edl is not None:
-            edl_list.append(edl)
-
-    if not edl_list:
-        return _error(
-            "NO_VALID_EDITS",
-            "No valid edits found for batch rendering",
-            {"errors": errors},  # type: ignore[dict-item]
-        )
-
-    # Charge credits for all renders
-    total_credits = _RENDER_CREDITS * len(edl_list)
-    license_client = LicenseClient()
-    try:
-        charge_result = await license_client.charge(
-            operation="render_batch",
-            credits=total_credits,
-            project_id=project_id,
-        )
-        if not charge_result.success:
-            logger.warning(
-                "Batch credit charge failed for %s: %s",
-                project_id,
-                charge_result.error,
-            )
-    except Exception as exc:
-        logger.warning(
-            "License server unavailable for batch render %s: %s",
-            project_id,
-            exc,
-        )
-    finally:
-        await license_client.close()
-
-    # Update all edits to rendering status
-    db = _db_path(project_id)
-    conn = get_connection(db, enable_vec=False, dict_rows=False)
-    try:
-        for edl in edl_list:
-            execute(
-                conn,
-                "UPDATE edits SET status = 'rendering', "
-                "updated_at = datetime('now') "
-                "WHERE edit_id = ? AND project_id = ?",
-                (edl.edit_id, project_id),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-    # Execute batch render
-    try:
-        config = ClipCannonConfig.load()
-        results = await render_batch(
-            edl_list=edl_list,
-            project_dir=_project_dir(project_id),
-            db_path=db,
-            config=config,
-        )
-    except Exception as exc:
-        logger.exception(
-            "Batch render failed for %s",
-            project_id,
-        )
-        return _error(
-            "BATCH_RENDER_FAILED",
-            f"Batch render failed: {exc}",
-            {"project_id": project_id},
-        )
-
-    elapsed_ms = int((time.monotonic() - start_time) * 1000)
-
-    # Build per-edit results
-    renders: list[dict[str, object]] = []
-    for i, result in enumerate(results):
-        edit_id = edl_list[i].edit_id if i < len(edl_list) else "unknown"
-        renders.append({
-            "edit_id": edit_id,
-            "render_id": result.render_id,
-            "status": "completed" if result.success else "failed",
-            "output_path": str(result.output_path) if result.output_path else None,
-            "file_size_bytes": result.file_size_bytes,
-            "duration_ms": result.duration_ms,
-            "error_message": result.error_message,
-        })
-
-    succeeded = sum(1 for r in results if r.success)
-    failed_count = len(results) - succeeded
-
-    logger.info(
-        "Batch render for %s: %d succeeded, %d failed (%dms)",
-        project_id,
-        succeeded,
-        failed_count,
-        elapsed_ms,
-    )
-
-    return {
-        "project_id": project_id,
-        "total": len(results),
-        "succeeded": succeeded,
-        "failed": failed_count,
-        "credits_charged": total_credits,
-        "renders": renders,
-        "load_errors": errors if errors else None,
-        "elapsed_ms": elapsed_ms,
-    }
-
-
-# ============================================================
-# TOOL 4: clipcannon_preview_layout
+# TOOL 2: clipcannon_preview_layout
 # ============================================================
 async def clipcannon_preview_layout(
     project_id: str,
@@ -678,7 +468,7 @@ async def clipcannon_preview_layout(
 
 
 # ============================================================
-# TOOL 5: clipcannon_preview_clip
+# TOOL 3: clipcannon_preview_clip
 # ============================================================
 async def clipcannon_preview_clip(
     project_id: str,
@@ -730,7 +520,7 @@ async def clipcannon_preview_clip(
 
 
 # ============================================================
-# TOOL 6: clipcannon_inspect_render
+# TOOL 4: clipcannon_inspect_render
 # ============================================================
 async def clipcannon_inspect_render(
     project_id: str,
@@ -800,258 +590,7 @@ async def clipcannon_inspect_render(
 
 
 # ============================================================
-# TOOL 9: clipcannon_measure_layout
-# ============================================================
-async def clipcannon_measure_layout(
-    project_id: str,
-    timestamp_ms: int,
-    layout: str = "A",
-) -> dict[str, object]:
-    """Measure exact layout coordinates using face detection.
-
-    Runs face detection and computes mathematically precise
-    source crop and output coordinates for the requested layout.
-
-    Args:
-        project_id: Project identifier.
-        timestamp_ms: Source timestamp in milliseconds.
-        layout: Layout type (A, B, C, D).
-
-    Returns:
-        Dict with face bbox, canvas regions, and placement metrics.
-    """
-    from clipcannon.editing.measure_layout import measure_layout
-
-    proj_dir = _project_dir(project_id)
-    if not proj_dir.exists():
-        return _error(
-            "PROJECT_NOT_FOUND",
-            f"Project not found: {project_id}",
-        )
-
-    db = _db_path(project_id)
-    conn = get_connection(str(db), enable_vec=False, dict_rows=True)
-    try:
-        row = fetch_one(
-            conn,
-            "SELECT resolution FROM project WHERE project_id = ?",
-            (project_id,),
-        )
-    finally:
-        conn.close()
-
-    if row is None:
-        return _error("PROJECT_NOT_FOUND", f"No project record: {project_id}")
-
-    res = str(row["resolution"]).split("x")
-    frame_w = int(res[0])
-    frame_h = int(res[1])
-
-    # Find nearest frame
-    frames_dir = proj_dir / "frames"
-    if not frames_dir.exists():
-        return _error("FRAMES_NOT_FOUND", "No frames directory")
-
-    fps = 2
-    frame_num = max(1, round(timestamp_ms / 1000.0 * fps))
-    frame_path = frames_dir / f"frame_{frame_num:06d}.jpg"
-
-    if not frame_path.exists():
-        frames = sorted(frames_dir.glob("frame_*.jpg"))
-        if not frames:
-            return _error("FRAMES_NOT_FOUND", "No frames available")
-        frame_path = frames[min(frame_num - 1, len(frames) - 1)]
-
-    try:
-        result = measure_layout(
-            frame_path=str(frame_path),
-            frame_w=frame_w,
-            frame_h=frame_h,
-            layout=layout,
-        )
-    except ValueError as exc:
-        return _error("INVALID_PARAMETER", str(exc))
-
-    response: dict[str, object] = {
-        "project_id": project_id,
-        "timestamp_ms": timestamp_ms,
-        "layout": result.layout,
-        "face_detected": result.face_detected,
-        "source_resolution": f"{frame_w}x{frame_h}",
-    }
-
-    if result.face_detected:
-        response["face_bbox"] = result.face_bbox
-        response["eye_line_y"] = result.eye_line_y
-        response["headroom_px"] = result.headroom_px
-        response["face_width_pct"] = result.face_width_pct
-        response["speaker_source_crop"] = result.speaker_region
-        if result.screen_region:
-            response["screen_source_crop"] = result.screen_region
-        response["canvas_regions"] = result.canvas_regions
-        response["message"] = (
-            f"Layout {layout}: face detected at "
-            f"({result.face_bbox['x']}, {result.face_bbox['y']}), "
-            f"eye line at y={result.eye_line_y}px in output. "
-            f"Use canvas_regions directly in create_edit segments."
-        )
-    else:
-        response["message"] = (
-            "No face detected. Cannot compute layout. "
-            "Try a different timestamp where the speaker is visible."
-        )
-
-    return response
-
-
-# ============================================================
-# TOOL 10: clipcannon_get_storyboard
-# ============================================================
-async def clipcannon_get_storyboard(
-    project_id: str,
-    start_s: int | None = None,
-    end_s: int | None = None,
-) -> dict[str, object]:
-    """Generate a storyboard contact sheet from video frames.
-
-    Two modes:
-    - No start_s: Returns full video overview at 128x72 thumbnails
-      (entire video in one image, ~6K tokens)
-    - With start_s: Returns a 5-second window at 256x144 thumbnails
-      (10 frames, readable text, ~5K tokens). Use this to verify
-      exact screen content at specific timestamps before editing.
-
-    Args:
-        project_id: Project identifier.
-        start_s: Start second for zoomed view. Omit for full overview.
-        end_s: End second (default: start_s + 5).
-
-    Returns:
-        Dict with inline _image and aligned transcript.
-    """
-    from clipcannon.tools.storyboard import build_contact_sheet
-
-    proj_dir = _project_dir(project_id)
-    if not proj_dir.exists():
-        return _error(
-            "PROJECT_NOT_FOUND",
-            f"Project not found: {project_id}",
-        )
-
-    frames_dir = proj_dir / "frames"
-    if not frames_dir.exists():
-        return _error("FRAMES_NOT_FOUND", "No frames directory")
-
-    storyboard_dir = proj_dir / "storyboards"
-    fps = 2.0
-
-    if start_s is not None:
-        # Zoomed mode: 5-second window at high resolution
-        if end_s is None:
-            end_s = start_s + 5
-        start_frame = max(1, int(start_s * fps) + 1)
-        end_frame = int(end_s * fps) + 1
-
-        sheet_name = f"zoom_{start_s}s_{end_s}s.jpg"
-        sheet_path = storyboard_dir / sheet_name
-
-        try:
-            result = build_contact_sheet(
-                frames_dir=frames_dir,
-                output_path=sheet_path,
-                cols=10,
-                thumb_w=256,
-                thumb_h=144,
-                start_frame=start_frame,
-                end_frame=end_frame,
-            )
-        except (FileNotFoundError, ValueError) as exc:
-            return _error("STORYBOARD_FAILED", str(exc))
-    else:
-        # Full overview mode: entire video at low resolution
-        sheet_path = storyboard_dir / "contact_sheet.jpg"
-
-        try:
-            result = build_contact_sheet(
-                frames_dir=frames_dir,
-                output_path=sheet_path,
-                cols=20,
-                thumb_w=128,
-                thumb_h=72,
-            )
-        except (FileNotFoundError, ValueError) as exc:
-            return _error("STORYBOARD_FAILED", str(exc))
-
-    # Get transcript for the relevant time range
-    transcript: list[dict[str, object]] = []
-    db = _db_path(project_id)
-    if db.exists():
-        conn = get_connection(str(db), enable_vec=False, dict_rows=True)
-        try:
-            if start_s is not None:
-                rows = fetch_all(
-                    conn,
-                    "SELECT start_ms, end_ms, text "
-                    "FROM transcript_segments "
-                    "WHERE project_id = ? "
-                    "AND end_ms >= ? AND start_ms <= ? "
-                    "ORDER BY start_ms",
-                    (project_id, start_s * 1000, (end_s or 0) * 1000),
-                )
-            else:
-                rows = fetch_all(
-                    conn,
-                    "SELECT start_ms, end_ms, text "
-                    "FROM transcript_segments "
-                    "WHERE project_id = ? ORDER BY start_ms",
-                    (project_id,),
-                )
-            for row in rows:
-                transcript.append({
-                    "start_ms": int(row["start_ms"]),
-                    "end_ms": int(row["end_ms"]),
-                    "text": str(row["text"]),
-                })
-        finally:
-            conn.close()
-
-    response: dict[str, object] = {
-        "project_id": project_id,
-        "total_frames": result["total_frames"],
-        "grid_layout": result["grid"],
-        "image_size": result["image_size"],
-        "duration_ms": result["duration_ms"],
-        "seconds_per_row": result["seconds_per_row"],
-        "transcript": transcript,
-    }
-
-    if start_s is not None:
-        response["time_range"] = f"{start_s}s - {end_s}s"
-        response["reading_guide"] = (
-            f"Zoomed view: {start_s}s to {end_s}s, "
-            f"256x144 thumbnails, {result['total_frames']} frames. "
-            f"Read timestamps to identify exact screen content."
-        )
-    else:
-        response["reading_guide"] = (
-            f"Full overview: {result['grid']} grid, "
-            f"each row = {result['seconds_per_row']}s. "
-            f"Use start_s parameter to zoom into specific times."
-        )
-
-    if sheet_path.exists():
-        response["_image"] = {
-            "data": base64.b64encode(
-                sheet_path.read_bytes()
-            ).decode("ascii"),
-            "mimeType": "image/jpeg",
-        }
-
-    return response
-
-
-# ============================================================
-# TOOL 11: clipcannon_get_scene_map
+# TOOL 5: clipcannon_get_scene_map
 # ============================================================
 async def clipcannon_get_scene_map(
     project_id: str,
@@ -1337,7 +876,7 @@ async def dispatch_rendering_tool(
 
 
 # ============================================================
-# TOOL 7: clipcannon_analyze_frame
+# TOOL 6: clipcannon_analyze_frame
 # ============================================================
 async def clipcannon_analyze_frame(
     project_id: str,
@@ -1404,7 +943,7 @@ async def clipcannon_analyze_frame(
 
 
 # ============================================================
-# TOOL 8: clipcannon_get_editing_context
+# TOOL 7: clipcannon_get_editing_context
 # ============================================================
 async def clipcannon_get_editing_context(
     project_id: str,
@@ -1608,7 +1147,7 @@ async def clipcannon_get_editing_context(
                 "visual_scenes": counts["scene_map"],
                 "scene_boundaries": counts["scenes"],
                 "query": "get_scene_map(project_id, start_ms, end_ms, detail, layout) "
-                         "OR get_scene_at(project_id, timestamp_ms, layout)",
+                         "OR get_segment_detail(project_id, timestamp_ms=ms)",
             },
             "highlights": {
                 "count": counts["highlights"],
@@ -1672,7 +1211,6 @@ async def clipcannon_get_editing_context(
         "transcript_preview": transcript_preview,
         "query_tools": {
             "find_best_moments": "Find scored clip candidates for hook/highlight/cta/tutorial_step",
-            "get_scene_at": "Get full scene data at any timestamp with canvas regions",
             "get_scene_map": "Browse scenes in paginated time windows (summary or full detail)",
             "find_cut_points": "Find natural edit boundaries (silence gaps, scene breaks, sentences)",
             "get_transcript": "Get word-level transcript for any time range",
@@ -1680,7 +1218,6 @@ async def clipcannon_get_editing_context(
             "analyze_frame": "Detect content regions and webcam in any frame",
             "get_frame": "Get any frame as an image for visual inspection",
             "preview_layout": "Preview a canvas layout composition as JPEG",
-            "measure_layout": "Compute layout regions from face detection at any timestamp",
         },
         "elapsed_ms": elapsed,
     }

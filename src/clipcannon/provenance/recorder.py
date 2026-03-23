@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -20,10 +21,54 @@ from clipcannon.exceptions import ProvenanceError
 from clipcannon.provenance.chain import GENESIS_HASH, compute_chain_hash
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     import sqlite3
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _provenance_conn(
+    db_path: Path, project_id: str, action: str
+) -> Generator[sqlite3.Connection, None, None]:
+    """Open a database connection for provenance operations.
+
+    Wraps the common open/close/error-handling pattern shared by all
+    public provenance functions.
+
+    Args:
+        db_path: Path to the project database.
+        project_id: Project identifier (used in error details).
+        action: Human-readable action name for error messages.
+
+    Yields:
+        An open SQLite connection.
+
+    Raises:
+        ProvenanceError: If the connection cannot be opened or the
+            body raises a non-ProvenanceError exception.
+    """
+    try:
+        conn = get_connection(db_path, enable_vec=False, dict_rows=True)
+    except Exception as exc:
+        raise ProvenanceError(
+            f"Failed to open database for provenance {action}: {exc}",
+            details={"db_path": str(db_path), "project_id": project_id},
+        ) from exc
+
+    try:
+        yield conn
+    except ProvenanceError:
+        raise
+    except Exception as exc:
+        raise ProvenanceError(
+            f"Failed to {action}: {exc}",
+            details={"project_id": project_id, "error": str(exc)},
+        ) from exc
+    finally:
+        conn.close()
 
 
 # ============================================================
@@ -145,6 +190,24 @@ class ProvenanceRecord(BaseModel):
     chain_hash: str
 
 
+def _opt_str(row: dict[str, object], key: str) -> str | None:
+    """Return row[key] as str, or None if missing/falsy."""
+    val = row.get(key)
+    return str(val) if val else None
+
+
+def _opt_int(row: dict[str, object], key: str) -> int | None:
+    """Return row[key] as int, or None if missing/None."""
+    val = row.get(key)
+    return int(val) if val is not None else None
+
+
+def _opt_float(row: dict[str, object], key: str) -> float | None:
+    """Return row[key] as float, or None if missing/None."""
+    val = row.get(key)
+    return float(val) if val is not None else None
+
+
 def _row_to_provenance_record(row: dict[str, object]) -> ProvenanceRecord:
     """Convert a database row dict to a ProvenanceRecord.
 
@@ -160,36 +223,22 @@ def _row_to_provenance_record(row: dict[str, object]) -> ProvenanceRecord:
         timestamp_utc=str(row["timestamp_utc"]),
         operation=str(row["operation"]),
         stage=str(row["stage"]),
-        description=str(row["description"]) if row.get("description") else None,
-        input_file_path=str(row["input_file_path"]) if row.get("input_file_path") else None,
-        input_sha256=str(row["input_sha256"]) if row.get("input_sha256") else None,
-        input_size_bytes=int(row["input_size_bytes"])
-        if row.get("input_size_bytes") is not None
-        else None,
-        parent_record_id=str(row["parent_record_id"]) if row.get("parent_record_id") else None,
-        output_file_path=str(row["output_file_path"]) if row.get("output_file_path") else None,
-        output_sha256=str(row["output_sha256"]) if row.get("output_sha256") else None,
-        output_size_bytes=int(row["output_size_bytes"])
-        if row.get("output_size_bytes") is not None
-        else None,
-        output_record_count=int(row["output_record_count"])
-        if row.get("output_record_count") is not None
-        else None,
-        model_name=str(row["model_name"]) if row.get("model_name") else None,
-        model_version=str(row["model_version"]) if row.get("model_version") else None,
-        model_quantization=str(row["model_quantization"])
-        if row.get("model_quantization")
-        else None,
-        model_parameters=str(row["model_parameters"]) if row.get("model_parameters") else None,
-        execution_duration_ms=int(row["execution_duration_ms"])
-        if row.get("execution_duration_ms") is not None
-        else None,
-        execution_gpu_device=str(row["execution_gpu_device"])
-        if row.get("execution_gpu_device")
-        else None,
-        execution_vram_peak_mb=float(row["execution_vram_peak_mb"])
-        if row.get("execution_vram_peak_mb") is not None
-        else None,
+        description=_opt_str(row, "description"),
+        input_file_path=_opt_str(row, "input_file_path"),
+        input_sha256=_opt_str(row, "input_sha256"),
+        input_size_bytes=_opt_int(row, "input_size_bytes"),
+        parent_record_id=_opt_str(row, "parent_record_id"),
+        output_file_path=_opt_str(row, "output_file_path"),
+        output_sha256=_opt_str(row, "output_sha256"),
+        output_size_bytes=_opt_int(row, "output_size_bytes"),
+        output_record_count=_opt_int(row, "output_record_count"),
+        model_name=_opt_str(row, "model_name"),
+        model_version=_opt_str(row, "model_version"),
+        model_quantization=_opt_str(row, "model_quantization"),
+        model_parameters=_opt_str(row, "model_parameters"),
+        execution_duration_ms=_opt_int(row, "execution_duration_ms"),
+        execution_gpu_device=_opt_str(row, "execution_gpu_device"),
+        execution_vram_peak_mb=_opt_float(row, "execution_vram_peak_mb"),
         chain_hash=str(row["chain_hash"]),
     )
 
@@ -254,7 +303,7 @@ def _lookup_parent_chain_hash(
             },
         )
 
-    chain_hash = row.get("chain_hash") if isinstance(row, dict) else None
+    chain_hash = row.get("chain_hash")
     if chain_hash is None:
         raise ProvenanceError(
             f"Parent record {parent_record_id} has no chain_hash",
@@ -304,15 +353,7 @@ def record_provenance(
     Raises:
         ProvenanceError: If the record cannot be created.
     """
-    try:
-        conn = get_connection(db_path, enable_vec=False, dict_rows=True)
-    except Exception as exc:
-        raise ProvenanceError(
-            f"Failed to open database for provenance recording: {exc}",
-            details={"db_path": str(db_path), "project_id": project_id},
-        ) from exc
-
-    try:
+    with _provenance_conn(db_path, project_id, "record provenance") as conn:
         # Generate record ID
         sequence = _get_next_sequence(conn, project_id)
         record_id = f"prov_{sequence:03d}"
@@ -402,21 +443,6 @@ def record_provenance(
         )
         return record_id
 
-    except ProvenanceError:
-        raise
-    except Exception as exc:
-        raise ProvenanceError(
-            f"Failed to record provenance: {exc}",
-            details={
-                "project_id": project_id,
-                "operation": operation,
-                "stage": stage,
-                "error": str(exc),
-            },
-        ) from exc
-    finally:
-        conn.close()
-
 
 def get_provenance_records(
     db_path: Path,
@@ -438,15 +464,7 @@ def get_provenance_records(
     Raises:
         ProvenanceError: If the query fails.
     """
-    try:
-        conn = get_connection(db_path, enable_vec=False, dict_rows=True)
-    except Exception as exc:
-        raise ProvenanceError(
-            f"Failed to open database for provenance query: {exc}",
-            details={"db_path": str(db_path), "project_id": project_id},
-        ) from exc
-
-    try:
+    with _provenance_conn(db_path, project_id, "query provenance records") as conn:
         conditions = ["project_id = ?"]
         params: list[str] = [project_id]
 
@@ -463,21 +481,6 @@ def get_provenance_records(
 
         rows = fetch_all(conn, sql, tuple(params))
         return [_row_to_provenance_record(row) for row in rows]
-
-    except ProvenanceError:
-        raise
-    except Exception as exc:
-        raise ProvenanceError(
-            f"Failed to query provenance records: {exc}",
-            details={
-                "project_id": project_id,
-                "operation": operation,
-                "stage": stage,
-                "error": str(exc),
-            },
-        ) from exc
-    finally:
-        conn.close()
 
 
 def get_provenance_record(
@@ -498,15 +501,7 @@ def get_provenance_record(
     Raises:
         ProvenanceError: If the query fails.
     """
-    try:
-        conn = get_connection(db_path, enable_vec=False, dict_rows=True)
-    except Exception as exc:
-        raise ProvenanceError(
-            f"Failed to open database for provenance query: {exc}",
-            details={"db_path": str(db_path), "project_id": project_id},
-        ) from exc
-
-    try:
+    with _provenance_conn(db_path, project_id, "query provenance record") as conn:
         row = fetch_one(
             conn,
             "SELECT * FROM provenance WHERE project_id = ? AND record_id = ?",
@@ -517,20 +512,6 @@ def get_provenance_record(
             return None
 
         return _row_to_provenance_record(row)
-
-    except ProvenanceError:
-        raise
-    except Exception as exc:
-        raise ProvenanceError(
-            f"Failed to query provenance record: {exc}",
-            details={
-                "project_id": project_id,
-                "record_id": record_id,
-                "error": str(exc),
-            },
-        ) from exc
-    finally:
-        conn.close()
 
 
 def get_provenance_timeline(

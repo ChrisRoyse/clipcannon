@@ -309,9 +309,6 @@ json.dump(emb_array, sys.stdout)
 
     return emb_array
 
-    del model
-    return emb_array
-
 
 def _extract_keywords(
     texts: list[str],
@@ -367,10 +364,6 @@ def _cluster_segments(
                 "semantic_density": 1.0,
             }
         ]
-
-    # Determine number of clusters
-    n_segments = len(segments)
-    max(1, min(n_segments, n_segments // 3 + 1))
 
     clustering = AgglomerativeClustering(
         n_clusters=None,

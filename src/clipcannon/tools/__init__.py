@@ -60,10 +60,6 @@ from clipcannon.tools.understanding_visual import (
 # ---------------------------------------------------------------
 # Understanding tool definitions (5 tools)
 # ---------------------------------------------------------------
-_PROJECT_ID_PROP = {
-    "project_id": {"type": "string", "description": "Project identifier"},
-}
-
 UNDERSTANDING_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
         name="clipcannon_ingest",

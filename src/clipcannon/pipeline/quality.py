@@ -42,7 +42,6 @@ STAGE = "brisque"
 # Quality classification thresholds
 GOOD_THRESHOLD = 60.0
 ACCEPTABLE_THRESHOLD = 40.0
-POOR_THRESHOLD = 40.0
 BLUR_THRESHOLD = 30.0
 
 # Camera shake detection: if std dev of consecutive quality > this value

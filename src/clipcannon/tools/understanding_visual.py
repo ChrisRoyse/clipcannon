@@ -513,23 +513,12 @@ async def clipcannon_get_segment_detail(
                 point_scene = sm_entry
                 break
 
-        if point_scene is not None:
-            result["point_scene"] = point_scene
-            # Filter canvas regions to requested layout
-            canvas_data = point_scene.get("canvas", {})
-            if layout and isinstance(canvas_data, dict):
-                matched_regions = canvas_data.get(layout)
-                result["layout_canvas_regions"] = (
-                    matched_regions if matched_regions is not None else None
-                )
-                result["requested_layout"] = layout
-            elif layout:
-                result["layout_canvas_regions"] = None
-                result["requested_layout"] = layout
-        else:
-            result["point_scene"] = None
-            if layout:
-                result["layout_canvas_regions"] = None
-                result["requested_layout"] = layout
+        result["point_scene"] = point_scene
+        if layout:
+            canvas_data = point_scene.get("canvas", {}) if point_scene else {}
+            result["requested_layout"] = layout
+            result["layout_canvas_regions"] = (
+                canvas_data.get(layout) if isinstance(canvas_data, dict) else None
+            )
 
     return result

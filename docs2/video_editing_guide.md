@@ -338,21 +338,19 @@ Use this to:
 
 **The scene map is your primary editing intelligence source.** It answers: "What layout should I use, what coordinates, and why?" for every scene.
 
-### OCR-Driven Viral Editing Workflow
+### OCR-Driven Editing Workflow
 
 ```
-1. ingest (runs OCR + scene_analysis automatically)
-2. get_scene_map → for each scene:
-   - visible_text tells you what's on screen
-   - layout_recommendation tells you best layout
-   - canvas_regions gives ready-to-use coordinates
-3. get_editing_context → highlights + silence gaps for cut decisions
-4. For each scene with visible_text:
-   - If text is small → add zoom_in motion effect on that segment
-   - If slide_transition → start new segment, consider title_card overlay
-   - If text references a key point → add bold_centered caption emphasis
-5. create_edit using scene_map canvas_regions directly
-6. preview_layout at OCR-identified key frames → verify text readability
+1. ingest (runs OCR + scene_analysis + narrative_llm automatically)
+2. get_editing_context → narrative.chapter_boundaries show topic shifts
+3. get_segment_detail(start_ms, end_ms) → on_screen_text + text_change_events for any range
+4. find_best_moments(purpose="tutorial_step") → prefers segments near slide transitions
+5. For scenes with OCR text:
+   - Small text → add zoom_in motion effect
+   - Slide transition → start new segment, consider title_card overlay
+   - Speaker references screen text → use Layout A/C (screen dominant)
+6. create_edit → auto-validates narrative coherence
+7. preview_layout at key frames → verify text readability
 ```
 
 ---
@@ -762,51 +760,70 @@ Workflow: decide coords → preview_layout → adjust → repeat → render → 
 
 ---
 
-## 20. Complete Workflow
+## 20. Complete Workflow (39 MCP Tools)
+
+### Available Tools
+
+| Category | Tools |
+|---|---|
+| **Understand** | `get_editing_context` (manifest+speakers+narrative+transcript), `get_transcript`, `get_segment_detail` (17 streams + point query), `get_scene_map`, `search_content`, `analyze_frame`, `get_frame` |
+| **Discover** | `find_best_moments` (convergence cuts+story beat+character), `find_cut_points`, `get_narrative_flow` |
+| **Edit** | `create_edit` (auto-validates narrative), `modify_edit`, `auto_trim`, `color_adjust`, `add_motion`, `add_overlay` |
+| **Preview** | `preview_layout`, `preview_clip` |
+| **Render** | `render`, `inspect_render` |
+| **Audio** | `audio_cleanup`, `generate_music`, `compose_midi`, `generate_sfx` |
+| **Project** | `project_create/open/list/status/delete`, `ingest` |
+| **System** | `config_get/set/list`, `disk_status/cleanup`, `credits_balance/history/estimate/spending_limit` |
+
+### Workflow
 
 ```
 1. project_create → ingest → wait "ready"
 
-2. UNDERSTAND THE VIDEO (before ANY editing decisions):
-   a. get_editing_context → data manifest (what data exists, which tools to use)
-   b. get_vud_summary → speakers, topics, highlights, beats, content safety
-   c. get_transcript(start_ms=0) → READ THE FULL TRANSCRIPT
-   d. Identify the narrative arc: intro → setup → demo → results → closing
-   e. Mark complete sentences/thoughts that could serve as segment boundaries
+2. UNDERSTAND (1 call):
+   get_editing_context → returns EVERYTHING:
+     - speakers, narrative (Qwen3-8B story_beats, open_loops, chapters),
+       transcript_preview (500 words), data manifest, query_tools
+   Read the transcript_preview + narrative.story_beats to understand the story.
+   If you need the FULL transcript: get_transcript(start_ms=0)
 
-3. DISCOVER BEST MOMENTS:
-   a. find_best_moments(purpose="hook") → top hook candidates with emotion + emphasis
-   b. find_best_moments(purpose="highlight") → best body content
-   c. find_best_moments(purpose="cta") → closing candidates
-   d. For each candidate: read the transcript, verify the thought is COMPLETE
-   e. find_cut_points(around_ms) at start/end of each segment → find sentence_end cut points
+3. DISCOVER (2-3 calls):
+   find_best_moments(purpose="hook") → candidates WITH:
+     - convergence-scored cut_points (start_quality/end_quality + signals)
+     - story_beat context (which narrative beat this moment belongs to)
+     - moment_character (passionate_claim/excited_demo/etc.)
+   find_best_moments(purpose="highlight") → body candidates
+   find_best_moments(purpose="cta") → closing candidates
+   Cut points are INCLUDED in each moment — no separate find_cut_points needed.
 
-4. PLAN THE EDIT (decide segments BEFORE building):
-   - Map the story: which segments tell the complete narrative?
-   - Plan layout progression: D → B → A → C → D (smooth, never jump >1 level)
-   - Verify total duration fits platform (TikTok: 15-60s, Shorts: 30-60s)
-   - Every segment MUST start and end at a sentence boundary or silence gap
+4. PLAN (use narrative to guide):
+   - Follow story_beats order: hook → setup → argument → demo → result → cta
+   - Use open_loops: ensure the loop opened in the hook is CLOSED by the CTA
+   - Layout progression: D → B → A → C → D (smooth, never jump >1 level)
+   - Duration: TikTok 60-180s (60s+ required for monetization)
+   - Every segment ends at a thought boundary (check moment.cut_points.end_quality)
 
-5. VERIFY REGIONS (preview loop — MANDATORY):
-   For EACH planned segment:
-   a. preview_layout(timestamp_ms, regions) → look at the frame
-   b. Check: face clean? No text artifacts? No duplicate webcam?
-   c. If issues → adjust source_x/y/w/h → preview again
-   d. Only proceed when ALL segments preview clean
+5. VERIFY (1 call per segment):
+   For EACH segment: preview_layout(timestamp_ms, regions) → look at frame
+   Use webcam region (not face bbox) for speaker source crop.
 
-6. BUILD THE EDIT:
-   a. create_edit with verified regions from step 5
-   b. color_adjust (platform-specific grade)
-   c. add_motion (zoom on hook + CTA, ken_burns on screen content)
-   d. add_overlay (title card on hook, CTA on closing)
-   e. audio_cleanup if source audio needs it
+6. BUILD (1 call + polish):
+   create_edit → auto-validates narrative, returns warnings if:
+     - gaps >1s skip >20 words of content
+     - segments cut mid-thought (no .!? at end)
+   If warnings appear: fix segments before proceeding.
+   Then: color_adjust + add_motion + add_overlay
 
-7. RENDER AND VERIFY:
-   a. render
-   b. inspect_render → extract frames at 0/25/50/75/100%
-   c. Verify each frame matches the preview from step 5
-   d. If issues → modify_edit → re-render
+7. RENDER (1 call):
+   render → inspect_render → verify frames match previews
 ```
+
+### Point Queries
+
+Use `get_segment_detail(project_id, timestamp_ms=X, layout="D")` for:
+- 10-second window of ALL 17 data streams around that timestamp
+- Canvas regions for the requested layout
+- Emphasis words, speech-screen alignment, emotion peaks
 
 ---
 
@@ -839,7 +856,7 @@ CTA (last 5s):  Face close-up. Specific call to action.
 
 ### Mistake 3: Skipping the preview loop
 
-**What happened**: Went straight from `get_scene_at` coordinates to `create_edit` to `render` without previewing. The hook frame had terminal JSON text bleeding into the face close-up. This was only discovered after a full render that took 2 minutes and crashed WSL.
+**What happened**: Went straight from `get_segment_detail(timestamp_ms=X)` coordinates to `create_edit` to `render` without previewing. The hook frame had terminal JSON text bleeding into the face close-up. This was only discovered after a full render that took 2 minutes and crashed WSL.
 
 **Rule**: ALWAYS preview EVERY segment before creating the edit.
 ```
@@ -865,7 +882,7 @@ Each layout transition should feel like a gentle "zoom out" (D→B→A→C) or "
 
 ### Mistake 5: Using generic scene_map regions instead of per-timestamp analysis
 
-**What happened**: Used pre-computed canvas_regions from `get_scene_at` which represent the general scene (8-second average). But at the specific timestamp, the webcam overlay overlapped with terminal text, making the face crop include code artifacts.
+**What happened**: Used pre-computed canvas_regions from `get_segment_detail(timestamp_ms=X)` which represent the general scene (8-second average). But at the specific timestamp, the webcam overlay overlapped with terminal text, making the face crop include code artifacts.
 
 **Rule**: For face-dominant layouts (D, B, A speaker region), ALWAYS verify the source crop coordinates with `preview_layout` at the EXACT start timestamp of the segment. The webcam overlay position shifts slightly between frames, and surrounding content changes constantly in screen recordings.
 
@@ -888,7 +905,7 @@ WRONG:  source_x=2925, source_y=1563, source_width=482, source_height=482  (face
 RIGHT:  source_x=2718, source_y=1474, source_width=831, source_height=686  (webcam overlay — full)
 ```
 
-In `get_scene_at` response:
+In `get_segment_detail(timestamp_ms=X)` point query response:
 - `scene.face` = detection data (where the face IS). Use for knowing IF a face exists.
 - `scene.webcam` = crop data (what to SHOW). Use for canvas region source coordinates.
 

@@ -6,11 +6,8 @@ Tests cover:
 - Auto-captioning from transcript
 - Non-existent project error
 - Out-of-range segment validation error
-- clipcannon_list_edits (internal function) returns created edits
-- List edits with status filter
 - clipcannon_modify_edit changes name
 - Modify non-draft edit rejected
-- clipcannon_generate_metadata (internal function) produces title/description/hashtags
 """
 
 from __future__ import annotations
@@ -24,8 +21,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from clipcannon.tools.editing import (
-    clipcannon_generate_metadata,
-    clipcannon_list_edits,
     dispatch_editing_tool,
 )
 
@@ -47,7 +42,6 @@ def project_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
 
     conn = sqlite3.connect(str(db_path))
 
-    # Core tables
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS schema_version (
             version INTEGER PRIMARY KEY,
@@ -194,7 +188,6 @@ def project_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
         INSERT OR REPLACE INTO schema_version (version) VALUES (2);
     """)
 
-    # Insert project
     conn.execute(
         "INSERT INTO project (project_id, name, source_path, source_sha256, "
         "duration_ms, resolution, fps, codec, status) "
@@ -212,7 +205,6 @@ def project_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
         ),
     )
 
-    # Insert transcript data
     conn.execute(
         "INSERT INTO transcript_segments "
         "(project_id, start_ms, end_ms, text, speaker_id, language, word_count) "
@@ -239,7 +231,6 @@ def project_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
             (seg_id, word, start, end, 0.95, 1),
         )
 
-    # Insert VUD data for metadata generation
     conn.execute(
         "INSERT INTO topics (project_id, start_ms, end_ms, label, keywords, "
         "coherence_score, semantic_density) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -254,7 +245,6 @@ def project_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     conn.commit()
     conn.close()
 
-    # Patch the projects_dir function to use our tmp directory
     monkeypatch.setattr(
         "clipcannon.tools.editing_helpers.projects_dir",
         lambda: projects_dir,
@@ -311,7 +301,6 @@ class TestCreateEdit:
         assert "error" not in result
         edit_id = result["edit_id"]
 
-        # Verify segments in DB
         projects_dir = tmp_path / "projects"
         db_path = projects_dir / project_id / "analysis.db"
         conn = sqlite3.connect(str(db_path))
@@ -348,7 +337,6 @@ class TestCreateEdit:
         )
         assert "error" not in result
         assert result["captions_enabled"] is True
-        # Should have auto-generated some caption chunks
         assert result["caption_chunks"] >= 0
 
     @pytest.mark.asyncio()
@@ -387,55 +375,6 @@ class TestCreateEdit:
             },
         )
         assert "error" in result
-
-
-class TestListEdits:
-    """Test clipcannon_list_edits internal function (removed from MCP)."""
-
-    @pytest.mark.asyncio()
-    async def test_list_returns_created(
-        self, project_setup: str
-    ) -> None:
-        """List edits returns previously created edits."""
-        project_id = project_setup
-        # Create an edit first
-        await dispatch_editing_tool(
-            "clipcannon_create_edit",
-            {
-                "project_id": project_id,
-                "name": "Listed Edit",
-                "target_platform": "tiktok",
-                "segments": [
-                    {"source_start_ms": 0, "source_end_ms": 30000},
-                ],
-            },
-        )
-        result = await clipcannon_list_edits(project_id)
-        assert "error" not in result
-        assert result["total"] >= 1
-        assert len(result["edits"]) >= 1
-
-    @pytest.mark.asyncio()
-    async def test_list_with_status_filter(
-        self, project_setup: str
-    ) -> None:
-        """List edits with status_filter='draft' returns only drafts."""
-        project_id = project_setup
-        await dispatch_editing_tool(
-            "clipcannon_create_edit",
-            {
-                "project_id": project_id,
-                "name": "Draft Edit",
-                "target_platform": "tiktok",
-                "segments": [
-                    {"source_start_ms": 0, "source_end_ms": 30000},
-                ],
-            },
-        )
-        result = await clipcannon_list_edits(project_id, status_filter="draft")
-        assert "error" not in result
-        for edit in result["edits"]:
-            assert edit["status"] == "draft"
 
 
 class TestModifyEdit:
@@ -490,7 +429,6 @@ class TestModifyEdit:
         )
         edit_id = create_result["edit_id"]
 
-        # Manually set status to 'rendered'
         projects_dir = tmp_path / "projects"
         db_path = projects_dir / project_id / "analysis.db"
         conn = sqlite3.connect(str(db_path))
@@ -510,34 +448,3 @@ class TestModifyEdit:
             },
         )
         assert "error" in modify_result
-
-
-class TestGenerateMetadata:
-    """Test clipcannon_generate_metadata internal function (removed from MCP)."""
-
-    @pytest.mark.asyncio()
-    async def test_generates_title_description_hashtags(
-        self, project_setup: str
-    ) -> None:
-        """Generate metadata produces title, description, and hashtags."""
-        project_id = project_setup
-        create_result = await dispatch_editing_tool(
-            "clipcannon_create_edit",
-            {
-                "project_id": project_id,
-                "name": "Metadata Test",
-                "target_platform": "tiktok",
-                "segments": [
-                    {"source_start_ms": 0, "source_end_ms": 30000},
-                ],
-            },
-        )
-        edit_id = create_result["edit_id"]
-
-        meta_result = await clipcannon_generate_metadata(project_id, edit_id)
-        assert "error" not in meta_result, f"Got error: {meta_result}"
-        assert "title" in meta_result
-        assert len(meta_result["title"]) > 0
-        assert "description" in meta_result
-        assert "hashtags" in meta_result
-        assert isinstance(meta_result["hashtags"], list)

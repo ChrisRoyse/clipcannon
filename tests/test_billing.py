@@ -6,10 +6,8 @@ license server API, and license client operations.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import sqlite3
-import tempfile
 import uuid
 from pathlib import Path
 from unittest.mock import patch

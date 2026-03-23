@@ -7,7 +7,7 @@ and audio settings. Provides lookup and software fallback utilities.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from clipcannon.exceptions import PipelineError
 
@@ -228,20 +228,4 @@ def get_software_fallback(profile: EncodingProfile) -> EncodingProfile:
     }
     sw_codec = codec_map.get(profile.video_codec, profile.video_codec)
 
-    return EncodingProfile(
-        name=profile.name,
-        width=profile.width,
-        height=profile.height,
-        aspect_ratio=profile.aspect_ratio,
-        fps=profile.fps,
-        video_codec=sw_codec,
-        video_bitrate=profile.video_bitrate,
-        max_bitrate=profile.max_bitrate,
-        bufsize=profile.bufsize,
-        audio_codec=profile.audio_codec,
-        audio_bitrate=profile.audio_bitrate,
-        audio_sample_rate=profile.audio_sample_rate,
-        max_duration_ms=profile.max_duration_ms,
-        min_duration_ms=profile.min_duration_ms,
-        movflags=profile.movflags,
-    )
+    return replace(profile, video_codec=sw_codec)

@@ -127,7 +127,7 @@ async def generate_music(
         RuntimeError: If generation or validation fails.
     """
     try:
-        from ace_step import ACEStepPipeline  # type: ignore[import-untyped]
+        from acestep.pipeline_ace_step import ACEStepPipeline  # type: ignore[import-untyped]
     except ImportError as exc:
         raise ImportError(
             "ACE-Step not installed. Install with: pip install ace-step"

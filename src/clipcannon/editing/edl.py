@@ -7,7 +7,6 @@ Provides validation and duration computation utilities.
 
 from __future__ import annotations
 
-import logging
 import sqlite3
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
@@ -16,8 +15,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
-
-logger = logging.getLogger(__name__)
 
 # ============================================================
 # Platform duration limits (min_s, max_s)

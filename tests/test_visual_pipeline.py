@@ -10,18 +10,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
-import tempfile
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
 from clipcannon.config import ClipCannonConfig
-from clipcannon.db.schema import create_project_db, init_project_directory
+from clipcannon.db.schema import create_project_db
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all, fetch_one
-from clipcannon.pipeline.orchestrator import StageResult
 
 
 # ============================================================
@@ -39,10 +36,8 @@ def tmp_project(tmp_path: Path) -> tuple[str, Path, Path]:
     project_id = "test_visual_001"
     project_dir = tmp_path / project_id
 
-    # Initialize project directory and database
     db_path = create_project_db(project_id, base_dir=tmp_path)
 
-    # Create subdirectories
     frames_dir = project_dir / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
     storyboard_dir = project_dir / "storyboards"
@@ -52,18 +47,16 @@ def tmp_project(tmp_path: Path) -> tuple[str, Path, Path]:
     num_frames = 20
     for i in range(1, num_frames + 1):
         frame_path = frames_dir / f"frame_{i:06d}.jpg"
-        # Create colored frames that change every 5 frames (scene change)
         if i <= 5:
-            color = (255, 0, 0)  # Red scene
+            color = (255, 0, 0)
         elif i <= 10:
-            color = (0, 255, 0)  # Green scene
+            color = (0, 255, 0)
         elif i <= 15:
-            color = (0, 0, 255)  # Blue scene
+            color = (0, 0, 255)
         else:
-            color = (255, 255, 0)  # Yellow scene
+            color = (255, 255, 0)
 
         img = Image.new("RGB", (640, 480), color=color)
-        # Add some variation within scenes
         for x in range(0, 640, 64):
             for y in range(0, 480, 64):
                 variation = ((i * 17 + x * 3 + y * 7) % 50) - 25
@@ -74,7 +67,6 @@ def tmp_project(tmp_path: Path) -> tuple[str, Path, Path]:
 
         img.save(str(frame_path), "JPEG", quality=80)
 
-    # Insert project metadata
     conn = get_connection(db_path, enable_vec=False, dict_rows=True)
     try:
         execute(
@@ -95,44 +87,22 @@ def tmp_project(tmp_path: Path) -> tuple[str, Path, Path]:
 
 
 @pytest.fixture
-def config() -> ClipCannonConfig:
-    """Create a test configuration."""
-    data = {
-        "version": "1.0",
-        "directories": {
-            "projects": "/tmp/clipcannon_test/projects",
-            "models": "/tmp/clipcannon_test/models",
-            "temp": "/tmp/clipcannon_test/tmp",
-        },
-        "processing": {
-            "frame_extraction_fps": 2,
-            "whisper_model": "large-v3",
-            "whisper_compute_type": "int8",
-            "batch_size_visual": 64,
-            "scene_change_threshold": 0.85,
-            "highlight_count_default": 20,
-            "min_clip_duration_ms": 5000,
-            "max_clip_duration_ms": 600000,
-        },
-        "rendering": {
-            "default_profile": "youtube_standard",
-            "use_nvenc": False,
-            "nvenc_preset": "p4",
-            "caption_default_style": "bold_centered",
-            "thumbnail_format": "jpg",
-            "thumbnail_quality": 95,
-        },
-        "publishing": {
-            "require_approval": True,
-            "max_daily_posts_per_platform": 5,
-        },
-        "gpu": {
-            "device": "cpu",
-            "max_vram_usage_gb": 24,
-            "concurrent_models": True,
-        },
-    }
-    return ClipCannonConfig(data, config_path=Path("/tmp/test_config.json"))
+def storyboard_result(
+    tmp_project: tuple[str, Path, Path],
+    clipcannon_config: ClipCannonConfig,
+) -> tuple[object, str, Path, Path]:
+    """Run storyboard generation ONCE and share the result across tests.
+
+    Returns:
+        Tuple of (stage_result, project_id, db_path, project_dir).
+    """
+    from clipcannon.pipeline.storyboard import run_storyboard
+
+    project_id, db_path, project_dir = tmp_project
+    result = asyncio.run(
+        run_storyboard(project_id, db_path, project_dir, clipcannon_config),
+    )
+    return result, project_id, db_path, project_dir
 
 
 # ============================================================
@@ -145,42 +115,29 @@ class TestStoryboard:
 
     def test_storyboard_generates_grids(
         self,
-        tmp_project: tuple[str, Path, Path],
-        config: ClipCannonConfig,
+        storyboard_result: tuple[object, str, Path, Path],
     ) -> None:
         """Verify storyboard creates grid images on disk."""
-        from clipcannon.pipeline.storyboard import run_storyboard
-
-        project_id, db_path, project_dir = tmp_project
-        result = asyncio.run(
-            run_storyboard(project_id, db_path, project_dir, config),
-        )
+        result, project_id, db_path, project_dir = storyboard_result
 
         assert result.success is True
         assert result.operation == "storyboard_generation"
         assert result.provenance_record_id is not None
 
-        # Check grid files exist on disk
         storyboard_dir = project_dir / "storyboards"
         grids = sorted(storyboard_dir.glob("grid_*.jpg"))
         assert len(grids) > 0, "No storyboard grid files generated"
-
         # With 20 frames at 9 per grid: ceil(20/9) = 3 grids
         assert len(grids) == 3
 
     def test_storyboard_grid_dimensions(
         self,
-        tmp_project: tuple[str, Path, Path],
-        config: ClipCannonConfig,
+        storyboard_result: tuple[object, str, Path, Path],
     ) -> None:
         """Verify generated grids have correct dimensions."""
-        from clipcannon.pipeline.storyboard import run_storyboard
+        _, _, _, project_dir = storyboard_result
 
-        project_id, db_path, project_dir = tmp_project
-        asyncio.run(run_storyboard(project_id, db_path, project_dir, config))
-
-        storyboard_dir = project_dir / "storyboards"
-        first_grid = storyboard_dir / "grid_001.jpg"
+        first_grid = project_dir / "storyboards" / "grid_001.jpg"
         assert first_grid.exists()
 
         img = Image.open(first_grid)
@@ -188,14 +145,10 @@ class TestStoryboard:
 
     def test_storyboard_inserts_db_records(
         self,
-        tmp_project: tuple[str, Path, Path],
-        config: ClipCannonConfig,
+        storyboard_result: tuple[object, str, Path, Path],
     ) -> None:
         """Verify storyboard_grids table has correct records."""
-        from clipcannon.pipeline.storyboard import run_storyboard
-
-        project_id, db_path, project_dir = tmp_project
-        asyncio.run(run_storyboard(project_id, db_path, project_dir, config))
+        _, project_id, db_path, _ = storyboard_result
 
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
@@ -210,16 +163,14 @@ class TestStoryboard:
 
         assert len(rows) == 3
 
-        # Verify first grid
         first = rows[0]
         assert first["grid_number"] == 1
         assert first["project_id"] == project_id
         assert "grid_001.jpg" in str(first["grid_path"])
 
-        # Verify timestamps are valid JSON
         ts_data = json.loads(str(first["cell_timestamps_ms"]))
         assert isinstance(ts_data, list)
-        assert len(ts_data) == 9  # Full grid of 9
+        assert len(ts_data) == 9
 
         # Last grid should have fewer frames (20 - 18 = 2)
         last = rows[2]
@@ -228,16 +179,10 @@ class TestStoryboard:
 
     def test_storyboard_writes_provenance(
         self,
-        tmp_project: tuple[str, Path, Path],
-        config: ClipCannonConfig,
+        storyboard_result: tuple[object, str, Path, Path],
     ) -> None:
         """Verify provenance record is written."""
-        from clipcannon.pipeline.storyboard import run_storyboard
-
-        project_id, db_path, project_dir = tmp_project
-        result = asyncio.run(
-            run_storyboard(project_id, db_path, project_dir, config),
-        )
+        result, project_id, db_path, _ = storyboard_result
 
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
@@ -257,7 +202,7 @@ class TestStoryboard:
     def test_storyboard_no_frames(
         self,
         tmp_path: Path,
-        config: ClipCannonConfig,
+        clipcannon_config: ClipCannonConfig,
     ) -> None:
         """Verify graceful failure when no frames exist."""
         from clipcannon.pipeline.storyboard import run_storyboard
@@ -268,7 +213,7 @@ class TestStoryboard:
         (project_dir / "frames").mkdir(parents=True, exist_ok=True)
 
         result = asyncio.run(
-            run_storyboard(project_id, db_path, project_dir, config),
+            run_storyboard(project_id, db_path, project_dir, clipcannon_config),
         )
 
         assert result.success is False
@@ -315,8 +260,8 @@ class TestQuality:
         assert _brisque_to_quality(0.0) == 100.0
         assert _brisque_to_quality(50.0) == 50.0
         assert _brisque_to_quality(100.0) == 0.0
-        assert _brisque_to_quality(-10.0) == 100.0  # Clamped
-        assert _brisque_to_quality(150.0) == 0.0  # Clamped
+        assert _brisque_to_quality(-10.0) == 100.0
+        assert _brisque_to_quality(150.0) == 0.0
 
     def test_quality_classification(self) -> None:
         """Verify quality classification thresholds."""
@@ -353,12 +298,11 @@ class TestQuality:
     def test_laplacian_fallback(
         self,
         tmp_project: tuple[str, Path, Path],
-        config: ClipCannonConfig,
     ) -> None:
         """Verify Laplacian fallback produces reasonable scores."""
         from clipcannon.pipeline.quality import _run_laplacian_fallback
 
-        project_id, db_path, project_dir = tmp_project
+        _, _, project_dir = tmp_project
         frames = sorted((project_dir / "frames").glob("frame_*.jpg"))
 
         scores = _run_laplacian_fallback(frames[:5])
@@ -369,14 +313,13 @@ class TestQuality:
     def test_quality_with_scenes(
         self,
         tmp_project: tuple[str, Path, Path],
-        config: ClipCannonConfig,
+        clipcannon_config: ClipCannonConfig,
     ) -> None:
         """Verify quality updates scene records when scenes exist."""
         from clipcannon.pipeline.quality import run_quality
 
         project_id, db_path, project_dir = tmp_project
 
-        # Insert a couple of test scenes first
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
             execute(
@@ -398,12 +341,11 @@ class TestQuality:
             conn.close()
 
         result = asyncio.run(
-            run_quality(project_id, db_path, project_dir, config),
+            run_quality(project_id, db_path, project_dir, clipcannon_config),
         )
 
         assert result.success is True
 
-        # Verify scenes were updated
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
             scenes = fetch_all(
@@ -476,18 +418,15 @@ class TestVisualEmbedHelpers:
         """Verify scene boundary detection from embeddings."""
         from clipcannon.pipeline.visual_embed import _detect_scenes
 
-        # Create 6 frames: 3 similar + 3 different
         frames = [Path(f"frame_{i:06d}.jpg") for i in range(1, 7)]
 
-        # Similar embeddings for first 3, different for last 3
         emb_a = [1.0, 0.0, 0.0]
-        emb_b = [0.0, 1.0, 0.0]  # Orthogonal = similarity 0
+        emb_b = [0.0, 1.0, 0.0]
 
         embeddings = [emb_a, emb_a, emb_a, emb_b, emb_b, emb_b]
 
         scenes = _detect_scenes(frames, embeddings, fps=2, threshold=0.75)
 
-        # Should detect at least 2 scenes (boundary at frame 4)
         assert len(scenes) >= 2
 
 
@@ -527,7 +466,7 @@ class TestOCRHelpers:
         """Verify small font size estimation."""
         from clipcannon.pipeline.ocr import _estimate_font_size
 
-        bbox = [[0, 100], [100, 100], [100, 110], [0, 110]]  # 10px
+        bbox = [[0, 100], [100, 100], [100, 110], [0, 110]]
         result = _estimate_font_size(bbox, 480)
         assert result == "small"
 
@@ -535,7 +474,7 @@ class TestOCRHelpers:
         """Verify large font size estimation."""
         from clipcannon.pipeline.ocr import _estimate_font_size
 
-        bbox = [[0, 100], [100, 100], [100, 200], [0, 200]]  # 100px
+        bbox = [[0, 100], [100, 100], [100, 200], [0, 200]]
         result = _estimate_font_size(bbox, 480)
         assert result == "large"
 
@@ -551,7 +490,7 @@ class TestOCRHelpers:
         ) is True
         assert _texts_differ_significantly(
             ["A", "B", "C"], ["A", "B", "D"],
-        ) is False  # 2/4 overlap = 50%
+        ) is False
 
 
 # ============================================================

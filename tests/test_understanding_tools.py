@@ -1,7 +1,7 @@
 """Tests for ClipCannon understanding MCP tools.
 
-Tests VUD summary, analytics, transcript retrieval, segment detail,
-search, and error handling with synthetic data in a temp database.
+Tests transcript retrieval, segment detail, search, and error
+handling with synthetic data in a temp database.
 """
 from __future__ import annotations
 
@@ -15,9 +15,7 @@ from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert, execute
 from clipcannon.db.schema import create_project_db
 from clipcannon.tools.understanding import (
-    clipcannon_get_analytics,
     clipcannon_get_transcript,
-    clipcannon_get_vud_summary,
 )
 from clipcannon.tools.understanding_search import (
     clipcannon_search_content,
@@ -248,113 +246,6 @@ def ready_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     }
 
 
-class TestGetVudSummary:
-    """Tests for clipcannon_get_vud_summary."""
-
-    @pytest.mark.asyncio
-    async def test_returns_summary(self, ready_project: dict[str, object]) -> None:
-        """VUD summary returns expected structure."""
-        pid = str(ready_project["project_id"])
-        result = await clipcannon_get_vud_summary(pid)
-
-        assert "error" not in result
-        assert result["project_id"] == pid
-        assert result["name"] == "Test Video"
-        assert result["duration_ms"] == 120000
-        assert result["status"] == "ready"
-
-        # Speakers
-        speakers = result["speakers"]
-        assert isinstance(speakers, dict)
-        assert speakers["count"] == 2
-
-        # Topics
-        topics = result["topics"]
-        assert isinstance(topics, dict)
-        assert topics["count"] == 2
-        assert len(topics["preview"]) == 2
-
-        # Highlights
-        assert len(result["top_highlights"]) == 2
-        # Sorted by score desc
-        scores = [h["score"] for h in result["top_highlights"]]
-        assert scores == sorted(scores, reverse=True)
-
-        # Reactions
-        assert result["reactions"]["laughter"] == 1
-
-        # Content safety
-        assert result["content_safety"]["content_rating"] == "G"
-
-        # Stream status
-        assert result["stream_status"]["completed"] == 16
-
-    @pytest.mark.asyncio
-    async def test_response_size_under_8k_tokens(self, ready_project: dict[str, object]) -> None:
-        """VUD summary response stays under 8K tokens (~32KB)."""
-        pid = str(ready_project["project_id"])
-        result = await clipcannon_get_vud_summary(pid)
-        json_str = json.dumps(result, default=str)
-        # 8K tokens ~ 32KB of JSON
-        assert len(json_str) < 32_000, f"Response too large: {len(json_str)} bytes"
-
-    @pytest.mark.asyncio
-    async def test_nonexistent_project(self, ready_project: dict[str, object]) -> None:
-        """Returns error for nonexistent project."""
-        result = await clipcannon_get_vud_summary("proj_nonexistent")
-        assert "error" in result
-        assert result["error"]["code"] == "PROJECT_NOT_FOUND"
-
-
-class TestGetAnalytics:
-    """Tests for clipcannon_get_analytics."""
-
-    @pytest.mark.asyncio
-    async def test_all_sections(self, ready_project: dict[str, object]) -> None:
-        """Returns all sections by default."""
-        pid = str(ready_project["project_id"])
-        result = await clipcannon_get_analytics(pid)
-
-        assert "error" not in result
-        assert "highlights" in result
-        assert "scenes" in result
-        assert "topics" in result
-        assert "reactions" in result
-        assert "beats" in result
-        assert "pacing" in result
-        assert "silence_gaps" in result
-
-    @pytest.mark.asyncio
-    async def test_specific_sections(self, ready_project: dict[str, object]) -> None:
-        """Returns only requested sections."""
-        pid = str(ready_project["project_id"])
-        result = await clipcannon_get_analytics(pid, sections=["highlights", "topics"])
-
-        assert "highlights" in result
-        assert "topics" in result
-        assert "scenes" not in result
-        assert "pacing" not in result
-
-    @pytest.mark.asyncio
-    async def test_invalid_section(self, ready_project: dict[str, object]) -> None:
-        """Returns error for invalid section names."""
-        pid = str(ready_project["project_id"])
-        result = await clipcannon_get_analytics(pid, sections=["invalid_section"])
-        assert "error" in result
-        assert result["error"]["code"] == "INVALID_PARAMETER"
-
-    @pytest.mark.asyncio
-    async def test_scenes_pagination(self, ready_project: dict[str, object]) -> None:
-        """Scenes include pagination metadata."""
-        pid = str(ready_project["project_id"])
-        result = await clipcannon_get_analytics(pid, sections=["scenes"])
-        scenes = result["scenes"]
-        assert "total" in scenes
-        assert "has_more" in scenes
-        assert scenes["total"] == 2
-        assert scenes["has_more"] is False
-
-
 class TestGetTranscript:
     """Tests for clipcannon_get_transcript."""
 
@@ -466,19 +357,7 @@ class TestSearchContent:
 
 
 class TestErrorHandling:
-    """Tests for error handling across all understanding tools."""
-
-    @pytest.mark.asyncio
-    async def test_vud_summary_not_found(self, ready_project: dict[str, object]) -> None:
-        """Returns PROJECT_NOT_FOUND for nonexistent project."""
-        result = await clipcannon_get_vud_summary("proj_does_not_exist")
-        assert result["error"]["code"] == "PROJECT_NOT_FOUND"
-
-    @pytest.mark.asyncio
-    async def test_analytics_not_found(self, ready_project: dict[str, object]) -> None:
-        """Returns error for missing project."""
-        result = await clipcannon_get_analytics("proj_does_not_exist")
-        assert "error" in result
+    """Tests for error handling across understanding tools."""
 
     @pytest.mark.asyncio
     async def test_transcript_not_found(self, ready_project: dict[str, object]) -> None:
@@ -505,6 +384,6 @@ class TestErrorHandling:
         finally:
             conn.close()
 
-        result = await clipcannon_get_vud_summary(pid)
+        result = await clipcannon_get_transcript(pid)
         assert "error" in result
         assert result["error"]["code"] == "INVALID_STATE"

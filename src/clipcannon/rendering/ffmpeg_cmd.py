@@ -55,6 +55,58 @@ def _escape_subtitle_path(path: Path) -> str:
     return escaped.replace(":", "\\:")
 
 
+def _build_delogo_chain(removals: list | None) -> str:
+    """Build a delogo filter chain string from removal specs.
+
+    Args:
+        removals: List of RemovalSpec objects, or None.
+
+    Returns:
+        Comma-prefixed delogo chain string, or empty string if no removals.
+    """
+    if not removals:
+        return ""
+    return "".join(
+        f",delogo=x={rem.x}:y={rem.y}:w={rem.width}:h={rem.height}:band=10"
+        for rem in removals
+    )
+
+
+def _apply_color_grading(
+    filters: list[str],
+    input_label: str,
+    output_label: str,
+    color: object,
+) -> str:
+    """Apply color grading filters to a labeled stream.
+
+    If color grading produces filters, appends them and returns the
+    new label. Otherwise returns the input label unchanged.
+
+    Args:
+        filters: Accumulating filter parts (modified in place).
+        input_label: Current stream label to apply color to.
+        output_label: Label for the color-graded output stream.
+        color: ColorSpec with brightness, contrast, etc.
+
+    Returns:
+        The effective output label (may be input_label if no-op).
+    """
+    from clipcannon.editing.motion import build_color_filters
+
+    color_filter = build_color_filters(
+        brightness=color.brightness,
+        contrast=color.contrast,
+        saturation=color.saturation,
+        gamma=color.gamma,
+        hue_shift=color.hue_shift,
+    )
+    if color_filter:
+        filters.append(f"[{input_label}]{color_filter}[{output_label}]")
+        return output_label
+    return input_label
+
+
 def build_ffmpeg_cmd(
     source_path: Path,
     output_path: Path,
@@ -245,11 +297,7 @@ def _build_multi_segment_cmd(
     video_labels: list[str] = []
     audio_labels: list[str] = []
 
-    # Build delogo chain string for removals
-    delogo_chain = ""
-    if removals:
-        for rem in removals:
-            delogo_chain += f",delogo=x={rem.x}:y={rem.y}:w={rem.width}:h={rem.height}:band=10"
+    delogo_chain = _build_delogo_chain(removals)
 
     for i, seg in enumerate(segments):
         start_s = seg.source_start_ms / 1000.0
@@ -970,20 +1018,9 @@ def _build_per_segment_canvas_cmd(
 
     # Apply global color grading (after concat, before subtitles)
     if global_color is not None:
-        from clipcannon.editing.motion import build_color_filters
-
-        color_filter = build_color_filters(
-            brightness=global_color.brightness,
-            contrast=global_color.contrast,
-            saturation=global_color.saturation,
-            gamma=global_color.gamma,
-            hue_shift=global_color.hue_shift,
+        final_video = _apply_color_grading(
+            filter_parts, final_video, "color_graded", global_color,
         )
-        if color_filter:
-            filter_parts.append(
-                f"[{final_video}]{color_filter}[color_graded]"
-            )
-            final_video = "color_graded"
 
     # Apply overlay drawtext/drawbox filters
     if overlays:
@@ -1106,11 +1143,7 @@ def _build_segment_canvas_chain(
     n_regions = len(regions)
     seg_dur_s = (end_s - start_s) / seg.speed
 
-    # Build delogo chain for removals (applied after trim)
-    delogo_chain = ""
-    if removals:
-        for rem in removals:
-            delogo_chain += f",delogo=x={rem.x}:y={rem.y}:w={rem.width}:h={rem.height}:band=10"
+    delogo_chain = _build_delogo_chain(removals)
 
     # 1. Trim source (with delogo if removals present)
     filters.append(
@@ -1180,20 +1213,9 @@ def _build_segment_canvas_chain(
     # 6. Apply per-segment color grading
     color_in = f"seg{idx}_composed"
     if seg.color is not None:
-        from clipcannon.editing.motion import build_color_filters
-
-        color_filter = build_color_filters(
-            brightness=seg.color.brightness,
-            contrast=seg.color.contrast,
-            saturation=seg.color.saturation,
-            gamma=seg.color.gamma,
-            hue_shift=seg.color.hue_shift,
+        color_in = _apply_color_grading(
+            filters, color_in, f"seg{idx}_colored", seg.color,
         )
-        if color_filter:
-            filters.append(
-                f"[{color_in}]{color_filter}[seg{idx}_colored]"
-            )
-            color_in = f"seg{idx}_colored"
 
     # Final label for this segment
     if color_in != f"v{idx}":
@@ -1229,13 +1251,9 @@ def _build_segment_zoom_chain(
     zoom = seg.canvas.zoom  # type: ignore[union-attr]
     seg_dur_s = (end_s - start_s) / seg.speed
 
-    # Build delogo chain for removals (applied after trim)
-    delogo_chain = ""
-    if removals:
-        for rem in removals:
-            delogo_chain += f",delogo=x={rem.x}:y={rem.y}:w={rem.width}:h={rem.height}:band=10"
+    delogo_chain = _build_delogo_chain(removals)
 
-    # Trim and reset PTS so t starts at 0 (with delogo if removals present)
+    # Trim and reset PTS so t starts at 0
     filters.append(
         f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
         f"setpts=PTS-STARTPTS{delogo_chain}[seg{idx}_src]"
@@ -1266,37 +1284,23 @@ def _build_segment_zoom_chain(
     crop_y = lerp(zoom.start_y, zoom.end_y)
 
     # Apply zoom crop and scale
-    zoom_out_label = f"seg{idx}_zoomed"
-    if seg.color is not None:
-        filters.append(
-            f"[seg{idx}_src]"
-            f"crop=w='{crop_w}':h='{crop_h}':x='{crop_x}':y='{crop_y}',"
-            f"scale={cw}:{ch},setsar=1"
-            f"[{zoom_out_label}]"
-        )
-        # Apply per-segment color grading
-        from clipcannon.editing.motion import build_color_filters
+    crop_scale = (
+        f"crop=w='{crop_w}':h='{crop_h}':x='{crop_x}':y='{crop_y}',"
+        f"scale={cw}:{ch},setsar=1"
+    )
 
-        color_filter = build_color_filters(
-            brightness=seg.color.brightness,
-            contrast=seg.color.contrast,
-            saturation=seg.color.saturation,
-            gamma=seg.color.gamma,
-            hue_shift=seg.color.hue_shift,
-        )
-        if color_filter:
-            filters.append(
-                f"[{zoom_out_label}]{color_filter}[v{idx}]"
-            )
-        else:
-            filters.append(f"[{zoom_out_label}]null[v{idx}]")
-    else:
+    if seg.color is not None:
+        zoom_out_label = f"seg{idx}_zoomed"
         filters.append(
-            f"[seg{idx}_src]"
-            f"crop=w='{crop_w}':h='{crop_h}':x='{crop_x}':y='{crop_y}',"
-            f"scale={cw}:{ch},setsar=1"
-            f"[v{idx}]"
+            f"[seg{idx}_src]{crop_scale}[{zoom_out_label}]"
         )
+        final = _apply_color_grading(
+            filters, zoom_out_label, f"v{idx}", seg.color,
+        )
+        if final != f"v{idx}":
+            filters.append(f"[{final}]null[v{idx}]")
+    else:
+        filters.append(f"[seg{idx}_src]{crop_scale}[v{idx}]")
 
 
 def _build_segment_plain_chain(
@@ -1317,43 +1321,23 @@ def _build_segment_plain_chain(
     """
     start_s = seg.source_start_ms / 1000.0
     end_s = seg.source_end_ms / 1000.0
+    delogo_chain = _build_delogo_chain(removals)
 
-    # Build delogo chain for removals (applied after trim)
-    delogo_chain = ""
-    if removals:
-        for rem in removals:
-            delogo_chain += f",delogo=x={rem.x}:y={rem.y}:w={rem.width}:h={rem.height}:band=10"
+    trim_scale = (
+        f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
+        f"setpts=PTS-STARTPTS{delogo_chain},"
+        f"scale={profile.width}:{profile.height},setsar=1"
+    )
 
     if seg.color is not None:
-        filters.append(
-            f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-            f"setpts=PTS-STARTPTS{delogo_chain},"
-            f"scale={profile.width}:{profile.height},setsar=1"
-            f"[seg{idx}_scaled]"
+        filters.append(f"{trim_scale}[seg{idx}_scaled]")
+        final = _apply_color_grading(
+            filters, f"seg{idx}_scaled", f"v{idx}", seg.color,
         )
-        # Apply per-segment color grading
-        from clipcannon.editing.motion import build_color_filters
-
-        color_filter = build_color_filters(
-            brightness=seg.color.brightness,
-            contrast=seg.color.contrast,
-            saturation=seg.color.saturation,
-            gamma=seg.color.gamma,
-            hue_shift=seg.color.hue_shift,
-        )
-        if color_filter:
-            filters.append(
-                f"[seg{idx}_scaled]{color_filter}[v{idx}]"
-            )
-        else:
-            filters.append(f"[seg{idx}_scaled]null[v{idx}]")
+        if final != f"v{idx}":
+            filters.append(f"[{final}]null[v{idx}]")
     else:
-        filters.append(
-            f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-            f"setpts=PTS-STARTPTS{delogo_chain},"
-            f"scale={profile.width}:{profile.height},setsar=1"
-            f"[v{idx}]"
-        )
+        filters.append(f"{trim_scale}[v{idx}]")
 
 
 # ============================================================

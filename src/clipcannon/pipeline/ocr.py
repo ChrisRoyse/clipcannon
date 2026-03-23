@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert
-from clipcannon.pipeline.frame_utils import frame_timestamp_ms
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.provenance import (
     ExecutionInfo,
