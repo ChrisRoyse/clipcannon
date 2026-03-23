@@ -26,50 +26,16 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
         },
     ),
     Tool(
-        name="clipcannon_render_status",
-        description=(
-            "Check the status of a render job. Returns render "
-            "metadata including status, output path, file size, "
-            "duration, codec, resolution, and any error message."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {"type": "string", "description": "Project identifier"},
-                "render_id": {"type": "string", "description": "Render identifier"},
-            },
-            "required": ["project_id", "render_id"],
-        },
-    ),
-    Tool(
-        name="clipcannon_render_batch",
-        description=(
-            "Render multiple edits concurrently. Processes all "
-            "specified edits with concurrency limited by "
-            "max_parallel_renders config. Charges 2 credits per edit."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {"type": "string", "description": "Project identifier"},
-                "edit_ids": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Array of edit identifiers to render",
-                    "minItems": 1,
-                },
-            },
-            "required": ["project_id", "edit_ids"],
-        },
-    ),
-    Tool(
         name="clipcannon_get_editing_context",
         description=(
-            "Get the data manifest for a project (~500 tokens). "
+            "Get the enriched data manifest for a project. "
             "Returns a catalog of ALL available data (counts, ranges, "
-            "scores) and which tools to use to query each data type. "
-            "This tells you WHAT exists — use the listed query tools "
-            "to pull the actual data on demand. "
+            "scores), speaker breakdown (label + speaking_pct), "
+            "narrative analysis from Qwen3-8B (story_beats, open_loops, "
+            "chapter_boundaries, narrative_summary), transcript preview "
+            "(first 500 words), and which tools to use to query each "
+            "data type. One call gives you enough context to plan edits "
+            "without needing get_vud_summary or get_transcript. "
             "Call this FIRST before any editing work."
         ),
         inputSchema={
@@ -198,78 +164,6 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
             "required": [
                 "project_id", "timestamp_ms", "regions",
             ],
-        },
-    ),
-    Tool(
-        name="clipcannon_measure_layout",
-        description=(
-            "Measure exact layout coordinates using face detection. "
-            "Runs face detection on a frame and computes mathematically "
-            "precise source crop and output placement coordinates. "
-            "Returns ready-to-use canvas regions for create_edit. "
-            "Layout A = 30/70 speaker+screen split. "
-            "Layout B = 40/60 split. "
-            "Layout C = PIP (small speaker circle over screen). "
-            "Layout D = full-screen face."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "type": "string",
-                    "description": "Project identifier",
-                },
-                "timestamp_ms": {
-                    "type": "integer",
-                    "description": "Source timestamp to analyze (ms)",
-                },
-                "layout": {
-                    "type": "string",
-                    "enum": ["A", "B", "C", "D"],
-                    "description": (
-                        "Layout type: A (30/70 split), "
-                        "B (40/60 split), C (PIP), "
-                        "D (full-screen face)"
-                    ),
-                    "default": "A",
-                },
-            },
-            "required": ["project_id", "timestamp_ms"],
-        },
-    ),
-    Tool(
-        name="clipcannon_get_storyboard",
-        description=(
-            "Get a contact sheet of ALL video frames in one image. "
-            "Shows every frame at 2fps as tiny thumbnails (160x90px) "
-            "with timestamp labels in a 20-column grid. Each row = 10 seconds. "
-            "Returns the ENTIRE video in one inline image (~9K tokens) "
-            "plus the full transcript with timestamps for speech alignment. "
-            "One call = complete visual understanding of the video."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "type": "string",
-                    "description": "Project identifier",
-                },
-                "start_s": {
-                    "type": "integer",
-                    "description": (
-                        "Start time in seconds. Shows 5 seconds "
-                        "of frames (10 frames at 2fps) from this point. "
-                        "Omit to get the full overview contact sheet."
-                    ),
-                },
-                "end_s": {
-                    "type": "integer",
-                    "description": (
-                        "End time in seconds. Defaults to start_s + 5."
-                    ),
-                },
-            },
-            "required": ["project_id"],
         },
     ),
     Tool(

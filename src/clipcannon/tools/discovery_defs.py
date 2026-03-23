@@ -15,7 +15,11 @@ DISCOVERY_TOOL_DEFINITIONS: list[Tool] = [
         description=(
             "Find the best video segments for a specific purpose. "
             "Queries highlights, aligns to natural cut points (silence "
-            "gaps), includes transcript text and canvas regions. "
+            "gaps) with convergence quality scoring (silence_gap, "
+            "sentence_end, scene_boundary signals). Includes transcript, "
+            "canvas regions, story_beat (from narrative analysis), and "
+            "moment_character label (passionate_claim / excited_demo / "
+            "engaged_explanation / screen_walkthrough / calm_narration). "
             "Purpose-aware scoring: 'hook' prefers early segments "
             "with faces, 'cta' prefers late segments, 'tutorial_step' "
             "prefers text-change events. No credits charged."
@@ -56,46 +60,6 @@ DISCOVERY_TOOL_DEFINITIONS: list[Tool] = [
         },
     ),
     Tool(
-        name="clipcannon_get_scene_at",
-        description=(
-            "Point query: get scene data for a single timestamp. "
-            "Returns the scene covering the given time, or the "
-            "closest scene if none matches exactly. Optionally "
-            "includes previous and next scene summaries. Returns "
-            "canvas regions for the requested layout. No credits charged."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "type": "string",
-                    "description": "Project identifier",
-                },
-                "timestamp_ms": {
-                    "type": "integer",
-                    "description": "Target timestamp in milliseconds",
-                },
-                "layout": {
-                    "type": "string",
-                    "enum": ["A", "B", "C", "D"],
-                    "description": (
-                        "Layout to return canvas regions for. "
-                        "Omit to use the scene's recommended layout."
-                    ),
-                },
-                "include_neighbors": {
-                    "type": "boolean",
-                    "description": (
-                        "Include previous and next scene summaries "
-                        "(default false)"
-                    ),
-                    "default": False,
-                },
-            },
-            "required": ["project_id", "timestamp_ms"],
-        },
-    ),
-    Tool(
         name="clipcannon_find_cut_points",
         description=(
             "Find natural edit boundaries near a timestamp with "
@@ -128,6 +92,44 @@ DISCOVERY_TOOL_DEFINITIONS: list[Tool] = [
                 },
             },
             "required": ["project_id", "around_ms"],
+        },
+    ),
+    Tool(
+        name="clipcannon_get_narrative_flow",
+        description=(
+            "Analyze narrative coherence of proposed edit segments "
+            "BEFORE creating an edit. Takes proposed source time ranges "
+            "and shows what the speaker says at each segment boundary, "
+            "what content is being skipped in gaps between segments, "
+            "and warns about broken promise-payoff patterns. ALWAYS "
+            "call this before create_edit when using non-contiguous "
+            "segments. No credits charged."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+                "segments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "start_ms": {"type": "integer"},
+                            "end_ms": {"type": "integer"},
+                        },
+                        "required": ["start_ms", "end_ms"],
+                    },
+                    "minItems": 1,
+                    "description": (
+                        "Proposed segment time ranges from the source "
+                        "video, each with start_ms and end_ms"
+                    ),
+                },
+            },
+            "required": ["project_id", "segments"],
         },
     ),
 ]

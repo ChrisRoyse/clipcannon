@@ -55,24 +55,60 @@ Every video follows the same drop-off pattern. Your editing decisions fight this
 
 **Key insight: Every editing decision should maximize watch time.** Cuts, zooms, text overlays, and layout switches exist to prevent the viewer from swiping away.
 
-### Viral Content Structure: Hook-Body-CTA
+### Storytelling: Open the Loop, Close the Loop
 
-93% of viral content follows this framework:
+**Every video is a story. Every story has a promise and a payoff. NEVER break the promise.**
+
+The viewer stays because they're waiting for something. The hook OPENS a loop (creates a question, makes a promise, starts a journey). The ending CLOSES that loop (answers the question, delivers the promise, completes the journey). If you skip the middle or cut before the payoff, the story is broken and the viewer feels cheated.
 
 ```
-HOOK (0-3s)     Stop the scroll. Pattern interrupt. Curiosity gap.
-                "You're doing X wrong" / shocking stat / bold visual
+OPEN LOOP (0-3s)     Create a PROMISE the viewer needs to see fulfilled.
+                     "I built the world's first AI video editor" = promise to SHOW it
+                     "Watch what happens when..." = promise of a RESULT
+                     Bold claim = promise of PROOF
 
-SETUP (3-8s)    Establish tension or context. Validate the hook.
-                Show WHY viewer should care.
+SETUP (3-15s)        Establish WHY the promise matters. Build tension.
+                     Show the problem. Show what makes this hard.
+                     The viewer should think "okay, prove it"
 
-BODY (8s-end-5s) Deliver on the promise. Pattern interrupts every 5-8s.
-                 Dynamic layout changes. Zoom to emphasize.
+DELIVER (15s-end-15s) FULFILL THE PROMISE. This is the entire reason the viewer stayed.
+                      If you promised to show the AI editing → SHOW THE AI EDITING
+                      If you promised a result → SHOW THE RESULT
+                      Every scene must advance toward the payoff. No detours.
+                      Pattern interrupts every 5-8s to maintain engagement.
 
-CTA (last 3-5s) Specific action. "Send this to..." outperforms "like and subscribe"
+CLOSE LOOP (last 10-15s) Complete the story. Answer the question from the hook.
+                          "This is ClipCannon. World's first. No human in the loop."
+                          = the proof that validates the opening promise
+                          CTA: "Follow for more" / "Send this to someone who..."
 ```
 
-**Looping structure** (advanced): Design the ending to visually or narratively lead back into the first frame. Looping Shorts push past 100% retention.
+### Story Continuity Rules (CRITICAL)
+
+**Rule 1: Never break a promise.** If the speaker says "let me show you X" — the video MUST show X. If you cut before X is shown, the story is broken.
+
+**Rule 2: Never skip the middle of a story.** If the speaker goes from A → B → C → D, you cannot show A then skip to D. The viewer needs B and C to understand why D matters. If you must shorten, cut entire stories — don't gut the middle out of one story.
+
+**Rule 3: Every cut must advance the narrative.** Ask: "Does this cut move the story forward?" If it moves sideways or backward, it's wrong. Each segment should be closer to the payoff than the previous one.
+
+**Rule 4: Non-contiguous segments MUST be narratively coherent.** When you skip source content between segments, read what's in the gap. If the gap contains setup, explanation, or context that the next segment depends on, you CANNOT skip it. Use `get_narrative_flow` to verify before creating the edit.
+
+**Rule 5: Thought boundaries > sentence boundaries.** A sentence ending is not always a thought ending. "Let me show you the video." is a sentence, but the THOUGHT is "let me show you the video [shows video]." Both parts are needed. Never cut between a setup and its payoff.
+
+### Viewer Dropout Triggers (What Makes People Leave)
+
+| Trigger | What Happens | How to Prevent |
+|---|---|---|
+| Hook fails | 50% leave in first 3s | Bold statement + face close-up, not logos |
+| Broken promise | Viewer feels cheated, leaves angry | Always deliver what you promised |
+| No forward momentum | Scene doesn't advance story | Every scene moves toward payoff |
+| Monotonous pacing | All cuts same length, viewer zones out | Mix rapid cuts with held moments |
+| Mid-thought cut | Jarring audio jump, confusion | Cut at thought boundaries, verify with transcript |
+| Skipped context | "Wait, what?" → viewer lost | Never skip setup that explains the next scene |
+
+### Looping Structure (Advanced)
+
+Design the ending to lead back into the first frame. Looping videos push past 100% retention. The last word/image should create curiosity that the first frame satisfies.
 
 ### What Makes Content Go Viral
 
@@ -859,6 +895,34 @@ In `get_scene_at` response:
 For Layout D (full-screen speaker): use webcam region as source, output to full 1080x1920 canvas.
 For Layout A/B (split): use webcam region as source, output to speaker strip.
 For Layout C (PIP): use webcam region as source, output to PIP box.
+
+### Mistake 8: Using PIP layout when speaker is talking directly to camera
+
+**What happened**: At 1:18 the speaker is making a direct statement to camera ("let me show you the video that was created from the base video") but I put them in a tiny 280x232 PIP in the top-left corner instead of keeping them as the dominant visual. The PIP layout is for when screen content is the star and the speaker is narrating. When the speaker is making a direct statement, they should be Layout D (full) or Layout B (40/60 split).
+
+**Rule**: Choose layout based on WHAT THE SPEAKER IS DOING, not what section of the video you're in:
+- Speaker making direct statement to camera → **Layout D** (full webcam)
+- Speaker explaining while showing screen → **Layout B** (40/60 split)
+- Speaker narrating over screen walkthrough → **Layout A** (30/70 split)
+- Screen content is the star, speaker just commenting → **Layout C** (PIP)
+
+Read the transcript for each segment. If the speaker says "I", "you", "we", "let me" — they're addressing the viewer directly. Use Layout D or B. If they say "you can see here", "this shows", "look at" — they're referencing screen content. Use Layout A or C.
+
+### Mistake 9: Cutting at sentence boundaries but not thought boundaries
+
+**What happened**: Used `find_cut_points` sentence_end signals to find grammatically correct cut points. But a sentence ending is not always a thought ending. "Let me show you the video." is a complete sentence, but cutting right after it means the viewer never sees the video being shown. The THOUGHT is "let me show you the video [shows video]" — both parts are needed.
+
+**Rule**: After selecting sentence-boundary cut points, read the NEXT 2-3 sentences in the transcript. If the next sentence is a continuation of the same idea (showing what was promised, explaining what was just stated, completing a comparison), the cut point is wrong — extend the segment to include the completion.
+
+**Thought-completion patterns to watch for:**
+- "Let me show you..." → MUST include the showing
+- "Here's what happened..." → MUST include what happened
+- "The reason is..." → MUST include the reason
+- "You can see..." → MUST include what they see
+- "So what [X] did was..." → MUST include what X did
+- Any setup/payoff pair — never cut between setup and payoff
+
+**Verification**: For each segment, read the last sentence AND the first sentence of the NEXT segment in your source. If the next sentence completes an idea from the last sentence, extend the segment to include it.
 
 ---
 

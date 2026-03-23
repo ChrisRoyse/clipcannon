@@ -221,7 +221,7 @@ async def clipcannon_create_edit(
     elapsed_ms = int((time.monotonic() - start_time) * 1000)
     logger.info("Created edit %s for project %s in %dms", edit_id, project_id, elapsed_ms)
 
-    return {
+    response: dict[str, object] = {
         "edit_id": edit_id,
         "status": "draft",
         "name": name,
@@ -234,6 +234,67 @@ async def clipcannon_create_edit(
         "crop_mode": crop_spec.mode,
         "elapsed_ms": elapsed_ms,
     }
+
+    # ------------------------------------------------------------------
+    # Auto-validate narrative coherence for non-contiguous segments
+    # ------------------------------------------------------------------
+    try:
+        narrative_warnings: list[str] = []
+        if len(segment_specs) > 1:
+            nv_conn = get_connection(db, enable_vec=False, dict_rows=True)
+            try:
+                for i in range(len(segment_specs) - 1):
+                    current_end = segment_specs[i].source_end_ms
+                    next_start = segment_specs[i + 1].source_start_ms
+                    gap_ms = next_start - current_end
+
+                    if gap_ms > 1000:
+                        # Query what words are being skipped in the gap
+                        try:
+                            gap_text_rows = fetch_all(
+                                nv_conn,
+                                "SELECT text FROM transcript_segments WHERE project_id = ? "
+                                "AND start_ms >= ? AND end_ms <= ? ORDER BY start_ms",
+                                (project_id, current_end, next_start),
+                            )
+                            gap_words = sum(
+                                len(str(r["text"]).split()) for r in gap_text_rows
+                            )
+                            if gap_words > 20:
+                                narrative_warnings.append(
+                                    f"Gap between segments {i+1}-{i+2}: "
+                                    f"{gap_ms/1000:.0f}s skipped ({gap_words} words)"
+                                )
+                        except Exception:
+                            pass
+
+                    # Check thought completion of current segment
+                    try:
+                        last_text_row = fetch_one(
+                            nv_conn,
+                            "SELECT text FROM transcript_segments WHERE project_id = ? "
+                            "AND start_ms < ? AND end_ms > ? "
+                            "ORDER BY start_ms DESC LIMIT 1",
+                            (project_id, current_end, segment_specs[i].source_start_ms),
+                        )
+                        if last_text_row:
+                            last_text = str(last_text_row["text"]).strip()
+                            if last_text and not last_text.endswith((".", "!", "?")):
+                                narrative_warnings.append(
+                                    f"Segment {i+1}: may cut mid-thought "
+                                    f"(last text: '...{last_text[-40:]}')"
+                                )
+                    except Exception:
+                        pass
+            finally:
+                nv_conn.close()
+
+        response["narrative_warnings"] = narrative_warnings if narrative_warnings else None
+    except Exception:
+        # Never let narrative validation break edit creation
+        response["narrative_warnings"] = None
+
+    return response
 
 
 # ============================================================
@@ -1039,18 +1100,6 @@ async def dispatch_editing_tool(
             edit_id=str(arguments["edit_id"]),
             changes=dict(arguments["changes"]),  # type: ignore[arg-type]
         )
-    if name == "clipcannon_list_edits":
-        return await clipcannon_list_edits(
-            project_id=str(arguments["project_id"]),
-            status_filter=str(arguments.get("status_filter", "all")),
-        )
-    if name == "clipcannon_generate_metadata":
-        platform_raw = arguments.get("target_platform")
-        return await clipcannon_generate_metadata(
-            project_id=str(arguments["project_id"]),
-            edit_id=str(arguments["edit_id"]),
-            target_platform=str(platform_raw) if platform_raw is not None else None,
-        )
     if name == "clipcannon_auto_trim":
         return await clipcannon_auto_trim(
             str(arguments["project_id"]),
@@ -1096,30 +1145,6 @@ async def dispatch_editing_tool(
             float(arguments.get("bg_opacity", 0.7)),
             str(arguments.get("animation", "fade_in")),
             int(arguments.get("animation_duration_ms", 500)),
-        )
-
-    if name == "clipcannon_extract_subject":
-        return await clipcannon_extract_subject(
-            str(arguments["project_id"]),
-            str(arguments.get("model", "u2net_human_seg")),
-        )
-    if name == "clipcannon_replace_background":
-        return await clipcannon_replace_background(
-            str(arguments["project_id"]),
-            str(arguments["edit_id"]),
-            str(arguments["background_type"]),
-            str(arguments.get("background_value", "40")),
-        )
-
-    if name == "clipcannon_remove_region":
-        return await clipcannon_remove_region(
-            str(arguments["project_id"]),
-            str(arguments["edit_id"]),
-            int(arguments["x"]),
-            int(arguments["y"]),
-            int(arguments["width"]),
-            int(arguments["height"]),
-            str(arguments.get("description", "")),
         )
 
     return error_response("INTERNAL_ERROR", f"Unknown editing tool: {name}")

@@ -209,117 +209,23 @@ async def clipcannon_provenance_timeline(project_id: str) -> dict[str, object]:
 # TOOL DEFINITIONS
 # ============================================================
 
-PROVENANCE_TOOL_DEFINITIONS: list[Tool] = [
-    Tool(
-        name="clipcannon_provenance_verify",
-        description=(
-            "Verify the integrity of the provenance hash chain"
-            " for a project. Detects tampering or broken links."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "type": "string",
-                    "description": "Project identifier",
-                },
-            },
-            "required": ["project_id"],
-        },
-    ),
-    Tool(
-        name="clipcannon_provenance_query",
-        description=(
-            "Query provenance records for a project, optionally filtered by operation or stage."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "type": "string",
-                    "description": "Project identifier",
-                },
-                "operation": {
-                    "type": "string",
-                    "description": "Filter by operation name (e.g., probe, transcription)",
-                },
-                "stage": {
-                    "type": "string",
-                    "description": "Filter by stage name (e.g., ffprobe, whisperx)",
-                },
-            },
-            "required": ["project_id"],
-        },
-    ),
-    Tool(
-        name="clipcannon_provenance_chain",
-        description=(
-            "Walk the provenance chain from genesis to a specific"
-            " record. Shows the full lineage of a processing result."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "type": "string",
-                    "description": "Project identifier",
-                },
-                "record_id": {
-                    "type": "string",
-                    "description": "Target record ID to trace back from (omit for full chain)",
-                },
-            },
-            "required": ["project_id"],
-        },
-    ),
-    Tool(
-        name="clipcannon_provenance_timeline",
-        description=(
-            "Get a chronological timeline of all provenance events"
-            " for a project, with durations and models used."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "type": "string",
-                    "description": "Project identifier",
-                },
-            },
-            "required": ["project_id"],
-        },
-    ),
-]
+# Provenance tools are system-internal; no MCP registration.
+# The implementation functions above remain available for internal use.
+PROVENANCE_TOOL_DEFINITIONS: list[Tool] = []
 
 
 async def dispatch_provenance_tool(name: str, arguments: dict[str, object]) -> dict[str, object]:
     """Dispatch a provenance tool call by name.
+
+    All provenance tools have been removed from MCP registration
+    (system-internal). This dispatcher remains for structural
+    compatibility but will not be reached via the MCP server.
 
     Args:
         name: Tool name.
         arguments: Tool arguments.
 
     Returns:
-        Tool result dictionary.
+        Error response — no public provenance tools are registered.
     """
-    if name == "clipcannon_provenance_verify":
-        return await clipcannon_provenance_verify(
-            project_id=str(arguments["project_id"]),
-        )
-    elif name == "clipcannon_provenance_query":
-        return await clipcannon_provenance_query(
-            project_id=str(arguments["project_id"]),
-            operation=str(arguments["operation"]) if arguments.get("operation") else None,
-            stage=str(arguments["stage"]) if arguments.get("stage") else None,
-        )
-    elif name == "clipcannon_provenance_chain":
-        return await clipcannon_provenance_chain(
-            project_id=str(arguments["project_id"]),
-            record_id=str(arguments["record_id"]) if arguments.get("record_id") else None,
-        )
-    elif name == "clipcannon_provenance_timeline":
-        return await clipcannon_provenance_timeline(
-            project_id=str(arguments["project_id"]),
-        )
-    else:
-        return _error_response("INTERNAL_ERROR", f"Unknown provenance tool: {name}")
+    return _error_response("INTERNAL_ERROR", f"Unknown provenance tool: {name}")

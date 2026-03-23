@@ -46,9 +46,7 @@ from clipcannon.tools.rendering import (
     dispatch_rendering_tool,
 )
 from clipcannon.tools.understanding import (
-    clipcannon_get_analytics,
     clipcannon_get_transcript,
-    clipcannon_get_vud_summary,
     clipcannon_ingest,
 )
 from clipcannon.tools.understanding_search import (
@@ -60,7 +58,7 @@ from clipcannon.tools.understanding_visual import (
 )
 
 # ---------------------------------------------------------------
-# Understanding tool definitions (7 tools)
+# Understanding tool definitions (5 tools)
 # ---------------------------------------------------------------
 _PROJECT_ID_PROP = {
     "project_id": {"type": "string", "description": "Project identifier"},
@@ -80,43 +78,6 @@ UNDERSTANDING_TOOL_DEFINITIONS: list[Tool] = [
                 "options": {
                     "type": "object",
                     "description": "Optional pipeline overrides (reserved for future use)",
-                },
-            },
-            "required": ["project_id"],
-        },
-    ),
-    Tool(
-        name="clipcannon_get_vud_summary",
-        description=(
-            "Get a compact Video Understanding Document summary (~8K tokens). "
-            "Includes speakers, topics preview, top 5 highlights, reactions, "
-            "beats, content safety, energy, and stream status."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": _PROJECT_ID_PROP,
-            "required": ["project_id"],
-        },
-    ),
-    Tool(
-        name="clipcannon_get_analytics",
-        description=(
-            "Get detailed analytics for specific sections (~18K tokens). "
-            "Sections: highlights, scenes, topics, reactions, beats, "
-            "pacing, silence_gaps."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {"type": "string", "description": "Project identifier"},
-                "sections": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "Sections to include. Default: all. "
-                        "Options: highlights, scenes, topics, reactions, "
-                        "beats, pacing, silence_gaps"
-                    ),
                 },
             },
             "required": ["project_id"],
@@ -157,16 +118,44 @@ UNDERSTANDING_TOOL_DEFINITIONS: list[Tool] = [
             "scene map (face/webcam/content/canvas regions), silence "
             "gaps, highlights (scored), topics, profanity, music sections. "
             "Use get_editing_context first to see what data exists, "
-            "then call this tool for specific time ranges."
+            "then call this tool for specific time ranges. "
+            "Alternatively, pass timestamp_ms for a 10-second point query "
+            "centred on that timestamp (replaces get_scene_at). "
+            "Optionally pass layout to get canvas regions for that layout."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "project_id": {"type": "string", "description": "Project identifier"},
-                "start_ms": {"type": "integer", "description": "Start time in ms"},
-                "end_ms": {"type": "integer", "description": "End time in ms"},
+                "start_ms": {
+                    "type": "integer",
+                    "description": "Start time in ms (not needed when using timestamp_ms)",
+                    "default": 0,
+                },
+                "end_ms": {
+                    "type": "integer",
+                    "description": "End time in ms (not needed when using timestamp_ms)",
+                    "default": 0,
+                },
+                "timestamp_ms": {
+                    "type": "integer",
+                    "description": (
+                        "Point-query mode: returns a 10s window "
+                        "(timestamp - 5000 to timestamp + 5000) "
+                        "with scene_map entry and canvas regions. "
+                        "Overrides start_ms/end_ms."
+                    ),
+                },
+                "layout": {
+                    "type": "string",
+                    "description": (
+                        "Layout name to filter canvas regions "
+                        "(e.g. 'tiktok_vertical', 'youtube_standard'). "
+                        "Only used with timestamp_ms."
+                    ),
+                },
             },
-            "required": ["project_id", "start_ms", "end_ms"],
+            "required": ["project_id"],
         },
     ),
     Tool(
@@ -233,14 +222,6 @@ async def dispatch_understanding_tool(
             str(arguments["project_id"]),
             arguments.get("options"),  # type: ignore[arg-type]
         )
-    if name == "clipcannon_get_vud_summary":
-        return await clipcannon_get_vud_summary(str(arguments["project_id"]))
-    if name == "clipcannon_get_analytics":
-        sections = arguments.get("sections")
-        return await clipcannon_get_analytics(
-            str(arguments["project_id"]),
-            list(sections) if sections is not None else None,  # type: ignore[arg-type]
-        )
     if name == "clipcannon_get_transcript":
         return await clipcannon_get_transcript(
             str(arguments["project_id"]),
@@ -248,10 +229,14 @@ async def dispatch_understanding_tool(
             int(arguments["end_ms"]) if arguments.get("end_ms") is not None else None,
         )
     if name == "clipcannon_get_segment_detail":
+        ts_raw = arguments.get("timestamp_ms")
+        layout_raw = arguments.get("layout")
         return await clipcannon_get_segment_detail(
             str(arguments["project_id"]),
-            int(arguments["start_ms"]),  # type: ignore[arg-type]
-            int(arguments["end_ms"]),  # type: ignore[arg-type]
+            int(arguments.get("start_ms", 0)),  # type: ignore[arg-type]
+            int(arguments.get("end_ms", 0)),  # type: ignore[arg-type]
+            timestamp_ms=int(ts_raw) if ts_raw is not None else None,  # type: ignore[arg-type]
+            layout=str(layout_raw) if layout_raw is not None else None,
         )
     if name == "clipcannon_get_frame":
         return await clipcannon_get_frame(

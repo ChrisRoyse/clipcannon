@@ -15,6 +15,7 @@ from clipcannon.pipeline.emotion_embed import run_emotion_embed
 from clipcannon.pipeline.finalize import run_finalize
 from clipcannon.pipeline.frame_extract import run_frame_extract
 from clipcannon.pipeline.highlights import run_highlights
+from clipcannon.pipeline.narrative_llm import run_narrative_llm
 from clipcannon.pipeline.ocr import run_ocr
 from clipcannon.pipeline.orchestrator import PipelineOrchestrator, PipelineStage
 from clipcannon.pipeline.probe import run_probe
@@ -43,7 +44,7 @@ if TYPE_CHECKING:
 #           transcribe -> audio_extract
 # Level 4: shot_type -> frame_extract, visual_embed (needs scenes table)
 #           scene_analysis -> frame_extract, transcribe
-#           semantic_embed, speaker_embed -> transcribe
+#           semantic_embed, speaker_embed, narrative_llm -> transcribe
 #           emotion_embed, reactions, acoustic -> audio_extract
 # Level 5: profanity -> transcribe
 #           chronemic -> transcribe, speaker_embed
@@ -105,6 +106,10 @@ _STAGES: list[PipelineStage] = [
         depends_on=["transcribe"], run=run_semantic_embed, timeout_s=600,
     ),
     PipelineStage(
+        name="narrative_llm", operation="narrative_analysis", required=False,
+        depends_on=["transcribe"], run=run_narrative_llm, timeout_s=600,
+    ),
+    PipelineStage(
         name="speaker_embed", operation="speaker_diarization", required=False,
         depends_on=["audio_extract", "transcribe"], run=run_speaker_embed, timeout_s=300,
     ),
@@ -140,9 +145,9 @@ _STAGES: list[PipelineStage] = [
         name="finalize", operation="finalize", required=True,
         depends_on=[
             "transcribe", "visual_embed", "ocr", "quality",
-            "shot_type", "storyboard", "semantic_embed", "speaker_embed",
-            "emotion_embed", "reactions", "acoustic", "profanity",
-            "chronemic", "highlights",
+            "shot_type", "storyboard", "semantic_embed", "narrative_llm",
+            "speaker_embed", "emotion_embed", "reactions", "acoustic",
+            "profanity", "chronemic", "highlights",
         ],
         run=run_finalize, timeout_s=120,
     ),

@@ -1294,16 +1294,6 @@ async def dispatch_rendering_tool(
             project_id=str(arguments["project_id"]),
             edit_id=str(arguments["edit_id"]),
         )
-    if name == "clipcannon_render_status":
-        return await clipcannon_render_status(
-            project_id=str(arguments["project_id"]),
-            render_id=str(arguments["render_id"]),
-        )
-    if name == "clipcannon_render_batch":
-        return await clipcannon_render_batch(
-            project_id=str(arguments["project_id"]),
-            edit_ids=[str(e) for e in list(arguments["edit_ids"])],  # type: ignore[union-attr]
-        )
     if name == "clipcannon_get_editing_context":
         return await clipcannon_get_editing_context(
             project_id=str(arguments["project_id"]),
@@ -1332,22 +1322,6 @@ async def dispatch_rendering_tool(
             canvas_height=int(arguments.get("canvas_height", 1920)),  # type: ignore[arg-type]
             background_color=str(arguments.get("background_color", "#000000")),
             regions=list(arguments["regions"]),  # type: ignore[arg-type]
-        )
-
-    if name == "clipcannon_measure_layout":
-        return await clipcannon_measure_layout(
-            str(arguments["project_id"]),
-            int(arguments["timestamp_ms"]),  # type: ignore[arg-type]
-            str(arguments.get("layout", "A")),
-        )
-
-    if name == "clipcannon_get_storyboard":
-        start_raw = arguments.get("start_s")
-        end_raw = arguments.get("end_s")
-        return await clipcannon_get_storyboard(
-            str(arguments["project_id"]),
-            int(start_raw) if start_raw is not None else None,
-            int(end_raw) if end_raw is not None else None,
         )
 
     if name == "clipcannon_get_scene_map":
@@ -1563,6 +1537,55 @@ async def clipcannon_get_editing_context(
             (project_id,),
         )
 
+        # All speakers with label + speaking_pct
+        try:
+            all_speakers = fetch_all(
+                conn,
+                "SELECT label, speaking_pct FROM speakers "
+                "WHERE project_id = ? ORDER BY speaking_pct DESC",
+                (project_id,),
+            )
+        except Exception:
+            all_speakers = []
+
+        # Narrative analysis (from Qwen3-8B) — table may not exist
+        narrative_data: dict[str, object] | None = None
+        try:
+            narr_row = fetch_one(
+                conn,
+                "SELECT analysis_json FROM narrative_analysis "
+                "WHERE project_id = ? LIMIT 1",
+                (project_id,),
+            )
+            if narr_row and narr_row.get("analysis_json"):
+                raw = json.loads(str(narr_row["analysis_json"]))
+                narrative_data = {
+                    "story_beats": raw.get("story_beats", []),
+                    "open_loops": raw.get("open_loops", []),
+                    "chapter_boundaries": raw.get("chapter_boundaries", []),
+                    "narrative_summary": raw.get("narrative_summary", ""),
+                }
+        except Exception:
+            narrative_data = None
+
+        # Transcript preview — first 500 words
+        transcript_preview: str = ""
+        try:
+            ts_rows = fetch_all(
+                conn,
+                "SELECT text FROM transcript_segments "
+                "WHERE project_id = ? ORDER BY start_ms",
+                (project_id,),
+            )
+            if ts_rows:
+                full_text = " ".join(
+                    str(r["text"]).strip() for r in ts_rows if r.get("text")
+                )
+                words = full_text.split()
+                transcript_preview = " ".join(words[:500])
+        except Exception:
+            transcript_preview = ""
+
     finally:
         conn.close()
 
@@ -1640,6 +1663,13 @@ async def clipcannon_get_editing_context(
             ),
             "provenance_records": counts["provenance"],
         },
+        "speakers": [
+            {"label": str(s["label"]), "speaking_pct": round(float(s["speaking_pct"]), 1)}
+            for s in all_speakers
+            if s.get("speaking_pct") is not None
+        ],
+        "narrative": narrative_data,
+        "transcript_preview": transcript_preview,
         "query_tools": {
             "find_best_moments": "Find scored clip candidates for hook/highlight/cta/tutorial_step",
             "get_scene_at": "Get full scene data at any timestamp with canvas regions",

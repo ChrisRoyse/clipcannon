@@ -6,11 +6,11 @@ Tests cover:
 - Auto-captioning from transcript
 - Non-existent project error
 - Out-of-range segment validation error
-- clipcannon_list_edits returns created edits
+- clipcannon_list_edits (internal function) returns created edits
 - List edits with status filter
 - clipcannon_modify_edit changes name
 - Modify non-draft edit rejected
-- clipcannon_generate_metadata produces title/description/hashtags
+- clipcannon_generate_metadata (internal function) produces title/description/hashtags
 """
 
 from __future__ import annotations
@@ -23,7 +23,11 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
-from clipcannon.tools.editing import dispatch_editing_tool
+from clipcannon.tools.editing import (
+    clipcannon_generate_metadata,
+    clipcannon_list_edits,
+    dispatch_editing_tool,
+)
 
 
 # ============================================================
@@ -386,7 +390,7 @@ class TestCreateEdit:
 
 
 class TestListEdits:
-    """Test clipcannon_list_edits tool."""
+    """Test clipcannon_list_edits internal function (removed from MCP)."""
 
     @pytest.mark.asyncio()
     async def test_list_returns_created(
@@ -406,10 +410,7 @@ class TestListEdits:
                 ],
             },
         )
-        result = await dispatch_editing_tool(
-            "clipcannon_list_edits",
-            {"project_id": project_id},
-        )
+        result = await clipcannon_list_edits(project_id)
         assert "error" not in result
         assert result["total"] >= 1
         assert len(result["edits"]) >= 1
@@ -431,10 +432,7 @@ class TestListEdits:
                 ],
             },
         )
-        result = await dispatch_editing_tool(
-            "clipcannon_list_edits",
-            {"project_id": project_id, "status_filter": "draft"},
-        )
+        result = await clipcannon_list_edits(project_id, status_filter="draft")
         assert "error" not in result
         for edit in result["edits"]:
             assert edit["status"] == "draft"
@@ -515,7 +513,7 @@ class TestModifyEdit:
 
 
 class TestGenerateMetadata:
-    """Test clipcannon_generate_metadata tool."""
+    """Test clipcannon_generate_metadata internal function (removed from MCP)."""
 
     @pytest.mark.asyncio()
     async def test_generates_title_description_hashtags(
@@ -536,13 +534,7 @@ class TestGenerateMetadata:
         )
         edit_id = create_result["edit_id"]
 
-        meta_result = await dispatch_editing_tool(
-            "clipcannon_generate_metadata",
-            {
-                "project_id": project_id,
-                "edit_id": edit_id,
-            },
-        )
+        meta_result = await clipcannon_generate_metadata(project_id, edit_id)
         assert "error" not in meta_result, f"Got error: {meta_result}"
         assert "title" in meta_result
         assert len(meta_result["title"]) > 0

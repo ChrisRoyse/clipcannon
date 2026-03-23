@@ -152,8 +152,10 @@ async def clipcannon_get_frame(project_id: str, timestamp_ms: int) -> dict[str, 
 
 async def clipcannon_get_segment_detail(
     project_id: str,
-    start_ms: int,
-    end_ms: int,
+    start_ms: int = 0,
+    end_ms: int = 0,
+    timestamp_ms: int | None = None,
+    layout: str | None = None,
 ) -> dict[str, object]:
     """Get ALL intelligence for a time range from every pipeline table.
 
@@ -166,10 +168,18 @@ async def clipcannon_get_segment_detail(
     pacing, scenes (quality + shot type), scene map (face/webcam/content/
     canvas), silence gaps, highlights, topics, profanity, music sections.
 
+    When ``timestamp_ms`` is provided, returns a 10-second window centred on
+    that timestamp plus the specific scene_map entry and canvas regions for
+    the requested ``layout``.
+
     Args:
         project_id: Project identifier.
         start_ms: Start of time range in milliseconds.
         end_ms: End of time range in milliseconds.
+        timestamp_ms: Optional point-query timestamp. Overrides start_ms/end_ms
+            with a 10-second window (timestamp - 5000 to timestamp + 5000).
+        layout: Optional layout name to filter canvas regions when using
+            timestamp_ms mode.
 
     Returns:
         Dict with all pipeline data for the time range.
@@ -179,6 +189,12 @@ async def clipcannon_get_segment_detail(
     err = _validate_project(project_id, required_status="ready")
     if err is not None:
         return err
+
+    # Point-query mode: 10s window centred on timestamp_ms
+    if timestamp_ms is not None:
+        start_ms = max(0, timestamp_ms - 5000)
+        end_ms = timestamp_ms + 5000
+
     if end_ms <= start_ms:
         return _error("INVALID_PARAMETER", "end_ms must be greater than start_ms")
 
@@ -389,6 +405,14 @@ async def clipcannon_get_segment_detail(
             rp,
         )
 
+        # -- Narrative analysis from LLM --
+        narrative = _safe_fetch_all(
+            conn,
+            "SELECT analysis_json FROM narrative_analysis"
+            " WHERE project_id = ? LIMIT 1",
+            (project_id,),
+        )
+
     finally:
         conn.close()
 
@@ -447,7 +471,7 @@ async def clipcannon_get_segment_detail(
                 "arousal": round(float(e["arousal"]), 4),
             })
 
-    return {
+    result: dict[str, object] = {
         "project_id": project_id,
         "start_ms": start_ms,
         "end_ms": end_ms,
@@ -470,4 +494,42 @@ async def clipcannon_get_segment_detail(
         "emphasis_words": emphasis_words,
         "speech_screen_alignment": speech_screen_alignment,
         "emotion_peaks": emotion_peaks,
+        "narrative_analysis": (
+            json_mod.loads(narrative[0]["analysis_json"])
+            if narrative
+            else None
+        ),
     }
+
+    # -- Point-query enrichment: scene_map entry + canvas regions for layout --
+    if timestamp_ms is not None:
+        result["timestamp_ms"] = timestamp_ms
+        # Find the exact scene_map entry containing timestamp_ms
+        point_scene: dict[str, object] | None = None
+        for sm_entry in scene_map:
+            sm_start = int(sm_entry.get("start_ms", 0))
+            sm_end = int(sm_entry.get("end_ms", 0))
+            if sm_start <= timestamp_ms < sm_end:
+                point_scene = sm_entry
+                break
+
+        if point_scene is not None:
+            result["point_scene"] = point_scene
+            # Filter canvas regions to requested layout
+            canvas_data = point_scene.get("canvas", {})
+            if layout and isinstance(canvas_data, dict):
+                matched_regions = canvas_data.get(layout)
+                result["layout_canvas_regions"] = (
+                    matched_regions if matched_regions is not None else None
+                )
+                result["requested_layout"] = layout
+            elif layout:
+                result["layout_canvas_regions"] = None
+                result["requested_layout"] = layout
+        else:
+            result["point_scene"] = None
+            if layout:
+                result["layout_canvas_regions"] = None
+                result["requested_layout"] = layout
+
+    return result
