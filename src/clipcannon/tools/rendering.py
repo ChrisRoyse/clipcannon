@@ -1055,14 +1055,54 @@ async def clipcannon_get_storyboard(
 # ============================================================
 async def clipcannon_get_scene_map(
     project_id: str,
+    start_ms: int = 0,
+    end_ms: int | None = None,
+    detail: str = "summary",
+    layout: str | None = None,
 ) -> dict[str, object]:
-    """Get the complete scene map with pre-computed canvas regions.
+    """Get the scene map with pagination and detail control.
 
-    Returns everything needed for editing in one call: scenes,
-    face positions, content regions, transcript, and ready-to-use
-    canvas_regions for all layout types.
+    Supports two detail modes for bounded token output:
+    - **summary** (~40 tokens/scene): id, start/end, layout,
+      has_face, transcript preview (first 80 chars).
+    - **full** (~120 tokens/scene): all fields including
+      canvas_regions, but only for the requested layout.
+
+    Time-window pagination keeps each response bounded. Default
+    window is 5 minutes from *start_ms*.
+
+    Args:
+        project_id: Project identifier.
+        start_ms: Window start in milliseconds (default 0).
+        end_ms: Window end in milliseconds (default start_ms + 300000).
+        detail: ``"summary"`` or ``"full"`` (default ``"summary"``).
+        layout: Layout to return — ``"A"``, ``"B"``, ``"C"``, ``"D"``,
+            or ``None`` for the scene's recommended layout only.
     """
-    import json as json_mod
+    # ---- validate detail param ----
+    if detail not in ("summary", "full"):
+        return _error(
+            "INVALID_PARAMETER",
+            f"detail must be 'summary' or 'full', got '{detail}'",
+        )
+
+    # ---- validate layout param ----
+    valid_layouts = {"A", "B", "C", "D"}
+    if layout is not None and layout not in valid_layouts:
+        return _error(
+            "INVALID_PARAMETER",
+            f"layout must be one of A/B/C/D or null, got '{layout}'",
+        )
+
+    # ---- compute window ----
+    if end_ms is None:
+        end_ms = start_ms + 300_000  # 5-minute default window
+
+    if end_ms <= start_ms:
+        return _error(
+            "INVALID_PARAMETER",
+            f"end_ms ({end_ms}) must be greater than start_ms ({start_ms})",
+        )
 
     proj_dir = _project_dir(project_id)
     if not proj_dir.exists():
@@ -1090,12 +1130,29 @@ async def clipcannon_get_scene_map(
                 f"No project record: {project_id}",
             )
 
-        # Get scene map
+        # Total scene count (whole project)
+        total_row = fetch_one(
+            conn,
+            "SELECT COUNT(*) AS cnt FROM scene_map "
+            "WHERE project_id = ?",
+            (project_id,),
+        )
+        total_scenes_in_project = int(total_row["cnt"]) if total_row else 0
+
+        # Windowed scene query
         scenes_raw = fetch_all(
             conn,
             "SELECT * FROM scene_map WHERE project_id = ? "
-            "ORDER BY start_ms",
-            (project_id,),
+            "AND start_ms >= ? AND start_ms < ? ORDER BY start_ms",
+            (project_id, start_ms, end_ms),
+        )
+
+        # Check if more scenes exist beyond window
+        next_row = fetch_one(
+            conn,
+            "SELECT MIN(start_ms) AS next_ms FROM scene_map "
+            "WHERE project_id = ? AND start_ms >= ?",
+            (project_id, end_ms),
         )
     except Exception as exc:
         conn.close()
@@ -1107,51 +1164,79 @@ async def clipcannon_get_scene_map(
     finally:
         conn.close()
 
-    if not scenes_raw:
+    if not scenes_raw and total_scenes_in_project == 0:
         return _error(
             "SCENE_MAP_EMPTY",
             "No scenes in scene map. Run ingest first.",
         )
 
-    # Build response
+    has_more = next_row is not None and next_row["next_ms"] is not None
+    next_start_ms = int(next_row["next_ms"]) if has_more else None
+
+    # ---- Build response scenes ----
     scenes: list[dict[str, object]] = []
     webcam_info: dict[str, object] | None = None
 
     for row in scenes_raw:
-        scene: dict[str, object] = {
-            "id": int(row["scene_id"]),
-            "start_ms": int(row["start_ms"]),
-            "end_ms": int(row["end_ms"]),
-            "duration_ms": int(row["end_ms"]) - int(row["start_ms"]),
-            "transcript": str(row.get("transcript_text", "")),
-            "layout": str(row.get("layout_recommendation", "A")),
-        }
+        rec_layout = str(row.get("layout_recommendation", "A"))
 
-        # Face
-        if row.get("face_x") is not None:
-            scene["face"] = {
-                "x": int(row["face_x"]),
-                "y": int(row["face_y"]),
-                "w": int(row["face_w"]),
-                "h": int(row["face_h"]),
-                "conf": float(row.get("face_confidence") or 0),
+        if detail == "summary":
+            # ~40 tokens per scene: compact
+            transcript_raw = str(row.get("transcript_text", ""))
+            preview = transcript_raw[:80]
+            if len(transcript_raw) > 80:
+                preview += "..."
+
+            scene: dict[str, object] = {
+                "id": int(row["scene_id"]),
+                "start_ms": int(row["start_ms"]),
+                "end_ms": int(row["end_ms"]),
+                "layout": rec_layout,
+                "has_face": row.get("face_x") is not None,
+                "transcript_preview": preview,
+            }
+        else:
+            # full mode (~120 tokens per scene)
+            scene = {
+                "id": int(row["scene_id"]),
+                "start_ms": int(row["start_ms"]),
+                "end_ms": int(row["end_ms"]),
+                "duration_ms": int(row["end_ms"]) - int(row["start_ms"]),
+                "transcript": str(row.get("transcript_text", "")),
+                "layout": rec_layout,
             }
 
-        # Content region
-        if row.get("content_x") is not None:
-            scene["content"] = {
-                "x": int(row["content_x"]),
-                "y": int(row["content_y"]),
-                "w": int(row["content_w"]),
-                "h": int(row["content_h"]),
-            }
+            # Face
+            if row.get("face_x") is not None:
+                scene["face"] = {
+                    "x": int(row["face_x"]),
+                    "y": int(row["face_y"]),
+                    "w": int(row["face_w"]),
+                    "h": int(row["face_h"]),
+                    "conf": float(row.get("face_confidence") or 0),
+                }
 
-        # Canvas regions (pre-computed for all layouts)
-        canvas_json = str(row.get("canvas_regions_json", "{}"))
-        try:
-            scene["canvas"] = json_mod.loads(canvas_json)
-        except (json_mod.JSONDecodeError, TypeError):
-            scene["canvas"] = {}
+            # Content region
+            if row.get("content_x") is not None:
+                scene["content"] = {
+                    "x": int(row["content_x"]),
+                    "y": int(row["content_y"]),
+                    "w": int(row["content_w"]),
+                    "h": int(row["content_h"]),
+                }
+
+            # Canvas regions — only the requested layout
+            canvas_json = str(row.get("canvas_regions_json", "{}"))
+            try:
+                all_canvas = json.loads(canvas_json)
+            except (json.JSONDecodeError, TypeError):
+                all_canvas = {}
+
+            target_layout = layout if layout is not None else rec_layout
+            if isinstance(all_canvas, dict) and target_layout in all_canvas:
+                scene["canvas"] = {target_layout: all_canvas[target_layout]}
+            else:
+                scene["canvas"] = {}
 
         scenes.append(scene)
 
@@ -1165,7 +1250,7 @@ async def clipcannon_get_scene_map(
                 "h": int(row["webcam_h"]),
             }
 
-    return {
+    response: dict[str, object] = {
         "project_id": project_id,
         "source": {
             "resolution": str(proj["resolution"]),
@@ -1173,16 +1258,19 @@ async def clipcannon_get_scene_map(
             "fps": float(proj["fps"]),
         },
         "webcam": webcam_info or {"detected": False},
-        "scene_count": len(scenes),
+        "window": {
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+        },
+        "total_scenes_in_window": len(scenes),
+        "total_scenes_in_project": total_scenes_in_project,
+        "has_more": has_more,
         "scenes": scenes,
-        "usage_guide": (
-            "Each scene has pre-computed canvas regions for layouts "
-            "A (30/70 split), B (40/60), C (PIP), D (full face). "
-            "Use scene.canvas.A as the canvas regions in create_edit "
-            "segments. The AI picks scenes and layouts - coordinates "
-            "are already computed."
-        ),
     }
+    if next_start_ms is not None:
+        response["next_start_ms"] = next_start_ms
+
+    return response
 
 
 # ============================================================
@@ -1265,6 +1353,10 @@ async def dispatch_rendering_tool(
     if name == "clipcannon_get_scene_map":
         return await clipcannon_get_scene_map(
             str(arguments["project_id"]),
+            start_ms=int(arguments.get("start_ms", 0)),
+            end_ms=int(arguments["end_ms"]) if arguments.get("end_ms") is not None else None,
+            detail=str(arguments.get("detail", "summary")),
+            layout=str(arguments["layout"]) if arguments.get("layout") is not None else None,
         )
 
     return _error("INTERNAL_ERROR", f"Unknown rendering tool: {name}")
@@ -1343,17 +1435,19 @@ async def clipcannon_analyze_frame(
 async def clipcannon_get_editing_context(
     project_id: str,
 ) -> dict[str, object]:
-    """Get all data needed for AI editing decisions in one call.
+    """Get bounded editing-context data for AI decisions.
 
-    Consolidates transcript summary, highlights, silence gaps,
-    pacing, scenes, and frame analysis into a single response.
-    This replaces multiple separate tool calls.
+    Returns a data manifest (~500 tokens) describing what data is
+    available for this project and which tools to use to query it.
+    This is a catalog/registry — it tells the AI WHAT exists, not
+    the data itself. The AI then uses targeted tools to pull
+    exactly what it needs on demand.
 
     Args:
         project_id: Project identifier.
 
     Returns:
-        Dict with all editing-relevant data.
+        Data manifest with counts, ranges, and tool references.
     """
     start_time = time.monotonic()
 
@@ -1364,56 +1458,108 @@ async def clipcannon_get_editing_context(
     db = _db_path(project_id)
     conn = get_connection(db, enable_vec=False, dict_rows=True)
     try:
-        # Project metadata
         proj = fetch_one(
             conn,
-            "SELECT duration_ms, resolution, fps FROM project "
+            "SELECT duration_ms, resolution, fps, status FROM project "
             "WHERE project_id = ?",
             (project_id,),
         )
         if proj is None:
             return _error("PROJECT_NOT_FOUND", f"No project: {project_id}")
 
-        # Transcript segments (compact: just text + timing)
-        segments = fetch_all(
+        # Count queries — fast aggregate stats from each table
+        counts: dict[str, int] = {}
+        for table, col in [
+            ("transcript_segments", "project_id"),
+            ("highlights", "project_id"),
+            ("silence_gaps", "project_id"),
+            ("scenes", "project_id"),
+            ("scene_map", "project_id"),
+            ("speakers", "project_id"),
+            ("topics", "project_id"),
+            ("emotion_curve", "project_id"),
+            ("pacing", "project_id"),
+            ("on_screen_text", "project_id"),
+            ("reactions", "project_id"),
+            ("provenance", "project_id"),
+        ]:
+            try:
+                row = fetch_one(
+                    conn,
+                    f"SELECT COUNT(*) AS cnt FROM {table} WHERE {col} = ?",  # noqa: S608
+                    (project_id,),
+                )
+                counts[table] = int(row["cnt"]) if row else 0
+            except Exception:
+                counts[table] = 0
+
+        # Top highlight score
+        top_hl = fetch_one(
             conn,
-            "SELECT start_ms, end_ms, text FROM transcript_segments "
-            "WHERE project_id = ? ORDER BY start_ms",
+            "SELECT MAX(score) AS top FROM highlights WHERE project_id = ?",
+            (project_id,),
+        )
+        top_highlight_score = round(float(top_hl["top"]), 2) if top_hl and top_hl["top"] else 0.0
+
+        # Dominant speaker
+        speaker_row = fetch_one(
+            conn,
+            "SELECT label, speaking_pct FROM speakers "
+            "WHERE project_id = ? ORDER BY speaking_pct DESC LIMIT 1",
             (project_id,),
         )
 
-        # Highlights (ranked by score)
-        highlights = fetch_all(
+        # Dominant pacing label
+        pacing_row = fetch_one(
             conn,
-            "SELECT start_ms, end_ms, type, score, reason "
-            "FROM highlights WHERE project_id = ? ORDER BY score DESC",
+            "SELECT label, SUM(end_ms - start_ms) AS total_ms "
+            "FROM pacing WHERE project_id = ? "
+            "GROUP BY label ORDER BY total_ms DESC LIMIT 1",
             (project_id,),
         )
 
-        # Silence gaps (natural cut points)
-        gaps = fetch_all(
+        # WPM range
+        wpm_row = fetch_one(
             conn,
-            "SELECT start_ms, end_ms, duration_ms "
-            "FROM silence_gaps WHERE project_id = ? "
-            "ORDER BY start_ms",
+            "SELECT MIN(words_per_minute) AS min_wpm, "
+            "MAX(words_per_minute) AS max_wpm "
+            "FROM pacing WHERE project_id = ?",
             (project_id,),
         )
 
-        # Pacing windows
-        pacing = fetch_all(
+        # Avg energy
+        energy_row = fetch_one(
             conn,
-            "SELECT start_ms, end_ms, words_per_minute, "
-            "pause_ratio, label FROM pacing "
-            "WHERE project_id = ? ORDER BY start_ms",
+            "SELECT AVG(energy) AS avg_e FROM emotion_curve WHERE project_id = ?",
             (project_id,),
         )
 
-        # Scene boundaries
-        scenes = fetch_all(
+        # Beats summary
+        beats_row = fetch_one(
             conn,
-            "SELECT scene_id, start_ms, end_ms, "
-            "key_frame_path, dominant_colors "
-            "FROM scenes WHERE project_id = ? ORDER BY start_ms",
+            "SELECT has_music, tempo_bpm FROM beats WHERE project_id = ? LIMIT 1",
+            (project_id,),
+        )
+
+        # Content safety
+        safety_row = fetch_one(
+            conn,
+            "SELECT content_rating FROM content_safety WHERE project_id = ? LIMIT 1",
+            (project_id,),
+        )
+
+        # Webcam detection (from scene_map)
+        webcam_row = fetch_one(
+            conn,
+            "SELECT webcam_x, webcam_y, webcam_w, webcam_h FROM scene_map "
+            "WHERE project_id = ? AND webcam_x IS NOT NULL LIMIT 1",
+            (project_id,),
+        )
+
+        # Topic labels
+        topic_rows = fetch_all(
+            conn,
+            "SELECT label FROM topics WHERE project_id = ? ORDER BY start_ms LIMIT 5",
             (project_id,),
         )
 
@@ -1424,37 +1570,87 @@ async def clipcannon_get_editing_context(
 
     return {
         "project_id": project_id,
-        "duration_ms": int(proj["duration_ms"]),
-        "resolution": str(proj["resolution"]),
-        "transcript": [
-            {"start_ms": s["start_ms"], "end_ms": s["end_ms"],
-             "text": s["text"]}
-            for s in segments
-        ],
-        "highlights": [
-            {"start_ms": h["start_ms"], "end_ms": h["end_ms"],
-             "score": h["score"], "reason": h["reason"]}
-            for h in highlights
-        ],
-        "silence_gaps": [
-            {"start_ms": g["start_ms"], "end_ms": g["end_ms"],
-             "duration_ms": g["duration_ms"]}
-            for g in gaps
-        ],
-        "pacing": [
-            {"start_ms": p["start_ms"], "end_ms": p["end_ms"],
-             "wpm": p["words_per_minute"], "label": p["label"]}
-            for p in pacing
-        ],
-        "scenes": [
-            {"scene_id": s["scene_id"], "start_ms": s["start_ms"],
-             "end_ms": s["end_ms"],
-             "key_frame": s["key_frame_path"]}
-            for s in scenes
-        ],
-        "segment_count": len(segments),
-        "highlight_count": len(highlights),
-        "scene_count": len(scenes),
-        "silence_gap_count": len(gaps),
+        "video": {
+            "duration_ms": int(proj["duration_ms"]),
+            "resolution": str(proj["resolution"]),
+            "fps": float(proj["fps"]),
+            "status": str(proj["status"]),
+        },
+        "data_manifest": {
+            "transcript": {
+                "segments": counts["transcript_segments"],
+                "query": "get_transcript(project_id, start_ms, end_ms)",
+            },
+            "scenes": {
+                "visual_scenes": counts["scene_map"],
+                "scene_boundaries": counts["scenes"],
+                "query": "get_scene_map(project_id, start_ms, end_ms, detail, layout) "
+                         "OR get_scene_at(project_id, timestamp_ms, layout)",
+            },
+            "highlights": {
+                "count": counts["highlights"],
+                "top_score": top_highlight_score,
+                "query": "find_best_moments(project_id, purpose, count)",
+            },
+            "silence_gaps": {
+                "count": counts["silence_gaps"],
+                "query": "find_cut_points(project_id, around_ms, search_range_ms)",
+            },
+            "speakers": {
+                "count": counts["speakers"],
+                "dominant": (
+                    f"{speaker_row['label']} ({speaker_row['speaking_pct']}%)"
+                    if speaker_row else "unknown"
+                ),
+            },
+            "topics": {
+                "count": counts["topics"],
+                "labels": [str(t["label"]) for t in topic_rows],
+            },
+            "emotion": {
+                "data_points": counts["emotion_curve"],
+                "avg_energy": (
+                    round(float(energy_row["avg_e"]), 2)
+                    if energy_row and energy_row["avg_e"] else None
+                ),
+            },
+            "pacing": {
+                "dominant": str(pacing_row["label"]) if pacing_row else "unknown",
+                "wpm_range": (
+                    f"{int(wpm_row['min_wpm'])}-{int(wpm_row['max_wpm'])}"
+                    if wpm_row and wpm_row["min_wpm"] else "unknown"
+                ),
+            },
+            "webcam": {
+                "detected": webcam_row is not None,
+            },
+            "beats": {
+                "detected": bool(beats_row and beats_row["has_music"]),
+                "bpm": int(beats_row["tempo_bpm"]) if beats_row and beats_row["tempo_bpm"] else None,
+            },
+            "ocr_text": {
+                "detected": counts["on_screen_text"] > 0,
+                "regions": counts["on_screen_text"],
+            },
+            "reactions": {
+                "count": counts["reactions"],
+            },
+            "content_rating": (
+                str(safety_row["content_rating"]) if safety_row else "unknown"
+            ),
+            "provenance_records": counts["provenance"],
+        },
+        "query_tools": {
+            "find_best_moments": "Find scored clip candidates for hook/highlight/cta/tutorial_step",
+            "get_scene_at": "Get full scene data at any timestamp with canvas regions",
+            "get_scene_map": "Browse scenes in paginated time windows (summary or full detail)",
+            "find_cut_points": "Find natural edit boundaries (silence gaps, scene breaks, sentences)",
+            "get_transcript": "Get word-level transcript for any time range",
+            "search_content": "Search transcript by keywords",
+            "analyze_frame": "Detect content regions and webcam in any frame",
+            "get_frame": "Get any frame as an image for visual inspection",
+            "preview_layout": "Preview a canvas layout composition as JPEG",
+            "measure_layout": "Compute layout regions from face detection at any timestamp",
+        },
         "elapsed_ms": elapsed,
     }

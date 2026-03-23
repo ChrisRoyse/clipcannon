@@ -155,12 +155,28 @@ def _compute_emotion_model(
         List of dicts with start_ms, end_ms, energy, arousal, valence,
         embedding.
     """
+    import gc
+
     import torch
     from transformers import AutoFeatureExtractor, AutoModel
 
+    # Clear GPU memory from previous pipeline stages to prevent
+    # VRAM exhaustion when loading Wav2Vec2 after other models.
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
     feature_extractor = AutoFeatureExtractor.from_pretrained(MODEL_ID)
-    model = AutoModel.from_pretrained(MODEL_ID)
-    model = model.to(device)
+    model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.float16)
+    try:
+        model = model.to(device)
+    except NotImplementedError:
+        logger.warning("Meta tensor detected, reloading Wav2Vec2 with device_map")
+        del model
+        torch.cuda.empty_cache()
+        model = AutoModel.from_pretrained(
+            MODEL_ID, torch_dtype=torch.float16, device_map={"": device},
+        )
     model.eval()
 
     results: list[dict[str, object]] = []

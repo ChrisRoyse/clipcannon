@@ -21,6 +21,10 @@ from clipcannon.tools.config_tools import (
     CONFIG_TOOL_DEFINITIONS,
     dispatch_config_tool,
 )
+from clipcannon.tools.discovery import (
+    DISCOVERY_TOOL_DEFINITIONS,
+    dispatch_discovery_tool,
+)
 from clipcannon.tools.disk import (
     DISK_TOOL_DEFINITIONS,
     dispatch_disk_tool,
@@ -145,9 +149,15 @@ UNDERSTANDING_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
         name="clipcannon_get_segment_detail",
         description=(
-            "Get ALL stream data for a time range (~15K tokens). "
-            "Returns transcript, emotion curve, speakers, reactions, "
-            "beats, on-screen text, pacing, quality, silence gaps."
+            "Master query: get ALL intelligence from every embedder "
+            "for a time range. Returns 17 data streams: transcript "
+            "(segments + words), emotion curve (arousal/valence/energy), "
+            "speakers, reactions, beats, on-screen text (OCR), text "
+            "change events (slide transitions), pacing, scene quality, "
+            "scene map (face/webcam/content/canvas regions), silence "
+            "gaps, highlights (scored), topics, profanity, music sections. "
+            "Use get_editing_context first to see what data exists, "
+            "then call this tool for specific time ranges."
         ),
         inputSchema={
             "type": "object",
@@ -275,6 +285,7 @@ for _defs, _dispatch in [
     (EDITING_TOOL_DEFINITIONS, dispatch_editing_tool),
     (RENDERING_TOOL_DEFINITIONS, dispatch_rendering_tool),
     (AUDIO_TOOL_DEFINITIONS, dispatch_audio_tool),
+    (DISCOVERY_TOOL_DEFINITIONS, dispatch_discovery_tool),
 ]:
     for _tool_def in _defs:
         TOOL_DISPATCHERS[_tool_def.name] = _dispatch
@@ -291,18 +302,21 @@ ALL_TOOL_DEFINITIONS = (
     + EDITING_TOOL_DEFINITIONS
     + RENDERING_TOOL_DEFINITIONS
     + AUDIO_TOOL_DEFINITIONS
+    + DISCOVERY_TOOL_DEFINITIONS
 )
 
 __all__ = [
     "ALL_TOOL_DEFINITIONS",
     "AUDIO_TOOL_DEFINITIONS",
     "BILLING_TOOL_DEFINITIONS",
+    "DISCOVERY_TOOL_DEFINITIONS",
     "EDITING_TOOL_DEFINITIONS",
     "RENDERING_TOOL_DEFINITIONS",
     "TOOL_DISPATCHERS",
     "UNDERSTANDING_TOOL_DEFINITIONS",
     "dispatch_audio_tool",
     "dispatch_billing_tool",
+    "dispatch_discovery_tool",
     "dispatch_editing_tool",
     "dispatch_rendering_tool",
     "dispatch_understanding_tool",

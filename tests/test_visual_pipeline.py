@@ -109,7 +109,7 @@ def config() -> ClipCannonConfig:
             "whisper_model": "large-v3",
             "whisper_compute_type": "int8",
             "batch_size_visual": 64,
-            "scene_change_threshold": 0.75,
+            "scene_change_threshold": 0.85,
             "highlight_count_default": 20,
             "min_clip_duration_ms": 5000,
             "max_clip_duration_ms": 600000,

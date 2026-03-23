@@ -234,7 +234,7 @@ ClipCannon's OCR pipeline, screen layout detection, and scene analysis give you 
 
 ### What the OCR Pipeline Detects
 
-After `ingest`, the OCR stage (EasyOCR at 1fps) populates two tables:
+After `ingest`, the OCR stage (PaddleOCR PP-OCRv5 at 1fps) populates two tables:
 
 - **`on_screen_text`**: Every detected text region with timestamp, text content, region position (center_top / center_middle / bottom_third / full_screen), font size (small / medium / large), and confidence score
 - **`text_change_events`**: Slide transitions detected when >50% of on-screen text changes between frames. Includes timestamp and new title text.

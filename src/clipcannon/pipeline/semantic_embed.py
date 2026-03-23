@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from clipcannon.db.connection import get_connection
-from clipcannon.db.queries import batch_insert, fetch_all
+from clipcannon.db.queries import batch_insert, execute, fetch_all
 from clipcannon.exceptions import PipelineError
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.provenance import (
@@ -45,7 +45,7 @@ EMBEDDING_DIM = 768
 SEARCH_PREFIX = "search_document: "
 
 # Clustering parameters
-DISTANCE_THRESHOLD = 1.2
+DISTANCE_THRESHOLD = 0.7
 MIN_CLUSTER_SIZE = 1
 
 # Stop words for keyword extraction
@@ -184,6 +184,33 @@ _STOP_WORDS = frozenset(
 )
 
 
+def _compute_sentiment(texts: list[str]) -> list[dict[str, object]]:
+    """Compute sentiment for each transcript segment text.
+
+    Uses transformers sentiment-analysis pipeline with DistilBERT.
+
+    Args:
+        texts: List of segment texts.
+
+    Returns:
+        List of {label: 'POSITIVE'/'NEGATIVE', score: float} dicts.
+    """
+    try:
+        from transformers import pipeline as hf_pipeline
+
+        classifier = hf_pipeline(
+            "sentiment-analysis",
+            model="distilbert/distilbert-base-uncased-finetuned-sst-2-english",
+            device="cpu",  # CPU is fast enough for text classification
+            batch_size=32,
+        )
+        results = classifier(texts, truncation=True, max_length=512)
+        return [{"label": r["label"], "score": round(r["score"], 3)} for r in results]
+    except Exception as exc:
+        logger.warning("Sentiment analysis failed: %s", exc)
+        return [{"label": "NEUTRAL", "score": 0.5} for _ in texts]
+
+
 def _load_segments_from_db(
     db_path: Path,
     project_id: str,
@@ -214,7 +241,10 @@ def _load_segments_from_db(
 def _compute_embeddings(
     texts: list[str],
 ) -> np.ndarray:
-    """Compute Nomic embeddings for texts.
+    """Compute Nomic embeddings for texts via subprocess.
+
+    Runs SentenceTransformer in a fresh process to avoid state corruption
+    (tuple assignment errors) in long-running MCP server processes.
 
     Args:
         texts: List of texts to embed (already prefixed).
@@ -222,16 +252,62 @@ def _compute_embeddings(
     Returns:
         Array of shape (len(texts), 768) with L2-normalized embeddings.
     """
-    from sentence_transformers import SentenceTransformer
+    import subprocess
+    import tempfile
 
-    model = SentenceTransformer(MODEL_ID, trust_remote_code=True)
-    embeddings = model.encode(texts, show_progress_bar=False)
-    emb_array = np.array(embeddings, dtype=np.float32)
+    worker_script = r'''
+import json, sys
+import numpy as np
 
-    # L2 normalize
-    norms = np.linalg.norm(emb_array, axis=1, keepdims=True)
-    norms = np.maximum(norms, 1e-10)
-    emb_array = emb_array / norms
+with open(sys.argv[1], "r") as f:
+    texts = json.load(f)
+model_id = sys.argv[2]
+
+import torch
+from sentence_transformers import SentenceTransformer
+
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
+model = SentenceTransformer(model_id, trust_remote_code=True, device=device)
+embeddings = model.encode(texts, show_progress_bar=False, device=device)
+emb_array = np.array(embeddings, dtype=np.float32)
+
+# L2 normalize
+norms = np.linalg.norm(emb_array, axis=1, keepdims=True)
+norms = np.maximum(norms, 1e-10)
+emb_array = (emb_array / norms).tolist()
+
+json.dump(emb_array, sys.stdout)
+'''
+
+    tmp_texts = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", prefix="nomic_texts_", delete=False,
+    )
+    try:
+        json.dump(texts, tmp_texts)
+        tmp_texts.close()
+
+        proc = subprocess.run(
+            ["python3", "-c", worker_script, tmp_texts.name, MODEL_ID],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"Nomic subprocess failed (rc={proc.returncode}): "
+                f"{proc.stderr[-300:] if proc.stderr else 'no stderr'}"
+            )
+
+        emb_list = json.loads(proc.stdout)
+        emb_array = np.array(emb_list, dtype=np.float32)
+        logger.info("Computed %d semantic embeddings via subprocess", len(emb_array))
+
+    finally:
+        import os
+        os.unlink(tmp_texts.name)
+
+    return emb_array
 
     del model
     return emb_array
@@ -508,6 +584,40 @@ async def run_semantic_embed(
             "Semantic embedding: processing %d segments",
             len(segments),
         )
+
+        # Compute sentiment per segment
+        segment_texts = [str(s["text"]) for s in segments]
+        sentiments = await asyncio.to_thread(_compute_sentiment, segment_texts)
+
+        # Update transcript_segments with sentiment
+        conn2 = get_connection(db_path, enable_vec=False, dict_rows=True)
+        try:
+            # Ensure sentiment columns exist (for pre-existing DBs)
+            try:
+                conn2.execute(
+                    "ALTER TABLE transcript_segments ADD COLUMN sentiment TEXT",
+                )
+            except Exception:
+                pass  # Column already exists
+            try:
+                conn2.execute(
+                    "ALTER TABLE transcript_segments ADD COLUMN sentiment_score REAL",
+                )
+            except Exception:
+                pass  # Column already exists
+
+            for seg, sent in zip(segments, sentiments):
+                execute(
+                    conn2,
+                    "UPDATE transcript_segments SET sentiment = ?, sentiment_score = ? "
+                    "WHERE segment_id = ?",
+                    (sent["label"], sent["score"], int(seg["segment_id"])),
+                )
+            conn2.commit()
+        except Exception as exc:
+            logger.warning("Sentiment update failed: %s", exc)
+        finally:
+            conn2.close()
 
         # Prepare texts with search prefix
         texts = [SEARCH_PREFIX + str(seg.get("text", "")) for seg in segments]

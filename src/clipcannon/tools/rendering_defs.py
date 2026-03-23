@@ -65,10 +65,12 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
         name="clipcannon_get_editing_context",
         description=(
-            "Get ALL data needed for editing decisions in one call. "
-            "Returns transcript, highlights (ranked), silence gaps "
-            "(natural cut points), pacing, and scene boundaries. "
-            "Use this FIRST before creating any edit."
+            "Get the data manifest for a project (~500 tokens). "
+            "Returns a catalog of ALL available data (counts, ranges, "
+            "scores) and which tools to use to query each data type. "
+            "This tells you WHAT exists — use the listed query tools "
+            "to pull the actual data on demand. "
+            "Call this FIRST before any editing work."
         ),
         inputSchema={
             "type": "object",
@@ -273,13 +275,12 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
         name="clipcannon_get_scene_map",
         description=(
-            "Get the complete scene map for a project. Returns EVERYTHING "
-            "needed for editing in ONE call: every scene with boundaries, "
-            "face positions, webcam region, content area coordinates, "
-            "pre-computed canvas regions for layouts A/B/C/D, "
-            "transcript aligned per scene, and layout recommendations. "
-            "The AI uses canvas_regions directly in create_edit - "
-            "zero manual coordinate measurement needed. "
+            "Get the scene map with time-window pagination and detail "
+            "control. Summary mode (~40 tokens/scene): id, start/end, "
+            "layout, has_face, transcript preview. Full mode (~120 "
+            "tokens/scene): all fields including canvas_regions for "
+            "a single layout only. Default window is 5 minutes from "
+            "start_ms. Use has_more + next_start_ms to paginate. "
             "Requires ingest to have been run first."
         ),
         inputSchema={
@@ -288,6 +289,39 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
                 "project_id": {
                     "type": "string",
                     "description": "Project identifier",
+                },
+                "start_ms": {
+                    "type": "integer",
+                    "description": (
+                        "Window start in milliseconds (default 0)"
+                    ),
+                    "default": 0,
+                },
+                "end_ms": {
+                    "type": "integer",
+                    "description": (
+                        "Window end in milliseconds. "
+                        "Default: start_ms + 300000 (5 minutes)"
+                    ),
+                },
+                "detail": {
+                    "type": "string",
+                    "enum": ["summary", "full"],
+                    "description": (
+                        "Detail level. 'summary' = compact (~40 "
+                        "tokens/scene). 'full' = canvas regions "
+                        "included (~120 tokens/scene)."
+                    ),
+                    "default": "summary",
+                },
+                "layout": {
+                    "type": "string",
+                    "enum": ["A", "B", "C", "D"],
+                    "description": (
+                        "Layout to return canvas regions for "
+                        "(full mode only). Omit to use each "
+                        "scene's recommended layout."
+                    ),
                 },
             },
             "required": ["project_id"],

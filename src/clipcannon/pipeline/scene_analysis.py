@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS scene_map (
     project_id TEXT NOT NULL, start_ms INTEGER NOT NULL,
     end_ms INTEGER NOT NULL,
     face_x INTEGER, face_y INTEGER, face_w INTEGER, face_h INTEGER,
-    face_confidence REAL,
+    face_confidence REAL, face_size_pct REAL DEFAULT 0,
     webcam_x INTEGER, webcam_y INTEGER, webcam_w INTEGER, webcam_h INTEGER,
     content_x INTEGER, content_y INTEGER, content_w INTEGER, content_h INTEGER,
     content_type TEXT DEFAULT 'unknown', visible_text TEXT DEFAULT '[]',
@@ -73,12 +73,12 @@ CREATE TABLE IF NOT EXISTS scene_map (
 
 _INSERT_SQL = """INSERT INTO scene_map (
     project_id, start_ms, end_ms,
-    face_x, face_y, face_w, face_h, face_confidence,
+    face_x, face_y, face_w, face_h, face_confidence, face_size_pct,
     webcam_x, webcam_y, webcam_w, webcam_h,
     content_x, content_y, content_w, content_h,
     content_type, visible_text,
     layout_recommendation, canvas_regions_json, transcript_text
-) VALUES (?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?, ?,?,?)"""
+) VALUES (?,?,?, ?,?,?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?, ?,?,?)"""
 
 
 def _downsample(frame: np.ndarray) -> tuple[np.ndarray, float, float]:
@@ -372,6 +372,52 @@ def _build_canvas_regions(
     return result
 
 
+def _classify_content_type(
+    face: dict[str, object] | None,
+    webcam: dict[str, int] | None,
+    content: dict[str, int],
+    frame_w: int,
+    frame_h: int,
+) -> str:
+    """Classify the content type of a scene based on detected regions.
+
+    Uses heuristics from face area percentage, webcam presence, and
+    content region size to determine the dominant content type.
+
+    Returns one of: 'talking_head', 'screen_with_webcam', 'screen_only',
+    'presentation', 'split_content', 'unknown'.
+    """
+    face_area_pct = 0.0
+    if face is not None:
+        face_area = int(face["w"]) * int(face["h"])
+        face_area_pct = face_area / (frame_w * frame_h) * 100
+
+    has_webcam = webcam is not None
+    content_area_pct = (content["w"] * content["h"]) / (frame_w * frame_h) * 100
+
+    # Face takes up >30% of frame = talking head
+    if face_area_pct > 30:
+        return "talking_head"
+
+    # Webcam detected with content area = screen recording with webcam
+    if has_webcam and content_area_pct > 40:
+        return "screen_with_webcam"
+
+    # Face detected but small, with large content area
+    if face is not None and face_area_pct > 1 and content_area_pct > 50:
+        return "screen_with_webcam"
+
+    # No face, large content area = pure screen content
+    if face is None and content_area_pct > 60:
+        return "screen_only"
+
+    # Small content area with face = presentation/slide
+    if face is not None and content_area_pct < 40:
+        return "presentation"
+
+    return "screen_only"
+
+
 def _ensure_scene_map_table(db_path: Path) -> None:
     conn = sqlite3.connect(str(db_path))
     try:
@@ -379,6 +425,13 @@ def _ensure_scene_map_table(db_path: Path) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_scene_map_project "
             "ON scene_map(project_id, start_ms)")
+        # Migrate: add face_size_pct column if missing on existing tables
+        try:
+            conn.execute(
+                "ALTER TABLE scene_map ADD COLUMN face_size_pct REAL DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         conn.commit()
     finally:
         conn.close()
@@ -474,10 +527,11 @@ def _store_scene_records(db_path: Path, records: list[dict[str, object]]) -> Non
                 face["x"] if face else None, face["y"] if face else None,
                 face["w"] if face else None, face["h"] if face else None,
                 face["confidence"] if face else None,
+                rec.get("face_size_pct", 0.0),
                 webcam["x"] if webcam else None, webcam["y"] if webcam else None,
                 webcam["w"] if webcam else None, webcam["h"] if webcam else None,
                 content["x"], content["y"], content["w"], content["h"],
-                "unknown", "[]",
+                rec.get("content_type", "unknown"), "[]",
                 rec["layout"], json.dumps(rec["canvas"]), rec["transcript"],
             ))
         conn.commit()
@@ -621,11 +675,22 @@ async def run_scene_analysis(
                 face, stable_webcam, content, frame_w, frame_h,
             )
 
+            # Classify content type from detected regions
+            content_type = _classify_content_type(
+                face, stable_webcam, content, frame_w, frame_h,
+            )
+
+            # Compute face size as percentage of frame
+            face_size_pct = 0.0
+            if face is not None:
+                face_size_pct = round(
+                    (int(face["w"]) * int(face["h"])) / (frame_w * frame_h) * 100, 2
+                )
+
             # Layout recommendation
             layout = "A"
             if face is not None:
-                face_area_pct = (int(face["w"]) * int(face["h"])) / (frame_w * frame_h) * 100
-                layout = "A" if face_area_pct > 5 else "C"
+                layout = "A" if face_size_pct > 5 else "C"
 
             # Transcript alignment
             scene_text_parts: list[str] = []
@@ -640,6 +705,8 @@ async def run_scene_analysis(
                 "face": face,
                 "webcam": stable_webcam,
                 "content": content,
+                "content_type": content_type,
+                "face_size_pct": face_size_pct,
                 "layout": layout,
                 "canvas": canvas,
                 "transcript": " ".join(scene_text_parts),

@@ -102,7 +102,7 @@ _STAGES: list[PipelineStage] = [
     ),
     PipelineStage(
         name="semantic_embed", operation="semantic_embedding", required=False,
-        depends_on=["transcribe"], run=run_semantic_embed, timeout_s=300,
+        depends_on=["transcribe"], run=run_semantic_embed, timeout_s=600,
     ),
     PipelineStage(
         name="speaker_embed", operation="speaker_diarization", required=False,
@@ -114,7 +114,7 @@ _STAGES: list[PipelineStage] = [
     ),
     PipelineStage(
         name="reactions", operation="reaction_detection", required=False,
-        depends_on=["audio_extract"], run=run_reactions, timeout_s=300,
+        depends_on=["audio_extract"], run=run_reactions, timeout_s=600,
     ),
     PipelineStage(
         name="acoustic", operation="acoustic_analysis", required=False,

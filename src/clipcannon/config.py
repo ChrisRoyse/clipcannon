@@ -47,7 +47,7 @@ class ProcessingConfig(BaseModel):
     whisper_model: str = "large-v3"
     whisper_compute_type: str = "int8"
     batch_size_visual: int = 64
-    scene_change_threshold: float = 0.75
+    scene_change_threshold: float = 0.85
     highlight_count_default: int = 20
     min_clip_duration_ms: int = 5000
     max_clip_duration_ms: int = 600000

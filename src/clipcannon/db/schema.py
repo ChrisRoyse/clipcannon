@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS transcript_segments (
     speaker_id INTEGER,
     language TEXT DEFAULT 'en',
     word_count INTEGER,
+    sentiment TEXT,
+    sentiment_score REAL,
     FOREIGN KEY (project_id) REFERENCES project(project_id),
     FOREIGN KEY (speaker_id) REFERENCES speakers(speaker_id)
 );

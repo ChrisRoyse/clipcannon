@@ -364,8 +364,8 @@ def test_default_config() -> None:
 
         scene_thresh = processing.get("scene_change_threshold")
         record(
-            "processing.scene_change_threshold = 0.75",
-            scene_thresh == 0.75,
+            "processing.scene_change_threshold = 0.85",
+            scene_thresh == 0.85,
             f"actual={scene_thresh!r}",
         )
 
