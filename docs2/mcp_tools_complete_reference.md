@@ -1,6 +1,6 @@
-# ClipCannon MCP Tools — Complete Reference (51 Tools)
+# ClipCannon MCP Tools — Complete Reference (39 Tools)
 
-**Updated:** 2026-03-22
+**Updated:** 2026-03-23
 **Source:** `src/clipcannon/server.py`, `src/clipcannon/tools/`
 
 ---
@@ -12,15 +12,17 @@ The MCP server registers `list_tools()` → `ALL_TOOL_DEFINITIONS` and `call_too
 | Module | Dispatch Function | Count |
 |---|---|---|
 | `tools/project.py` | `dispatch_project_tool` | 5 |
-| `tools/__init__.py` | `dispatch_understanding_tool` | 7 |
-| `tools/provenance_tools.py` | `dispatch_provenance_tool` | 4 |
+| `tools/__init__.py` | `dispatch_understanding_tool` | 5 |
 | `tools/disk.py` | `dispatch_disk_tool` | 2 |
 | `tools/config_tools.py` | `dispatch_config_tool` | 3 |
 | `tools/billing_tools.py` | `dispatch_billing_tool` | 4 |
-| `tools/editing.py` | `dispatch_editing_tool` | 11 |
-| `tools/rendering.py` | `dispatch_rendering_tool` | 11 |
+| `tools/editing.py` | `dispatch_editing_tool` | 6 |
+| `tools/rendering.py` | `dispatch_rendering_tool` | 7 |
 | `tools/audio.py` | `dispatch_audio_tool` | 4 |
-| **Total** | | **51** |
+| `tools/discovery.py` | `dispatch_discovery_tool` | 3 |
+| **Total** | | **39** |
+
+Provenance functions (`provenance_tools.py`) are now internal-only — not exposed via MCP.
 
 ---
 
@@ -78,67 +80,48 @@ Deletes a project directory and all associated data (database, frames, renders, 
 
 ---
 
-## 2. Understanding Tools (7)
+## 2. Understanding Tools (5)
 
 ### clipcannon_ingest
 
-Orchestrates the full 21-stage understanding pipeline on a project's source video. Runs probe, VFR normalization, audio extraction, source separation, frame extraction, transcription, visual embedding, OCR, quality assessment, shot type classification, semantic embedding, emotion analysis, speaker diarization, reaction detection, acoustic analysis, profanity detection, chronemic computation, highlight scoring, scene analysis, storyboard generation, and finalization. Costs 10 credits.
+Orchestrates the full analysis pipeline on a project's source video. Runs probe, VFR normalization, audio extraction, source separation, frame extraction, transcription, visual embedding, OCR, quality assessment, shot type classification, semantic embedding, emotion analysis, speaker diarization, reaction detection, acoustic analysis, profanity detection, chronemic computation, highlight scoring, scene analysis, storyboard generation, and finalization. Costs 10 credits.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `project_id` | string | Yes | Project ID (must have source video) |
+| `options` | object | No | Optional pipeline overrides (reserved) |
 
 **Returns:** Pipeline result with per-stage status, timing, and any errors. ~5 min for 1hr video on RTX 5090.
 
-### clipcannon_get_vud_summary
-
-Returns a compact Video Understanding Document summary (~8K tokens). Includes duration, speakers, topic overview, top highlights, reaction summary, beat info, content rating, average energy, and stream completion status.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID (must be ingested) |
-
-**Returns:** JSON summary — the AI's first perception of the video. Enough to plan editing strategy.
-
-### clipcannon_get_analytics
-
-Returns detailed analytics (~18K tokens): all scene boundaries with shot types, all topics with keywords, all highlights with scores and reasons, all reactions with timestamps. The complete structural map of the video.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-| `sections` | array | No | Filter to specific sections: `highlights`, `scenes`, `topics`, `reactions` |
-
-**Returns:** Full structural analytics JSON
-
 ### clipcannon_get_transcript
 
-Returns paginated word-level transcript (~12K tokens per page). Includes segment text, speaker labels, word-level timestamps, and confidence scores.
+Returns paginated word-level transcript in 15-minute windows. Includes segment text, speaker labels, word-level timestamps, and confidence scores. Use `start_ms`/`end_ms` to navigate; returns `has_more` and `next_start_ms` for pagination.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `project_id` | string | Yes | Project ID |
-| `start_ms` | integer | No | Start time filter |
-| `end_ms` | integer | No | End time filter |
-| `page` | integer | No | Page number (default 1) |
+| `start_ms` | integer | No | Start time filter (default 0) |
+| `end_ms` | integer | No | End time filter (default start + 900000) |
 
-**Returns:** Transcript segments with word-level timestamps for the requested time range
+**Returns:** Transcript segments with word-level timestamps for the requested window
 
 ### clipcannon_get_segment_detail
 
-Returns all stream data at full resolution for a specific time range (~15K tokens). Includes transcript, emotion curve (per-second), speakers, reactions, beats, on-screen text, pacing, quality, and silence gaps — all for that range.
+Master query: returns ALL intelligence from every embedder for a time range. 17 data streams: transcript (segments + words), emotion curve (arousal/valence/energy), speakers, reactions, beats, on-screen text (OCR), text change events (slide transitions), pacing, scene quality, scene map (face/webcam/content/canvas regions), silence gaps, highlights (scored), topics, profanity, music sections. Supports point-query mode via `timestamp_ms` (returns 10s window centered on that timestamp with scene_map entry and canvas regions). Optionally pass `layout` to filter canvas regions.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `project_id` | string | Yes | Project ID |
-| `start_ms` | integer | Yes | Start timestamp |
-| `end_ms` | integer | Yes | End timestamp |
+| `start_ms` | integer | No | Start time in ms (not needed with timestamp_ms) |
+| `end_ms` | integer | No | End time in ms (not needed with timestamp_ms) |
+| `timestamp_ms` | integer | No | Point-query: returns 10s window (ts-5000 to ts+5000) with scene_map and canvas regions |
+| `layout` | string | No | Layout name to filter canvas regions (only with timestamp_ms) |
 
 **Returns:** Full-resolution multi-stream data for fine-grained editing decisions
 
 ### clipcannon_get_frame
 
-Returns a single video frame as an inline base64 JPEG with all temporal metadata showing what every stream knows about that moment (transcript, speaker, emotion, topic, shot type, quality, pacing, beat, on-screen text).
+Returns a single video frame as an inline base64 JPEG with all temporal metadata showing what every stream knows about that moment (transcript, speaker, emotion, topic, shot type, quality, pacing, beat, on-screen text, profanity).
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -156,58 +139,13 @@ Semantic search across transcript segments using sqlite-vec vector similarity. F
 | `project_id` | string | Yes | Project ID |
 | `query` | string | Yes | Search query text |
 | `limit` | integer | No | Max results (default 10) |
+| `search_type` | string | No | `semantic` (default) or `text` |
 
 **Returns:** Ranked transcript segments with similarity scores, timestamps, and context
 
 ---
 
-## 3. Provenance Tools (4)
-
-### clipcannon_provenance_verify
-
-Verifies the integrity of the entire provenance hash chain for a project. Checks every record's chain hash against its parent, detects tampering, validates file hashes.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-
-**Returns:** Verification result with `integrity` (verified/failed), record count, any broken links
-
-### clipcannon_provenance_query
-
-Queries provenance records by operation type, time range, or record ID. Returns the full provenance record including input/output hashes, model info, parameters, and timing.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-| `operation` | string | No | Filter by operation type |
-| `record_id` | string | No | Specific record ID |
-
-**Returns:** Matching provenance records
-
-### clipcannon_provenance_chain
-
-Returns the full provenance chain as a DAG — every record linked from source video (root) to latest output (leaves). Shows the complete data lineage.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-
-**Returns:** DAG of all provenance records with parent-child relationships
-
-### clipcannon_provenance_timeline
-
-Returns provenance records in chronological order, showing the sequence of all transformations applied to the project data over time.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-
-**Returns:** Time-ordered list of all provenance events
-
----
-
-## 4. Disk Tools (2)
+## 3. Disk Tools (2)
 
 ### clipcannon_disk_status
 
@@ -232,7 +170,7 @@ Frees disk space by deleting files in priority order: ephemeral first, then rege
 
 ---
 
-## 5. Config Tools (3)
+## 4. Config Tools (3)
 
 ### clipcannon_config_get
 
@@ -265,7 +203,7 @@ Lists all configuration sections and their current values. Returns the full conf
 
 ---
 
-## 6. Billing Tools (4)
+## 5. Billing Tools (4)
 
 ### clipcannon_credits_balance
 
@@ -308,7 +246,7 @@ Views or updates the monthly spending limit. Limit of 0 means unlimited. Warning
 
 ---
 
-## 7. Editing Tools (11)
+## 6. Editing Tools (6)
 
 ### clipcannon_create_edit
 
@@ -340,29 +278,6 @@ Deep-merges changes into an existing draft edit. Only draft edits can be modifie
 
 **Returns:** Updated edit summary
 
-### clipcannon_list_edits
-
-Lists all edits for a project with optional status filtering.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-| `status_filter` | string | No | Filter: `all`, `draft`, `rendering`, `rendered`, `approved`, `rejected`, `failed` |
-
-**Returns:** Array of edit summaries with edit_id, name, status, platform, duration, segment count, render_id
-
-### clipcannon_generate_metadata
-
-Generates platform-specific metadata (title, description, hashtags, thumbnail timestamp) from VUD data. Uses platform-specific tone and constraints (e.g., TikTok = casual 150 chars, LinkedIn = professional 200 chars).
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-| `edit_id` | string | Yes | Edit ID |
-| `target_platform` | string | No | Override platform (defaults to edit's platform) |
-
-**Returns:** Generated title, description, hashtags, thumbnail_timestamp_ms
-
 ### clipcannon_auto_trim
 
 Analyzes the transcript to find filler words (um, uh, like, basically, literally, you know, I mean) and silence gaps exceeding a threshold. Returns clean segments with filler removed, ready to use in `create_edit`.
@@ -389,7 +304,7 @@ Applies color grading to an edit — either globally or to a specific segment. S
 | `saturation` | number | No | 0.0 to 3.0 |
 | `gamma` | number | No | 0.1 to 10.0 |
 | `hue_shift` | number | No | -180 to 180 degrees |
-| `segment_id` | string | No | Apply to specific segment (omit for global) |
+| `segment_id` | integer | No | Apply to specific segment (omit for global) |
 
 **Returns:** Updated color settings confirmation
 
@@ -401,7 +316,7 @@ Adds a motion effect (zoom, pan, ken burns) to a specific segment. Stores the mo
 |---|---|---|---|
 | `project_id` | string | Yes | Project ID |
 | `edit_id` | string | Yes | Edit ID |
-| `segment_id` | string | Yes | Target segment |
+| `segment_id` | integer | Yes | Target segment |
 | `effect` | string | Yes | `zoom_in`, `zoom_out`, `pan_left`, `pan_right`, `pan_up`, `pan_down`, `ken_burns` |
 | `start_scale` | number | No | Starting zoom (0.5-3.0) |
 | `end_scale` | number | No | Ending zoom (0.5-3.0) |
@@ -421,8 +336,8 @@ Adds a visual overlay to an edit. Supports lower thirds, title cards, logos, wat
 | `text` | string | Yes | Primary text |
 | `subtitle` | string | No | Secondary text |
 | `position` | string | No | Placement position |
-| `start_ms` | integer | No | Overlay start time |
-| `end_ms` | integer | No | Overlay end time |
+| `start_ms` | integer | Yes | Overlay start time |
+| `end_ms` | integer | Yes | Overlay end time |
 | `opacity` | number | No | 0.0-1.0 |
 | `font_size` | integer | No | Font size in pixels |
 | `text_color` | string | No | Hex color |
@@ -433,53 +348,13 @@ Adds a visual overlay to an edit. Supports lower thirds, title cards, logos, wat
 
 **Returns:** Overlay spec confirmation with overlay_id
 
-### clipcannon_extract_subject
-
-AI-powered background removal using rembg. Extracts the subject from video frames and saves alpha masks for compositing.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-| `model` | string | No | `u2net` (general), `u2net_human_seg` (humans, default), `isnet-general-use` (general v2) |
-
-**Returns:** Mask output path, model used, frame count processed
-
-### clipcannon_replace_background
-
-Replaces the video background using previously extracted subject masks. Requires `extract_subject` to have been run first.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-| `edit_id` | string | Yes | Edit ID |
-| `background_type` | string | Yes | `blur` or `color` |
-| `background_value` | string | No | Blur strength or hex color value |
-
-**Returns:** Background replacement settings confirmation
-
-### clipcannon_remove_region
-
-Removes a rectangular region from the video using FFmpeg's delogo filter. Useful for removing watermarks, logos, or UI elements.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-| `edit_id` | string | Yes | Edit ID |
-| `x` | integer | Yes | Region X position |
-| `y` | integer | Yes | Region Y position |
-| `width` | integer | Yes | Region width |
-| `height` | integer | Yes | Region height |
-| `description` | string | No | What is being removed (for provenance) |
-
-**Returns:** Region removal confirmation
-
 ---
 
-## 8. Rendering Tools (11)
+## 7. Rendering Tools (7)
 
 ### clipcannon_render
 
-Renders a draft edit to a platform-optimized video file. Executes the full render pipeline: source validation, profile resolution, caption writing, crop computation, FFmpeg execution, thumbnail generation, provenance recording, and DB update. Costs 2 credits (refunded on failure).
+Renders a draft edit to a platform-optimized video file. Executes the full render pipeline: source validation, profile resolution, caption burn-in, crop computation, FFmpeg execution, thumbnail generation, provenance recording, and DB update. Costs 2 credits (refunded on failure).
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -488,37 +363,15 @@ Renders a draft edit to a platform-optimized video file. Executes the full rende
 
 **Returns:** `render_id`, `output_path`, `thumbnail_path`, `output_sha256`, `file_size_bytes`, `duration_ms`, `render_duration_ms`
 
-### clipcannon_render_status
-
-Checks the status of a render job.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-| `render_id` | string | Yes | Render ID |
-
-**Returns:** Status (rendering/rendered/failed), output path, file size, duration, error message if failed
-
-### clipcannon_render_batch
-
-Renders multiple edits concurrently (max 3 parallel via asyncio.Semaphore). Costs 2 credits per edit. Individual failures don't stop the batch.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-| `edit_ids` | array | Yes | Array of edit IDs to render |
-
-**Returns:** Array of render results (one per edit), total success/failure counts
-
 ### clipcannon_get_editing_context
 
-Returns all editing-relevant data in a single call: transcript highlights, silence gaps, pacing analysis, scene boundaries with shot types. Designed to be called FIRST before creating any edits — gives the AI everything needed to plan cuts.
+Returns the enriched data manifest for a project. Includes a catalog of ALL available data (counts, ranges, scores), speaker breakdown (label + speaking_pct), narrative analysis from Qwen3-8B (story_beats, open_loops, chapter_boundaries, narrative_summary), transcript preview (first 500 words), and which tools to use to query each data type. One call gives enough context to plan edits. **Call this FIRST before any editing work.**
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `project_id` | string | Yes | Project ID |
 
-**Returns:** Ranked highlights, silence gaps, pacing segments, scene boundaries — all in one response
+**Returns:** Ranked highlights, silence gaps, pacing segments, scene boundaries, speaker breakdown, narrative analysis, transcript preview
 
 ### clipcannon_analyze_frame
 
@@ -556,7 +409,7 @@ Inspects a rendered output by extracting frames at 5 key timestamps (0%, 25%, 50
 
 ### clipcannon_preview_layout
 
-Generates a single JPEG frame showing how a canvas layout will look. Composites all regions onto a 1080x1920 canvas using Pillow. ~300ms, no credits.
+Generates a single JPEG frame showing how a canvas layout will look. Composites all regions onto a canvas using Pillow. ~300ms, no credits.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -565,54 +418,27 @@ Generates a single JPEG frame showing how a canvas layout will look. Composites 
 | `canvas_width` | integer | No | Canvas width (default 1080) |
 | `canvas_height` | integer | No | Canvas height (default 1920) |
 | `background_color` | string | No | Background hex color |
-| `regions` | array | No | Region definitions (source crop + output placement) |
+| `regions` | array | Yes | Region definitions (source crop + output placement) |
 
 **Returns:** Composite JPEG preview image (base64)
 
-### clipcannon_measure_layout
-
-Runs face detection on a frame and computes precise canvas regions for 4 predefined layouts on a 1080x1920 canvas. Returns ready-to-use `canvas.regions[]` arrays for `clipcannon_create_edit`.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-| `timestamp_ms` | integer | Yes | Frame to analyze |
-| `layout` | string | Yes | `A` (30/70 split), `B` (40/60 split), `C` (PIP), `D` (full-face) |
-
-**Returns:** Face position, computed regions array, layout description
-
-| Layout | Speaker Region | Content Region |
-|---|---|---|
-| A | 576px (30%) bottom | 1344px (70%) top |
-| B | 768px (40%) bottom | 1152px (60%) top |
-| C | 240px circle overlay | Full screen background |
-| D | Full screen face crop | N/A |
-
-### clipcannon_get_storyboard
-
-Generates a contact sheet of video frames at 2fps with timestamp labels. Each row covers ~10 seconds. Returns an inline image (~9K tokens) plus the full transcript for the visible time range.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-| `start_s` | number | No | Start time in seconds (for windowed view) |
-| `end_s` | number | No | End time in seconds (for 5s window) |
-
-**Returns:** Contact sheet image (base64) + transcript text
-
 ### clipcannon_get_scene_map
 
-Returns a complete scene map for the entire video: scene boundaries, face positions per scene, webcam/content region detection, pre-computed canvas regions for all 4 layouts (A/B/C/D), per-scene transcript snippets, and layout recommendations. Zero manual measurement needed. Requires ingest.
+Returns a paginated scene map with detail control. Summary mode (~40 tokens/scene): id, start/end, layout, has_face, transcript preview. Full mode (~120 tokens/scene): all fields including canvas_regions for a single layout. Default window is 5 minutes from `start_ms`. Use `has_more` + `next_start_ms` to paginate. Requires ingest.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `project_id` | string | Yes | Project ID |
+| `start_ms` | integer | No | Window start in ms (default 0) |
+| `end_ms` | integer | No | Window end in ms (default start + 300000) |
+| `detail` | string | No | `summary` (~40 tok/scene) or `full` (~120 tok/scene) |
+| `layout` | string | No | Layout to return canvas regions for: `A`, `B`, `C`, `D` (full mode only) |
 
 **Returns:** Array of scenes with face data, region proposals, transcript, and recommended layout per scene
 
 ---
 
-## 9. Audio Tools (4)
+## 8. Audio Tools (4)
 
 ### clipcannon_generate_music
 
@@ -667,13 +493,13 @@ Generates programmatic DSP sound effects using numpy/scipy. Pure math — no GPU
 
 | SFX Type | Algorithm | Typical Use |
 |---|---|---|
-| `whoosh` | Log chirp 200→8000 Hz + exp decay | Transitions |
-| `riser` | Linear chirp 100→4000 Hz + crescendo | Build tension before reveal |
-| `downer` | Linear chirp 4000→100 Hz + decrescendo | Deflation, disappointment |
+| `whoosh` | Log chirp 200->8000 Hz + exp decay | Transitions |
+| `riser` | Linear chirp 100->4000 Hz + crescendo | Build tension before reveal |
+| `downer` | Linear chirp 4000->100 Hz + decrescendo | Deflation, disappointment |
 | `impact` | White noise burst + fast decay | Emphasis, scene changes |
 | `chime` | 3 harmonic sines (880 Hz) + decay | Notifications, highlights |
 | `tick` | 1000 Hz sine + sharp attack/decay | UI-style transitions |
-| `bass_drop` | 200→40 Hz sweep + sub-harmonic | Dramatic moments |
+| `bass_drop` | 200->40 Hz sweep + sub-harmonic | Dramatic moments |
 | `shimmer` | HP filtered noise + slow attack/decay | Ethereal atmosphere |
 | `stinger` | Impact (first half) + riser (second half) | Scene transitions |
 
@@ -700,16 +526,77 @@ Cleans up source audio with selectable operations. Each operation is independent
 
 ---
 
+## 9. Discovery Tools (3)
+
+### clipcannon_find_best_moments
+
+Find the best video segments for a specific purpose. Queries highlights, aligns to natural cut points (silence gaps) with convergence quality scoring (silence_gap, sentence_end, scene_boundary signals). Includes transcript, canvas regions, story_beat (from narrative analysis), and moment_character label (passionate_claim / excited_demo / engaged_explanation / screen_walkthrough / calm_narration). Purpose-aware scoring: `hook` prefers early segments with faces, `cta` prefers late segments, `tutorial_step` prefers text-change events. No credits charged.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `project_id` | string | Yes | Project ID |
+| `purpose` | string | Yes | `hook`, `highlight`, `cta`, `tutorial_step` |
+| `target_duration_s` | integer | No | Target clip duration in seconds (default 30, range 5-180) |
+| `count` | integer | No | Number of moments to return (default 5, max 10) |
+
+**Returns:** Ranked moments with score, time range, transcript, canvas regions, story beat, moment character, cut-point quality
+
+### clipcannon_find_cut_points
+
+Find natural edit boundaries near a timestamp with cross-stream convergence scoring. Searches silence gaps, beat hits, scene boundaries, and sentence endings within a configurable range. Returns cut points scored by signal convergence: `perfect` when 3+ signals align (silence + beat + sentence), `excellent` for 2 signals, `good` for single signals. No credits charged.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `project_id` | string | Yes | Project ID |
+| `around_ms` | integer | Yes | Center timestamp to search around (ms) |
+| `search_range_ms` | integer | No | Search window radius in ms (default 5000) |
+
+**Returns:** Cut points with quality label (perfect/excellent/good), converging signal types, and exact timestamps
+
+### clipcannon_get_narrative_flow
+
+Analyze narrative coherence of proposed edit segments BEFORE creating an edit. Takes proposed source time ranges and shows what the speaker says at each segment boundary, what content is being skipped in gaps between segments, and warns about broken promise-payoff patterns. **ALWAYS call this before `create_edit` when using non-contiguous segments.** No credits charged.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `project_id` | string | Yes | Project ID |
+| `segments` | array | Yes | Proposed segment time ranges: `[{start_ms, end_ms}, ...]` |
+
+**Returns:** Per-segment boundary text, gap analysis, narrative coherence warnings
+
+---
+
 ## Credit Costs
 
 | Operation | Credits | Tool |
 |---|---|---|
 | Full pipeline analysis | 10 | `clipcannon_ingest` |
-| Render (per edit) | 2 | `clipcannon_render`, `clipcannon_render_batch` |
-| Metadata generation | 1 | `clipcannon_generate_metadata` |
+| Render (per edit) | 2 | `clipcannon_render` |
 | Preview clip | 0 | `clipcannon_preview_clip` |
 | Preview layout | 0 | `clipcannon_preview_layout` |
 | Analyze frame | 0 | `clipcannon_analyze_frame` |
+| Discovery tools | 0 | `find_best_moments`, `find_cut_points`, `get_narrative_flow` |
 | All other tools | 0 | Read-only or configuration |
 
 Failed renders are automatically refunded.
+
+---
+
+## Consolidated Tools (removed from MCP, internal only)
+
+The following tools were removed from MCP registration during the Phase 2 consolidation. Their implementations remain available for internal use by other tools.
+
+| Former Tool | Reason | Replacement |
+|---|---|---|
+| `clipcannon_get_vud_summary` | Subsumed | `get_editing_context` returns superset |
+| `clipcannon_get_analytics` | Subsumed | `get_segment_detail` returns all streams |
+| `clipcannon_list_edits` | Internal | Used by rendering pipeline internally |
+| `clipcannon_generate_metadata` | Internal | Used by rendering pipeline internally |
+| `clipcannon_render_status` | Internal | Used by render pipeline internally |
+| `clipcannon_render_batch` | Internal | Use `render` per-edit instead |
+| `clipcannon_measure_layout` | Subsumed | `get_scene_map` returns pre-computed layouts |
+| `clipcannon_get_storyboard` | Subsumed | `get_frame` + `get_scene_map` cover same need |
+| `clipcannon_extract_subject` | Internal | Background removal runs during render |
+| `clipcannon_replace_background` | Internal | Set via `create_edit` canvas config |
+| `clipcannon_remove_region` | Internal | Set via `create_edit` EDL removals |
+| `clipcannon_provenance_*` (4) | Internal | Provenance recorded automatically by pipeline |
