@@ -440,24 +440,43 @@ Returns a paginated scene map with detail control. Summary mode (~40 tokens/scen
 
 ## 8. Audio Tools (4)
 
+The audio engine provides three tiers of music/sound generation plus cleanup:
+
+| Tier | Tool | Engine | GPU | Speed | Output |
+|---|---|---|---|---|---|
+| 1: AI Music | `generate_music` | ACE-Step v1 3.5B (Hybrid LM + DiT) | Yes (4+ GB VRAM) | ~7s for 10s audio | 48kHz stereo WAV |
+| 2: MIDI | `compose_midi` | MIDIUtil + FluidSynth | No | <0.1s | MIDI (+ WAV if FluidSynth) |
+| 3: DSP SFX | `generate_sfx` | numpy/scipy math | No | <0.1s | 44.1kHz 16-bit WAV |
+| Cleanup | `audio_cleanup` | noisereduce + pyloudnorm | No | ~10s | WAV |
+
 ### clipcannon_generate_music
 
-Generates AI music using ACE-Step v1.5 turbo-rl diffusion model. Outputs 44.1kHz stereo WAV. Requires GPU with 4+ GB VRAM. The generated music is stored as an audio asset linked to the edit.
+Generates original AI background music from a text prompt using the ACE-Step v1 3.5B diffusion model (Apache 2.0 license — all generated audio is commercially usable). Architecture: Hybrid Language Model (Qwen3-based, 0.6B-4B params) + Diffusion Transformer (3.5B params). Model weights are cached locally at `~/.cache/ace-step/checkpoints/` after first download (~7.8GB) and never re-downloaded.
+
+Outputs 48kHz stereo WAV. Automatically selects `cpu_offload` mode on GPUs with less than 8GB VRAM. The generated music is stored as an audio asset linked to the edit.
+
+**Prompt engineering tips:** Include genre, BPM, mood, and instruments for best results. Examples:
+- `"upbeat corporate pop, 120 BPM, electronic synths, positive energy"`
+- `"gentle ambient pad, 70 BPM, warm piano, atmospheric"`
+- `"dramatic cinematic orchestral, 90 BPM, strings and brass, intense"`
+- `"lo-fi hip hop beats, 85 BPM, jazzy piano, vinyl crackle, chill"`
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `project_id` | string | Yes | Project ID |
 | `edit_id` | string | Yes | Edit to attach music to |
-| `prompt` | string | Yes | Text description of desired music (e.g., "upbeat corporate pop, 120 BPM") |
-| `duration_s` | number | Yes | Duration in seconds (max 300) |
-| `seed` | integer | No | Random seed for reproducibility |
+| `prompt` | string | Yes | Text description of desired music (genre, BPM, mood, instruments) |
+| `duration_s` | number | Yes | Duration in seconds (max 300, generates ~1 min per ~7s on RTX 5090) |
+| `seed` | integer | No | Random seed for reproducibility (same seed + same prompt = same output) |
 | `volume_db` | number | No | Volume in dB (default -18) |
 
-**Returns:** `file_path`, `duration_ms`, `sample_rate`, `seed`, `model_used`, `prompt`
+**Returns:** `audio_asset_id`, `file_path`, `duration_ms`, `sample_rate` (48000), `seed`, `model_used` ("ACE-Step-v1-3.5B"), `prompt`
+
+**Performance:** ~7s for 10s of audio on RTX 5090. Scales roughly linearly with duration. Model loads in ~3s on first call, cached in GPU memory for subsequent calls within the same session.
 
 ### clipcannon_compose_midi
 
-Composes MIDI from presets with theory-correct chord progressions, renders to WAV via FluidSynth. Multi-track: chords, melody, optional bass, optional drums (channel 9). No GPU required.
+Composes MIDI from presets with theory-correct chord progressions, renders to WAV via FluidSynth (if installed). Multi-track: chords, melody, optional bass, optional drums (channel 9). No GPU required. Falls back to MIDI-only output if FluidSynth is unavailable.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -468,20 +487,20 @@ Composes MIDI from presets with theory-correct chord progressions, renders to WA
 | `tempo_bpm` | integer | No | Override BPM (uses preset default if omitted) |
 | `key` | string | No | Musical key (default from preset) |
 
-**Returns:** `midi_path`, `duration_ms`, `tempo_bpm`, `key`, `preset`
+**Returns:** `audio_asset_id`, `midi_path`, `duration_ms`, `tempo_bpm`, `key`, `preset`
 
-| Preset | BPM | Key | Drums | Progression |
-|---|---|---|---|---|
-| ambient_pad | 70 | C | No | Cmaj7-Am7-Fmaj7-G7 |
-| upbeat_pop | 128 | C | Yes | C-G-Am-F |
-| corporate | 100 | C | No | C-F-Am-G |
-| dramatic | 90 | A | Yes | Am-F-C-G |
-| minimal_piano | 80 | C | No | C-G-Am-F |
-| intro_jingle | 120 | C | Yes | C-F-G-C |
+| Preset | BPM | Key | Drums | Progression | Use Case |
+|---|---|---|---|---|---|
+| ambient_pad | 70 | C | No | Cmaj7-Am7-Fmaj7-G7 | Background atmosphere |
+| upbeat_pop | 128 | C | Yes | C-G-Am-F | Energetic content |
+| corporate | 100 | C | No | C-F-Am-G | Professional/business |
+| dramatic | 90 | A | Yes | Am-F-C-G | Tension/reveal moments |
+| minimal_piano | 80 | C | No | C-G-Am-F | Calm narration |
+| intro_jingle | 120 | C | Yes | C-F-G-C | Short branded intros |
 
 ### clipcannon_generate_sfx
 
-Generates programmatic DSP sound effects using numpy/scipy. Pure math — no GPU, no models, <100ms per effect. Output: 44.1kHz 16-bit WAV.
+Generates programmatic DSP sound effects using numpy/scipy. Pure math — no GPU, no models, no downloads. <100ms per effect. Output: 44.1kHz 16-bit WAV. Use these for transitions, emphasis hits, and UI-style accents.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -493,7 +512,7 @@ Generates programmatic DSP sound effects using numpy/scipy. Pure math — no GPU
 
 | SFX Type | Algorithm | Typical Use |
 |---|---|---|
-| `whoosh` | Log chirp 200->8000 Hz + exp decay | Transitions |
+| `whoosh` | Log chirp 200->8000 Hz + exp decay | Scene transitions, swipes |
 | `riser` | Linear chirp 100->4000 Hz + crescendo | Build tension before reveal |
 | `downer` | Linear chirp 4000->100 Hz + decrescendo | Deflation, disappointment |
 | `impact` | White noise burst + fast decay | Emphasis, scene changes |
@@ -501,9 +520,9 @@ Generates programmatic DSP sound effects using numpy/scipy. Pure math — no GPU
 | `tick` | 1000 Hz sine + sharp attack/decay | UI-style transitions |
 | `bass_drop` | 200->40 Hz sweep + sub-harmonic | Dramatic moments |
 | `shimmer` | HP filtered noise + slow attack/decay | Ethereal atmosphere |
-| `stinger` | Impact (first half) + riser (second half) | Scene transitions |
+| `stinger` | Impact (first half) + riser (second half) | Hard scene transitions |
 
-**Returns:** `file_path`, `duration_ms`, `sample_rate`, `sfx_type`
+**Returns:** `audio_asset_id`, `file_path`, `duration_ms`, `sample_rate` (44100), `sfx_type`
 
 ### clipcannon_audio_cleanup
 
@@ -513,16 +532,17 @@ Cleans up source audio with selectable operations. Each operation is independent
 |---|---|---|---|
 | `project_id` | string | Yes | Project ID |
 | `edit_id` | string | Yes | Edit ID |
-| `operations` | array | No | Operations to apply (default: all) |
+| `operations` | array | Yes | Operations to apply (at least one required) |
+| `hum_frequency` | integer | No | 50 (EU) or 60 (US) Hz for de_hum (default 50) |
 
 | Operation | Description |
 |---|---|
-| `noise_reduction` | Spectral gating to remove background noise |
-| `normalize` | Peak normalize to -1 dBFS |
-| `silence_trim` | Remove leading/trailing silence |
-| `eq_adjust` | Low/high cut for speech clarity |
+| `noise_reduction` | Gentle spectral gating to remove background noise |
+| `de_hum` | Remove 50/60 Hz electrical hum |
+| `de_ess` | Reduce sibilance in speech |
+| `normalize_loudness` | EBU R128 loudness normalization |
 
-**Returns:** `file_path`, `duration_ms`, `sample_rate`, `operations_applied`
+**Returns:** `asset_id`, `file_path`, `duration_ms`, `operations_applied`
 
 ---
 
