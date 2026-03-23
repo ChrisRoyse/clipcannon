@@ -1,265 +1,119 @@
-# 15 - Audio Engine
+# Audio Engine
 
-> Current-state documentation of the Phase 2 audio generation subsystem as implemented in `src/clipcannon/audio/`.
+Source: `src/clipcannon/audio/`
 
-## Architecture Overview
-
-The audio engine provides a three-tier audio generation system with mixing and effects processing:
+All outputs: WAV at 44100 Hz (`SAMPLE_RATE`).
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Audio Module Stack                    │
-├─────────────────────────────────────────────────────────┤
-│  Tier 1 (AI):     generate_music() [ACE-Step GPU]       │
-│  Tier 2 (Synth):  compose_midi() + render_midi_to_wav() │
-│  Tier 3 (DSP):    generate_sfx() [9 effect types]       │
-├─────────────────────────────────────────────────────────┤
-│  Cleanup:         cleanup_audio() [noise/norm/trim/EQ]  │
-│  Processing:      apply_effects() [5 effects chains]    │
-│  Mixing:          mix_audio() [speech-aware ducking]     │
-├─────────────────────────────────────────────────────────┤
-│  MCP Integration: audio.py [4 tools + database storage] │
-└─────────────────────────────────────────────────────────┘
+Tier 1 (AI):   generate_music()  [ACE-Step GPU]
+Tier 2 (Synth): compose_midi() + render_midi_to_wav()
+Tier 3 (DSP):  generate_sfx()   [9 types, no GPU]
+Cleanup:        cleanup_audio()  [noise/norm/trim/EQ]
+Effects:        apply_effects()  [5 chains]
+Mixing:         mix_audio()      [speech-aware ducking]
 ```
-
-All audio outputs use WAV format at 44100 Hz sample rate (`SAMPLE_RATE` constant).
 
 ---
 
-## 1. AI Music Generation (Tier 1)
-
-**Source:** `src/clipcannon/audio/music_gen.py`
-
-### MusicResult Dataclass
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `file_path` | `Path` | Path to generated WAV file |
-| `duration_ms` | `int` | Actual duration in ms |
-| `sample_rate` | `int` | Sample rate (44100) |
-| `seed` | `int` | Random seed used |
-| `model_used` | `str` | `"ace-step-v15-turbo-rl"` |
-| `prompt` | `str` | Text prompt used |
-
-### Generation
+## 1. AI Music Generation (`music_gen.py`)
 
 `async generate_music(prompt, duration_s, output_path, seed=None, guidance_scale=7.5, gpu_device="cuda:0") -> MusicResult`
 
-- **Model**: ACE-Step v1.5 turbo RL diffusion model
-- **Requirements**: GPU with 4+ GB VRAM
-- **Memory management**: Uses `cpu_offload` if VRAM < 8 GB
-- Generates random seed if not provided (for reproducibility logging)
-- Validates output file exists and duration is within 10% of requested
-- Cleans up GPU memory (`torch.cuda.empty_cache()`) after generation
+- Model: ACE-Step v1.5 turbo RL diffusion
+- GPU: 4+ GB VRAM required, `cpu_offload` if < 8 GB
+- Random seed generated if not provided (for reproducibility)
+- Validates output exists and duration within 10% of requested
+- Cleans GPU memory after generation
+
+**MusicResult**: `file_path`, `duration_ms`, `sample_rate`, `seed`, `model_used` ("ace-step-v15-turbo-rl"), `prompt`
 
 ---
 
-## 2. MIDI Composition (Tier 2)
-
-**Source:** `src/clipcannon/audio/midi_compose.py`, `midi_render.py`
-
-### MidiResult Dataclass
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `midi_path` | `Path` | Path to MIDI file |
-| `duration_ms` | `int` | Duration in ms |
-| `tempo_bpm` | `int` | Tempo used |
-| `key` | `str` | Musical key |
-| `preset` | `str` | Preset name |
+## 2. MIDI Composition (`midi_compose.py`, `midi_render.py`)
 
 ### Presets (6)
 
-| Preset | Tempo | Key | Drums | Instruments | Dynamics |
-|--------|-------|-----|-------|-------------|----------|
-| `ambient_pad` | 70 BPM | C | No | Pad, Strings | 40-70 (soft) |
-| `upbeat_pop` | 128 BPM | C | Yes | Piano, Bass | 70-100 (high) |
-| `corporate` | 100 BPM | C | No | Piano, Strings | 55-80 (mid) |
-| `dramatic` | 90 BPM | A | Yes | Strings, Brass | 60-110 (wide) |
-| `minimal_piano` | 80 BPM | C | No | Piano only | 45-75 (soft) |
-| `intro_jingle` | 120 BPM | C | Yes | Piano, Strings, Bass | 70-100 (high) |
+| Preset | BPM | Key | Drums | Dynamics |
+|---|---|---|---|---|
+| ambient_pad | 70 | C | No | 40-70 |
+| upbeat_pop | 128 | C | Yes | 70-100 |
+| corporate | 100 | C | No | 55-80 |
+| dramatic | 90 | A | Yes | 60-110 |
+| minimal_piano | 80 | C | No | 45-75 |
+| intro_jingle | 120 | C | Yes | 70-100 |
 
-### Chord Progressions
+Chord progressions: Cmaj7-Am7-Fmaj7-G7 (ambient), C-G-Am-F (pop/piano), C-F-Am-G (corporate), Am-F-C-G (dramatic), C-F-G-C (jingle).
 
-| Name | Chords | Used By |
-|------|--------|---------|
-| C Major 7th Cycle | Cmaj7-Am7-Fmaj7-G7 | ambient_pad |
-| Pop Canon | C-G-Am-F | upbeat_pop, minimal_piano |
-| Corporate | C-F-Am-G | corporate |
-| Dramatic | Am-F-C-G | dramatic |
-| Jingle | C-F-G-C | intro_jingle |
+`compose_midi(preset, duration_s, output_path, tempo_bpm=None, key=None) -> MidiResult`: Multi-track MIDI (chords, melody, optional bass, optional drums on channel 9) via MIDIUtil.
 
-### Composition Flow
+`async render_midi_to_wav(midi_path, output_path, soundfont_path=None) -> Path`: FluidSynth synthesis. Searches 5 common SoundFont locations, falls back to `~/.clipcannon/models/GeneralUser_GS.sf2`.
 
-`compose_midi(preset, duration_s, output_path, tempo_bpm=None, key=None) -> MidiResult`:
-
-1. Loads preset configuration (or applies overrides)
-2. Creates multi-track MIDI:
-   - Track 0: Chord progression (piano/pad/strings)
-   - Track 1: Melody (scale degree patterns)
-   - Track 2: Bass (optional, one octave below chord roots)
-   - Track 3: Drums (optional, kick/snare/hihat pattern on channel 9)
-3. Applies velocity dynamics within preset range
-4. Writes MIDI file via MIDIUtil
-
-### MIDI Rendering
-
-`async render_midi_to_wav(midi_path, output_path, soundfont_path=None, sample_rate=44100) -> Path`:
-
-- Uses FluidSynth to synthesize MIDI with SoundFont instruments
-- Searches 5 common SoundFont locations (FluidR3_GM, GeneralUser_GS)
-- Falls back to `~/.clipcannon/models/GeneralUser_GS.sf2` if system fonts unavailable
+**MidiResult**: `midi_path`, `duration_ms`, `tempo_bpm`, `key`, `preset`
 
 ---
 
-## 3. DSP Sound Effects (Tier 3)
+## 3. DSP Sound Effects (`sfx.py`)
 
-**Source:** `src/clipcannon/audio/sfx.py`
+`generate_sfx(sfx_type, output_path, duration_ms=500, params=None) -> SfxResult`
 
-### SfxResult Dataclass
+| Type | Algorithm |
+|---|---|
+| whoosh | Log chirp 200->8000 Hz + exp decay |
+| riser | Linear chirp 100->4000 Hz + crescendo |
+| downer | Linear chirp 4000->100 Hz + decrescendo |
+| impact | White noise burst + fast decay |
+| chime | 3 harmonic sines (880 Hz base) + decay |
+| tick | 1000 Hz sine + sharp attack/decay |
+| bass_drop | 200->40 Hz sweep + sub-harmonic |
+| shimmer | HP filtered noise + slow attack/decay |
+| stinger | Impact (first half) + riser (second half) |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `file_path` | `Path` | Path to WAV file |
-| `duration_ms` | `int` | Duration in ms |
-| `sample_rate` | `int` | Sample rate (44100) |
-| `sfx_type` | `str` | Effect type name |
+Processing: dispatch -> 50-sample zero-crossing fade in/out -> normalize 80% -> 16-bit WAV. Pure numpy/scipy, no GPU.
 
-### Supported SFX Types (9)
-
-| Type | Algorithm | Description |
-|------|-----------|-------------|
-| `whoosh` | Logarithmic frequency chirp (200->8000 Hz) + exponential decay | Swoosh/pass-by sound |
-| `riser` | Linear chirp (100->4000 Hz) + crescendo envelope | Building tension |
-| `downer` | Linear chirp (4000->100 Hz) + decrescendo envelope | Deflating/falling |
-| `impact` | White noise burst + fast decay | Hit/punch emphasis |
-| `chime` | 3 harmonically-related sines (880 Hz base) + decay | Notification/alert |
-| `tick` | Single 1000 Hz sine + sharp attack/decay | Click/metronome |
-| `bass_drop` | 200->40 Hz sweep + sub-harmonic resonance | Low-end emphasis |
-| `shimmer` | High-pass filtered noise + slow attack/decay | Sparkle/magic |
-| `stinger` | Combined impact (first half) + riser (second half) | Dramatic reveal |
-
-### Generation
-
-`generate_sfx(sfx_type, output_path, duration_ms=500, params=None) -> SfxResult`:
-
-1. Dispatches to type-specific generator function
-2. Applies zero-crossing fade-in/fade-out (50 samples) to prevent clicks
-3. Normalizes to 80% of max amplitude
-4. Converts to 16-bit integer WAV
-5. Saves at 44100 Hz via scipy
-
-All synthesis is pure numpy/scipy -- no ML model, no GPU required.
+**SfxResult**: `file_path`, `duration_ms`, `sample_rate`, `sfx_type`
 
 ---
 
-## 4. Audio Effects Processing
+## 4. Audio Effects (`effects.py`)
 
-**Source:** `src/clipcannon/audio/effects.py`
+`apply_effects(audio_path, output_path, effects, params=None) -> Path`
 
-### Supported Effects (5)
+Uses Spotify `pedalboard`. Effects chain applied in order:
 
-| Effect | Default Parameters | Description |
-|--------|-------------------|-------------|
-| `reverb` | room_size=0.5, damping=0.5, wet=0.3, dry=0.7, width=1.0 | Room reverb simulation |
-| `compression` | threshold=-20dB, ratio=4.0, attack=10ms, release=100ms | Dynamic range compression |
-| `eq_low_cut` | cutoff_hz=80 | High-pass filter (removes low rumble) |
-| `eq_high_cut` | cutoff_hz=16000 | Low-pass filter (removes hiss) |
-| `limiter` | threshold=-1dB, release=100ms | Peak limiting |
-
-### Processing
-
-`apply_effects(audio_path, output_path, effects, params=None) -> Path`:
-
-- Uses Spotify's `pedalboard` library
-- Builds effects chain in order specified
-- Merges user parameters with defaults
-- Processes audio and saves WAV output
+| Effect | Defaults |
+|---|---|
+| reverb | room_size=0.5, damping=0.5, wet=0.3, dry=0.7 |
+| compression | threshold=-20dB, ratio=4.0, attack=10ms, release=100ms |
+| eq_low_cut | cutoff_hz=80 |
+| eq_high_cut | cutoff_hz=16000 |
+| limiter | threshold=-1dB, release=100ms |
 
 ---
 
-## 5. Audio Mixing
+## 5. Audio Mixing (`mixer.py`)
 
-**Source:** `src/clipcannon/audio/mixer.py`
+`async mix_audio(source_audio_path, output_path, background_music_path=None, sfx_entries=None, music_volume_db=-18.0, duck_under_speech=True, duck_level_db=-6.0, duck_attack_ms=200, duck_release_ms=300, normalize=True) -> MixResult`
 
-### MixResult Dataclass
+Layers (bottom to top): background music (looped/trimmed) -> source speech -> SFX (at offsets).
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `file_path` | `Path` | Path to mixed WAV |
-| `duration_ms` | `int` | Duration in ms |
-| `sample_rate` | `int` | Sample rate |
-| `layers_mixed` | `int` | Number of audio layers |
+**Speech-aware ducking**: RMS energy analysis in 50ms windows (threshold 300.0) -> identify speech regions -> reduce music by `duck_level_db` (-6 dB default) with 200ms attack / 300ms release ramps.
 
-### Mixing Pipeline
+**Normalization**: Peak normalize to -1 dBFS via pydub.
 
-`async mix_audio(source_audio_path, output_path, background_music_path=None, sfx_entries=None, music_volume_db=-18.0, duck_under_speech=True, duck_level_db=-6.0, duck_attack_ms=200, duck_release_ms=300, normalize=True, sample_rate=44100) -> MixResult`
-
-**Layer order** (bottom to top):
-1. Background music (looped/trimmed to match source duration)
-2. Source speech audio
-3. Sound effects (at specified offsets)
-
-### Speech-Aware Ducking
-
-`_detect_speech_regions(audio_segment, window_ms=50, threshold_rms=300.0) -> list[tuple[int, int]]`:
-- Analyzes audio in 50ms windows using RMS energy
-- Windows exceeding RMS threshold (300.0) are marked as speech
-- Adjacent windows merged into contiguous regions
-
-`_apply_ducking(music_segment, speech_regions, duck_level_db, attack_ms, release_ms)`:
-- Reduces music volume by `duck_level_db` (default -6 dB) during speech regions
-- Applies attack ramp (200ms) and release ramp (300ms) for smooth transitions
-
-### Peak Normalization
-
-When `normalize=True` (default), the final mix is peak-normalized to -1 dBFS using pydub's `normalize()`.
+**MixResult**: `file_path`, `duration_ms`, `sample_rate`, `layers_mixed`
 
 ---
 
-## 6. Audio Cleanup
+## 6. Audio Cleanup (`cleanup.py`)
 
-**Source:** `src/clipcannon/audio/cleanup.py`
+`cleanup_audio(input_path, output_path, operations=None) -> CleanupResult`
 
-### CleanupResult Dataclass
+Operations (default: all): `noise_reduction` (spectral gating), `normalize` (peak -1 dBFS), `silence_trim` (leading/trailing), `eq_adjust` (low/high cut for speech clarity). Each independently selectable.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `file_path` | `Path` | Path to cleaned WAV file |
-| `duration_ms` | `int` | Duration in ms |
-| `sample_rate` | `int` | Sample rate |
-| `operations_applied` | `list[str]` | List of cleanup operations that were applied |
-
-### Supported Operations
-
-`SUPPORTED_CLEANUP_OPS` defines the available cleanup operations:
-
-| Operation | Description |
-|-----------|-------------|
-| `noise_reduction` | Reduces background noise using spectral gating |
-| `normalize` | Peak normalization to -1 dBFS |
-| `silence_trim` | Removes leading and trailing silence |
-| `eq_adjust` | Applies EQ adjustments (low cut, high cut) for speech clarity |
-
-### Processing
-
-`cleanup_audio(input_path, output_path, operations=None) -> CleanupResult`:
-
-- Applies specified operations in order (defaults to all operations)
-- Each operation is independently applied and can be selected individually
-- Output is WAV at the source sample rate
+**CleanupResult**: `file_path`, `duration_ms`, `sample_rate`, `operations_applied`
 
 ---
 
 ## 7. Database Storage
 
-All generated audio assets are stored in the `audio_assets` table with:
-- `asset_id`: unique identifier
-- `asset_type`: "music", "sfx", or "voiceover"
-- `file_path`: path to the WAV file
-- `model_used`: "ace-step-v15-turbo-rl", "midiutil", "midiutil+fluidsynth", or "dsp"
-- `generation_params_json`: JSON-encoded parameters for reproducibility
-- `seed`: random seed (for AI-generated music)
-- `volume_db`: volume adjustment level
-
-Audio files are stored in `{project_dir}/edits/{edit_id}/audio/`.
+`audio_assets` table: `asset_id`, `edit_id`, `project_id`, `type` (music/sfx/voiceover), `file_path`, `duration_ms`, `sample_rate`, `model_used`, `generation_params` (JSON), `seed`, `volume_db`. Files stored in `{project_dir}/edits/{edit_id}/audio/`.
