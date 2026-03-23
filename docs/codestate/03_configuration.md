@@ -178,8 +178,8 @@ projects_path = config.resolve_path("directories.projects")  # Path("/home/user/
 | `HF_TOKEN` | Docker Compose | Hugging Face API token for downloading gated models |
 | `STRIPE_PUBLISHABLE_KEY` | Docker Compose | Stripe publishable key for client-side credit purchases |
 | `STRIPE_WEBHOOK_SECRET` | `license_server/stripe_webhooks.py` | Stripe webhook signature verification secret. Without it, unsigned payloads are accepted (dev mode) |
-| `CLIPCANNON_D1_API_URL` | `license_server/d1_sync.py` | Cloudflare D1 API URL for remote sync (not used in Phase 1) |
-| `CLIPCANNON_D1_API_TOKEN` | `license_server/d1_sync.py` | Cloudflare D1 API token for remote sync (not used in Phase 1) |
+| `CLIPCANNON_D1_API_URL` | `license_server/d1_sync.py` | Cloudflare D1 API URL for remote sync (not currently active) |
+| `CLIPCANNON_D1_API_TOKEN` | `license_server/d1_sync.py` | Cloudflare D1 API token for remote sync (not currently active) |
 | `VIDEO_DIR` | Docker Compose | Host directory to mount as `/videos:ro` in the container. Defaults to `./videos` |
 
 ## Docker Compose Service Definitions

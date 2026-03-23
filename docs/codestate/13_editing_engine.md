@@ -1,29 +1,33 @@
 # 13 - Editing Engine
 
-> Current-state documentation of the Phase 2 editing subsystem as implemented in `src/clipcannon/editing/`.
+> Current-state documentation of the editing subsystem as implemented in `src/clipcannon/editing/`.
 
 ## Architecture Overview
 
-The editing engine uses a declarative Edit Decision List (EDL) model to specify how source video should be transformed into platform-optimized clips. The EDL contains segment definitions, caption configuration, crop/layout specifications, audio mixing parameters, and platform-specific metadata.
+The editing engine uses a declarative Edit Decision List (EDL) model to specify how source video should be transformed into platform-optimized clips. The EDL contains segment definitions, caption configuration, crop/layout specifications, canvas compositing regions, motion effects, visual overlays, color grading, audio mixing parameters, and platform-specific metadata.
 
 ```
-┌─────────────────────────────────────────────────────┐
-│          MCP Tool Layer (tools/editing.py)           │
-│  [create_edit] [modify_edit] [list] [gen_metadata]  │
-└──────────────────┬──────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│             MCP Tool Layer (tools/editing.py)                    │
+│  [create_edit] [modify_edit] [list] [gen_metadata]              │
+│  [auto_trim] [color_adjust] [add_motion] [add_overlay]         │
+│  [extract_subject] [replace_background] [remove_region]        │
+└──────────────────┬──────────────────────────────────────────────┘
                    │
-┌──────────────────┴──────────────────────────────────┐
-│       Helper & Builder Layer (editing_helpers.py)    │
-│  [validation] [spec builders] [DB storage]          │
-└──────────────────┬──────────────────────────────────┘
+┌──────────────────┴──────────────────────────────────────────────┐
+│       Helper & Builder Layer (editing_helpers.py)                │
+│  [validation] [spec builders] [DB storage]                      │
+└──────────────────┬──────────────────────────────────────────────┘
                    │
-    ┌──────────────┼──────────────┬─────────────┐
-    │              │              │             │
-    EDL Models     Captions       Smart Crop    Metadata
+    ┌──────────────┼──────────────┬─────────────┬─────────────┐
+    │              │              │             │             │
+    EDL Models     Captions       Smart Crop    Metadata      New Modules
     (edl.py)    (captions.py)  (smart_crop.py) (metadata_gen.py)
-                     │
-              Caption Rendering
-           (caption_render.py)
+                     │                                        │
+              Caption Rendering                    ┌──────────┼──────────┐
+           (caption_render.py)                     │          │          │
+                                              auto_trim  motion   overlays
+                                              measure_layout  subject_extraction
 ```
 
 ---
@@ -59,7 +63,7 @@ The editing engine uses a declarative Edit Decision List (EDL) model to specify 
 - `edit_id`, `project_id`, `name`, `created_at`, `status`
 - `source_sha256` -- verified against project source to prevent stale edits
 - `target_platform`, `target_profile`
-- `segments: list[SegmentSpec]` -- ordered source segments
+- `segments: list[SegmentSpec]` -- ordered source segments (each can have per-segment canvas override and zoom)
 - `captions: CaptionSpec` -- caption configuration and chunks
 - `crop: CropSpec` -- cropping/layout configuration
 - `canvas: CanvasSpec` -- free-form compositing (advanced)
@@ -71,6 +75,7 @@ The editing engine uses a declarative Edit Decision List (EDL) model to specify 
 - `segment_id`, `source_start_ms`, `source_end_ms`, `output_start_ms`
 - `speed` (0.25-4.0, default 1.0)
 - `transition_in`, `transition_out` (optional `TransitionSpec`)
+- `canvas` -- optional per-segment canvas override with regions and zoom
 - Properties: `source_duration_ms`, `output_duration_ms`
 
 **`CropSpec`** -- cropping and layout mode:
@@ -80,6 +85,25 @@ The editing engine uses a declarative Edit Decision List (EDL) model to specify 
 - `layout`: crop (default), split_screen, pip
 - `split_screen: SplitScreenSpec` -- speaker/screen split configuration
 - `pip: PipSpec` -- picture-in-picture configuration
+
+**`CanvasSpec`** -- free-form compositing:
+- `enabled`, `canvas_width`, `canvas_height`, `background_color`
+- `regions: list[CanvasRegion]` -- each with source crop, output placement, z_index, fit_mode, opacity, border
+
+**`MotionSpec`** -- motion effects:
+- `effect`: zoom_in, zoom_out, pan_left, pan_right, pan_up, pan_down, ken_burns
+- `start_scale`, `end_scale`: zoom range (0.5-3.0)
+- `easing`: linear, ease_in, ease_out, ease_in_out
+
+**`OverlaySpec`** -- visual overlays:
+- `overlay_type`: lower_third, title_card, logo, watermark, cta
+- `text`, `subtitle`, `position`, `start_ms`, `end_ms`
+- `opacity`, `font_size`, `text_color`, `bg_color`, `bg_opacity`
+- `animation`, `animation_duration_ms`
+
+**`ColorSpec`** -- color grading:
+- `brightness` (-1 to 1), `contrast` (0-3), `saturation` (0-3)
+- `gamma` (0.1-10), `hue_shift` (-180 to 180)
 
 **`AudioSpec`** -- audio mixing parameters:
 - `source_audio`, `source_volume_db`
@@ -176,6 +200,13 @@ The editing engine uses a declarative Edit Decision List (EDL) model to specify 
 - Enforces 85% safe area (face kept within 85% of crop bounds)
 - Clamps crop to source dimensions
 
+### Fit Mode Scaling
+
+The smart crop module supports `fit_mode` options for canvas compositing regions:
+- `cover`: fill the output region, cropping excess (default)
+- `contain`: fit entirely within the output region, letterboxing if needed
+- `stretch`: stretch to fill without maintaining aspect ratio
+
 ### Scene-Aware Cropping
 
 `get_crop_for_scene(scene_data, source_w, source_h, target_aspect)`:
@@ -231,3 +262,111 @@ The editing engine uses a declarative Edit Decision List (EDL) model to specify 
 5. Generates multi-paragraph description (opening, summary, context, CTA)
 6. Builds hashtag list from keywords (respecting platform limits)
 7. Selects thumbnail timestamp at midpoint of highest-scoring highlight
+
+---
+
+## 6. Auto Trim
+
+**Source:** `src/clipcannon/editing/auto_trim.py`
+
+Analyzes transcript to automatically remove filler words and long pauses, producing clean segments ready for `clipcannon_create_edit`.
+
+### Filler Word Detection
+
+Detects and removes: um, uh, like, basically, literally, you know, I mean, sort of, kind of, right, okay, and similar filler patterns.
+
+### Pause Detection
+
+Identifies silence gaps exceeding a configurable threshold (default 800ms) and generates segment boundaries that skip them.
+
+### Segment Optimization
+
+- Merges segments separated by less than `merge_gap_ms` (default 200ms)
+- Drops segments shorter than `min_segment_ms` (default 500ms)
+- Returns segments array compatible with `create_edit`
+
+---
+
+## 7. Motion Effects
+
+**Source:** `src/clipcannon/editing/motion.py`
+
+Applies motion effects to edit segments by storing `MotionSpec` in the EDL.
+
+### Supported Effects
+
+| Effect | Description |
+|--------|-------------|
+| `zoom_in` | Gradually zoom into the frame |
+| `zoom_out` | Gradually zoom out from the frame |
+| `pan_left` | Horizontal pan left across the frame |
+| `pan_right` | Horizontal pan right across the frame |
+| `pan_up` | Vertical pan upward |
+| `pan_down` | Vertical pan downward |
+| `ken_burns` | Combined zoom with diagonal pan for cinematic movement |
+
+### Parameters
+
+- `start_scale` / `end_scale`: zoom range (0.5-3.0)
+- `easing`: linear, ease_in, ease_out, ease_in_out
+
+---
+
+## 8. Visual Overlays
+
+**Source:** `src/clipcannon/editing/overlays.py`
+
+Adds visual overlays to edits by storing `OverlaySpec` in the EDL.
+
+### Overlay Types
+
+| Type | Description |
+|------|-------------|
+| `lower_third` | Speaker name and title bar at bottom |
+| `title_card` | Full-screen text overlay |
+| `logo` | Logo image overlay |
+| `watermark` | Semi-transparent watermark |
+| `cta` | Call-to-action button/text |
+
+### Animation Options
+
+fade_in, fade_out, slide_up, slide_down, none
+
+---
+
+## 9. Subject Extraction
+
+**Source:** `src/clipcannon/editing/subject_extraction.py`
+
+AI-powered background removal using rembg.
+
+### Models
+
+| Model | Best For |
+|-------|----------|
+| `u2net` | General subjects |
+| `u2net_human_seg` | Human subjects (default) |
+| `isnet-general-use` | General subjects v2 |
+
+### Output
+
+Generates alpha mask frames in `{project_dir}/masks/` for use with background replacement.
+
+---
+
+## 10. Layout Measurement
+
+**Source:** `src/clipcannon/editing/measure_layout.py`
+
+Computes mathematically precise canvas regions by running face detection on a frame and calculating source crop + output placement coordinates for 4 layout types on a 1080x1920 canvas.
+
+### Layout Types
+
+| Layout | Description | Speaker Height | Screen Height |
+|--------|-------------|---------------|--------------|
+| A | 30/70 split | 576px | 1344px |
+| B | 40/60 split | 768px | 1152px |
+| C | PIP | 240px circle | Full screen |
+| D | Full-screen face | Full screen | N/A |
+
+Returns ready-to-use `canvas.regions[]` for `clipcannon_create_edit`.

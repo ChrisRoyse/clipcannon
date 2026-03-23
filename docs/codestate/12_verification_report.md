@@ -1,6 +1,6 @@
 # ClipCannon Verification Report
 
-Full State Verification (FSV) results for the Phase 1 codebase, plus Phase 2 pytest coverage as of 2026-03-21.
+Full State Verification (FSV) results and pytest coverage.
 
 ## FSV Methodology
 
@@ -27,7 +27,7 @@ FSV scripts run as standalone Python programs (`python tests/fsv_*.py`), not thr
 |--------|--------|-------------------|
 | Exceptions | 11 | All 7 exception classes exist and subclass `ClipCannonError` |
 | Database Connection | 12 | WAL mode, pragmas, dict_rows, auto-created parent dirs |
-| Database Schema | 26 | 23 core tables (Phase 1), schema_version=1, 9 indexes, idempotent creation |
+| Database Schema | 26 | Core tables, schema_version, indexes, idempotent creation |
 | Query Helpers | 20 | table_exists, batch_insert, fetch_all, fetch_one, count_rows, transactions |
 | Configuration | 18 | Dot-notation get, Pydantic validation, set/save/reload |
 | GPU Manager | 15 | Device detection, memory reporting |
@@ -42,7 +42,7 @@ FSV scripts run as standalone Python programs (`python tests/fsv_*.py`), not thr
 
 **Script**: `tests/fsv_pipeline_tools.py`
 
-*(Unchanged from Phase 1 -- DAG resolution, stage registration, graceful degradation, 15 MCP tools, edge cases, DB cross-verification)*
+DAG resolution, stage registration, graceful degradation, MCP tools, edge cases, DB cross-verification.
 
 **Result**: 189/189 passed
 
@@ -50,7 +50,7 @@ FSV scripts run as standalone Python programs (`python tests/fsv_*.py`), not thr
 
 **Script**: `tests/fsv_billing_dashboard.py`
 
-*(Unchanged from Phase 1 -- HMAC integrity, credit system, license server, billing MCP tools, dashboard, D1 sync, Stripe webhooks)*
+HMAC integrity, credit system, license server, billing MCP tools, dashboard, D1 sync, Stripe webhooks.
 
 **Result**: 84/84 passed
 
@@ -58,25 +58,45 @@ FSV scripts run as standalone Python programs (`python tests/fsv_*.py`), not thr
 
 **Script**: `tests/fsv_server_integration.py`
 
-*(Phase 1 FSV verified 27 tools. Note: FSV scripts have not been updated for Phase 2's 37-tool count yet.)*
+Server integration, tool dispatch, all tool modules.
 
-**Result**: 323/323 passed (Phase 1 scope)
+**Result**: 323/323 passed
+
+### Domain 5: Full System Verification
+
+**Script**: `tests/manual_fsv_full.py` (1180 lines)
+
+Comprehensive system-wide verification covering all modules end-to-end.
+
+### Domain 6: Phase 2+ Features
+
+**Script**: `tests/manual_fsv_phase3.py` (787 lines)
+
+Verification of Phase 2 features: editing engine (EDL, captions, smart crop), rendering engine (profiles, FFmpeg, canvas compositing), audio engine (music, MIDI, SFX, cleanup), new MCP tools (auto_trim, color_adjust, motion, overlays, subject extraction, preview, inspect, measure_layout, storyboard, scene_map).
 
 ---
 
-## Phase 2 Pytest Coverage
+## Pytest Coverage
 
-Phase 2 adds 7 new test files with 102 test functions covering the editing, rendering, and audio subsystems:
+278 tests across 17 files:
 
 | Test File | Tests | Coverage Domain |
 |-----------|-------|-----------------|
-| `test_edl.py` | 26 | EDL models, validation, platform constraints |
-| `test_captions.py` | 15 | Caption chunking, ASS generation, timestamp remapping |
-| `test_smart_crop.py` | 16 | Crop regions, face tracking, split-screen, aspect ratios |
-| `test_editing_tools.py` | 11 | Create/modify/list edits, metadata generation |
-| `test_rendering.py` | 19 | Encoding profiles, codec fallback, platform specs |
+| `test_pipeline_stages.py` | 12 | Probe, audio, frame, DAG, orchestrator |
+| `test_billing.py` | 40 | HMAC, credits, license server, webhooks |
+| `test_understanding_tools.py` | 20 | VUD, analytics, transcript, search |
+| `test_provenance_integration.py` | 19 | Hash chain, tamper detection |
+| `test_visual_pipeline.py` | 34 | Storyboard, quality, visual, OCR, shot type |
+| `test_derived_stages.py` | 14 | Profanity, chronemic, highlights, finalize |
+| `test_edl.py` | 19 | EDL models, validation, platform constraints |
+| `test_captions.py` | 14 | Caption chunking, ASS generation |
+| `test_smart_crop.py` | 15 | Crop regions, face tracking, aspect ratios |
+| `test_editing_tools.py` | 10 | Create/modify/list edits, metadata |
+| `test_rendering.py` | 14 | Encoding profiles, codec fallback |
 | `test_audio_generation.py` | 15 | 9 SFX types, 6 MIDI presets |
-| `test_dashboard_phase2.py` | 12 | Timeline, editing, review API endpoints |
+| `test_dashboard.py` | 18 | Phase 1 dashboard endpoints |
+| `test_dashboard_phase2.py` | 12 | Timeline, editing, review endpoints |
+| `test_full_pipeline.py` | 22 | Full pipeline integration |
 
 ---
 
@@ -88,11 +108,10 @@ Phase 2 adds 7 new test files with 102 test functions covering the editing, rend
 | Pipeline + Tools | `fsv_pipeline_tools.py` | 189 | 189/189 passed |
 | Billing + Dashboard | `fsv_billing_dashboard.py` | 84 | 84/84 passed |
 | Server + Integration | `fsv_server_integration.py` | 323 | 323/323 passed |
-| **FSV Total** | **4 scripts** | **750** | **750/750 passed** |
-| Phase 1 Pytest | 8 files | 181 | All passing |
-| Phase 2 Pytest | 7 files | 102 | All passing |
-| Integration Fixtures | 2 conftest files | -- | Setup only |
-| **Pytest Total** | **17 files** | **296** | **All passing** |
+| Full System | `manual_fsv_full.py` | ~1180 lines | Extended verification |
+| Phase 2+ Features | `manual_fsv_phase3.py` | ~787 lines | Feature verification |
+| **FSV Total** | **6 scripts** | **750+** | **All passing** |
+| **Pytest Total** | **17 files** | **278** | **All passing** |
 
 ---
 
@@ -109,17 +128,12 @@ Linter: `ruff` (configured in `pyproject.toml`)
 
 ---
 
-## Codebase Metrics at Verification Time
+## Codebase Metrics
 
 - **Source files**: `src/clipcannon/` and `src/license_server/`
-- **Approximate source lines**: ~20,000 (Phase 1: ~12,000 + Phase 2: ~8,000)
-- **Test files**: 17 pytest files + 4 FSV scripts
-- **Pipeline stages**: 20
-- **MCP tools**: 37 (Phase 1: 27 + Phase 2: 10)
-- **Database tables**: 26 core + 4 vector
+- **Test files**: 17 pytest files + 6 FSV scripts
+- **Pipeline stages**: 21
+- **MCP tools**: 51
+- **Database tables**: 27 core + 4 vector
 - **Encoding profiles**: 7
 - **Target platforms**: 7
-
-## Verification Date
-
-2026-03-21

@@ -80,6 +80,7 @@ EXPECTED_TOOLS = [
     "clipcannon_preview_layout",
     "clipcannon_measure_layout",
     "clipcannon_get_storyboard",
+    "clipcannon_get_scene_map",
     # Audio tools (4)
     "clipcannon_generate_music",
     "clipcannon_compose_midi",
@@ -166,7 +167,7 @@ def test_tool_registry() -> None:
         from clipcannon.tools import ALL_TOOL_DEFINITIONS
 
         actual_count = len(ALL_TOOL_DEFINITIONS)
-        expected_count = 50
+        expected_count = 51
 
         record(
             f"ALL_TOOL_DEFINITIONS count = {expected_count}",
@@ -314,7 +315,7 @@ def test_unknown_tool() -> None:
             )
             record(
                 "Error details include available_tools list",
-                len(error_result["error"]["details"]["available_tools"]) == 50,
+                len(error_result["error"]["details"]["available_tools"]) == 51,
                 f"count={len(error_result['error']['details']['available_tools'])}",
             )
 

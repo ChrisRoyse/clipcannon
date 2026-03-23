@@ -1,10 +1,10 @@
 # 14 - Rendering Engine
 
-> Current-state documentation of the Phase 2 rendering subsystem as implemented in `src/clipcannon/rendering/`.
+> Current-state documentation of the rendering subsystem as implemented in `src/clipcannon/rendering/`.
 
 ## Architecture Overview
 
-The rendering engine converts Edit Decision Lists (EDLs) into platform-ready video files through an async FFmpeg-based pipeline. The process involves: source validation (SHA-256 verification), caption rendering (ASS format), smart crop computation, FFmpeg filter graph construction, concurrent execution, thumbnail generation, and provenance recording.
+The rendering engine converts Edit Decision Lists (EDLs) into platform-ready video files through an async FFmpeg-based pipeline. The process involves: source validation (SHA-256 verification), caption rendering (ASS format), smart crop computation, FFmpeg filter graph construction with per-segment canvas compositing and animated zoom, concurrent execution, thumbnail generation, and provenance recording.
 
 ```
 EDL Input
@@ -12,7 +12,7 @@ EDL Input
     ├── Source validation (SHA-256 check, generation loss prevention)
     ├── Profile resolution (7 platform profiles)
     ├── Caption write (ASS subtitle file)
-    ├── Crop computation (face tracking, split-screen, PIP)
+    ├── Crop computation (face tracking, split-screen, PIP, canvas)
     │
     ▼
 FFmpeg Execution (async subprocess)
@@ -20,7 +20,11 @@ FFmpeg Execution (async subprocess)
     ├── Segment trimming + concatenation
     ├── Transition effects (xfade)
     ├── Speed adjustment
+    ├── Per-segment canvas compositing (regions, z-index, fit_mode)
+    ├── Animated zoom (start_scale -> end_scale with easing)
     ├── Caption burn-in (ASS subtitles)
+    ├── Color grading (brightness, contrast, saturation, gamma, hue)
+    ├── Blur background / region removal (delogo)
     ├── Crop/scale to target resolution
     ├── Platform-specific encoding (NVENC or software fallback)
     │
@@ -83,6 +87,23 @@ Output
 | 3 | PIP (picture-in-picture) | `_build_pip_cmd` |
 | 4 | Standard (single source, crop) | `_build_single_segment_cmd` or `_build_multi_segment_cmd` |
 
+### Per-Segment Canvas Compositing
+
+Each segment in the EDL can have its own `canvas` override with independent regions, enabling different layouts for different scenes. The canvas builder processes each segment's regions with:
+- Independent source crop per region
+- Output placement with z-index ordering
+- `fit_mode` scaling (cover, contain, stretch)
+- Opacity and border options
+- Animated zoom (interpolates between `start_scale` and `end_scale` using the specified easing function)
+
+### Blur Background
+
+When `crop.background_type == "blur"`, the renderer applies gaussian blur to the background and composites the cropped subject on top, filling the full canvas without black bars.
+
+### Region Removal
+
+When `remove_regions` are specified in the EDL, FFmpeg `delogo` filters are applied before crop/scale to interpolate over the specified rectangular areas (used for removing browser chrome, taskbars, watermarks).
+
 ### Single Segment
 
 `_build_single_segment_cmd`: Trim, crop, scale, speed adjust, subtitles, encoding for a single contiguous source segment.
@@ -114,7 +135,7 @@ Output
 
 ### Canvas Compositing
 
-`_build_canvas_cmd`: Free-form compositing with arbitrary z-indexed regions, each with independent source crop, output position, opacity, and border. Used when `canvas.enabled == True`.
+`_build_canvas_cmd`: Free-form compositing with arbitrary z-indexed regions, each with independent source crop, output position, opacity, fit_mode, and border. Used when `canvas.enabled == True`.
 
 ### Encoding Arguments
 
@@ -128,26 +149,6 @@ Output
 ## 3. Encoding Profiles
 
 **Source:** `src/clipcannon/rendering/profiles.py`
-
-### EncodingProfile Dataclass
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | `str` | Profile identifier |
-| `width` | `int` | Output width in pixels |
-| `height` | `int` | Output height in pixels |
-| `aspect_ratio` | `str` | Target aspect ratio |
-| `fps` | `int` | Output frame rate |
-| `video_codec` | `str` | Video codec (e.g., `h264_nvenc`) |
-| `video_bitrate` | `str` | Bitrate (e.g., `"8M"`) |
-| `max_bitrate` | `str` | Max bitrate for VBR |
-| `bufsize` | `str` | Rate control buffer size |
-| `audio_codec` | `str` | Audio codec |
-| `audio_bitrate` | `str` | Audio bitrate |
-| `audio_sample_rate` | `int` | Audio sample rate |
-| `max_duration_ms` | `int` | Maximum allowed duration |
-| `min_duration_ms` | `int` | Minimum allowed duration |
-| `movflags` | `str` | Container flags |
 
 ### Predefined Profiles
 
@@ -167,8 +168,6 @@ Output
 - `h264_nvenc` -> `libx264`
 - `hevc_nvenc` -> `libx265`
 
-Used when NVENC is unavailable or fails.
-
 ---
 
 ## 4. Batch Rendering
@@ -180,7 +179,6 @@ Used when NVENC is unavailable or fails.
 - Uses `asyncio.Semaphore(max_concurrent)` to cap concurrent FFmpeg processes (default 3).
 - Returns results in same order as input EDL list.
 - Individual failures do not stop the batch; all edits are attempted.
-- Logs aggregate success/failure counts.
 
 ---
 
@@ -193,11 +191,37 @@ Used when NVENC is unavailable or fails.
 - Extracts single JPEG frame at specified timestamp via FFmpeg.
 - Optional crop filter applied before scaling.
 - Quality: `-q:v 2` (~95% JPEG quality).
-- Returns path to generated thumbnail file.
 
 ---
 
-## 6. Credit Charging
+## 6. Render Inspection
+
+**Source:** `src/clipcannon/rendering/inspector.py`
+
+Inspects rendered video output by:
+1. Extracting frames at 5 key timestamps (start, 25%, 50%, 75%, end)
+2. Probing output metadata via ffprobe (resolution, duration, codec, bitrate)
+3. Comparing output metadata against the encoding profile spec
+4. Running quality checks (resolution match, duration match, codec match)
+5. Returning inline base64 frame images plus pass/fail results
+
+---
+
+## 7. Preview Generation
+
+**Source:** `src/clipcannon/rendering/preview.py`
+
+Two preview modes:
+
+### Preview Clip
+Renders a short (2-5 second) 540p preview at fast encoding settings. No credits charged. Used for quick validation before committing to a full render.
+
+### Preview Layout
+Generates a single JPEG frame showing a canvas layout at a specific timestamp. Composites all regions onto a 1080x1920 canvas using Pillow. Returns in ~300ms. Used to validate region coordinates before rendering.
+
+---
+
+## 8. Credit Charging
 
 All render operations charge 2 credits via the `LicenseClient`:
 
@@ -208,6 +232,6 @@ On render failure, credits are refunded. The render tool handles the charge/refu
 
 ---
 
-## 7. Generation Loss Prevention
+## 9. Generation Loss Prevention
 
 The renderer rejects source files located in `/renders/` directories. This prevents re-rendering from already-rendered output, which would cause cascading quality degradation. The check is performed in `_resolve_source()` before any FFmpeg execution.

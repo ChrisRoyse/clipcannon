@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
@@ -25,8 +26,6 @@ from clipcannon.provenance import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
@@ -177,9 +176,29 @@ def _run_ocr_on_frames(
             logger.warning("Failed to open frame %s: %s", fp, exc)
             continue
 
+        # Downsample large frames for OCR performance
+        # OCR quality is the same at 1280px width as at 4K
+        max_ocr_width = 1280
+        ocr_path = str(fp)
+        if img_width > max_ocr_width:
+            scale = max_ocr_width / img_width
+            new_w = max_ocr_width
+            new_h = int(img_height * scale)
+            resized = img.resize((new_w, new_h), Image.LANCZOS)
+            import tempfile
+            with tempfile.NamedTemporaryFile(
+                suffix=".jpg", delete=False,
+            ) as tmp:
+                resized.save(tmp.name, "JPEG", quality=85)
+                ocr_path = tmp.name
+
         # EasyOCR returns list of (bbox, text, confidence)
         # bbox is [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
-        result = reader.readtext(str(fp))
+        result = reader.readtext(ocr_path)
+
+        # Clean up temp file
+        if ocr_path != str(fp):
+            Path(ocr_path).unlink(missing_ok=True)
 
         curr_texts: list[str] = []
         frame_text_entries: list[dict[str, str]] = []

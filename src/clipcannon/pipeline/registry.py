@@ -117,7 +117,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "name": "transcribe",
         "operation": "transcription",
         "required": True,
-        "depends_on": ["source_separation"],
+        "depends_on": ["audio_extract"],
         "run": run_transcribe,
     },
     {
@@ -145,21 +145,21 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "name": "speaker_embed",
         "operation": "speaker_diarization",
         "required": False,
-        "depends_on": ["source_separation", "transcribe"],
+        "depends_on": ["audio_extract", "transcribe"],
         "run": run_speaker_embed,
     },
     {
         "name": "emotion_embed",
         "operation": "emotion_analysis",
         "required": False,
-        "depends_on": ["source_separation"],
+        "depends_on": ["audio_extract"],
         "run": run_emotion_embed,
     },
     {
         "name": "reactions",
         "operation": "reaction_detection",
         "required": False,
-        "depends_on": ["source_separation"],
+        "depends_on": ["audio_extract"],
         "run": run_reactions,
     },
     {

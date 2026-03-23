@@ -369,10 +369,10 @@ On first startup, if no balance row exists, the server seeds the database with:
 
 | Operation | Credits | Status |
 |-----------|---------|--------|
-| `analyze` | 10 | Active (Phase 1) |
-| `render` | 2 | Defined, not yet active |
-| `metadata` | 1 | Defined, not yet active |
-| `publish` | 1 | Defined, not yet active |
+| `analyze` | 10 | Active |
+| `render` | 2 | Active |
+| `metadata` | 1 | Defined |
+| `publish` | 1 | Defined |
 
 ---
 
@@ -443,7 +443,7 @@ An async HTTP client that wraps all license server API calls. Used by both MCP b
 
 Phase 1 operates in **local-only mode**. No D1 connection is made. The module provides three stub functions:
 
-| Function | Behavior in Phase 1 |
+| Function | Current Behavior |
 |----------|---------------------|
 | `sync_push()` | Logs "D1 sync skipped (local-only mode)" and returns. |
 | `sync_pull()` | Logs "D1 sync skipped (local-only mode)" and returns. |

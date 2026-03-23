@@ -1,6 +1,6 @@
 # ClipCannon Test Suite
 
-Current state of the testing infrastructure as of 2026-03-21.
+Current state of the testing infrastructure.
 
 ## Pytest Configuration
 
@@ -23,7 +23,7 @@ Dev dependencies (`[project.optional-dependencies] dev`):
 
 ### Shared Fixtures
 
-#### `tests/conftest.py` -- Session-scoped fixtures (Phase 2)
+#### `tests/conftest.py` -- Session-scoped fixtures
 
 Session-scoped fixtures that run expensive FFmpeg operations once and share results across all test modules.
 
@@ -37,7 +37,7 @@ Session-scoped fixtures that run expensive FFmpeg operations once and share resu
 
 Test video: `testdata/2026-03-20 14-43-20.mp4` (209.9s, 2560x1440, 60fps h264).
 
-#### `tests/integration/conftest.py` -- Module-scoped integration fixtures (Phase 2)
+#### `tests/integration/conftest.py` -- Module-scoped integration fixtures
 
 | Fixture | Scope | Description |
 |---------|-------|-------------|
@@ -49,132 +49,69 @@ Test video: `testdata/2026-03-20 14-43-20.mp4` (209.9s, 2560x1440, 60fps h264).
 
 ### Phase 1 Unit Tests
 
-#### `tests/test_pipeline_stages.py` -- 16 tests
+#### `tests/test_pipeline_stages.py` -- 12 tests
 
 Tests probe, audio extraction, frame extraction, DAG resolution, and orchestrator registration.
 
-| Class | Tests | Scenarios |
-|-------|-------|-----------|
-| `TestProbeStage` | 2 | Metadata extraction; provenance record written |
-| `TestAudioExtractStage` | 2 | Produces WAV files; provenance record written |
-| `TestFrameExtractStage` | 2 | Produces ~420 JPEG frames; provenance count matches |
-| `TestSourceResolution` | 1 | Resolves to original file path |
-| `TestTopologicalSort` | 3 | Linear chain; parallel stages; diamond DAG |
-| `TestOrchestratorRegistration` | 2 | Register/list stages; duplicate raises `PipelineError` |
-| Additional tests | 4 | Config fixture, session fixture integration |
-
 #### `tests/test_billing.py` -- 40 tests
 
-*(Unchanged from Phase 1 -- HMAC integrity, credit rates, spending limits, license server API, D1 sync, Stripe webhooks)*
+HMAC integrity, credit rates, spending limits, license server API, D1 sync, Stripe webhooks.
 
-#### `tests/test_understanding_tools.py` -- 22 tests
+#### `tests/test_understanding_tools.py` -- 20 tests
 
-*(Unchanged from Phase 1 -- VUD summary, analytics, transcript, segment detail, storyboard, search, error handling)*
+VUD summary, analytics, transcript, segment detail, search, error handling.
 
 #### `tests/test_provenance_integration.py` -- 19 tests
 
-*(Unchanged from Phase 1 -- hash computation, chain integrity, tamper detection, record retrieval)*
+Hash computation, chain integrity, tamper detection, record retrieval.
 
 #### `tests/test_visual_pipeline.py` -- 34 tests
 
-*(Unchanged from Phase 1 -- storyboard generation, quality assessment, visual embedding, OCR, shot type)*
+Storyboard generation, quality assessment, visual embedding, OCR, shot type.
 
 #### `tests/test_derived_stages.py` -- 14 tests
 
-*(Unchanged from Phase 1 -- profanity detection, chronemic analysis, highlight scoring, finalize stage)*
+Profanity detection, chronemic analysis, highlight scoring, finalize stage.
 
 ### Phase 2 Unit Tests
 
-#### `tests/test_edl.py` -- 26 tests
+#### `tests/test_edl.py` -- 19 tests
 
-Tests EDL model creation, duration computation, platform constraints, transitions, and sub-models.
+EDL model creation, duration computation, platform constraints, transitions, and sub-models.
 
-| Class | Tests | Scenarios |
-|-------|-------|-----------|
-| `TestEDLCreation` | 4 | Basic EDL instantiation, segment validation |
-| `TestDurationComputation` | 4 | Total duration calculation, speed effects, transition overlap deduction |
-| `TestPlatformDurationLimits` | 7 | Platform-specific limits for all 7 targets (tiktok 5-180s, instagram_reels 5-90s, etc.) |
-| `TestTransitionTypes` | 5 | Transition model validation (fade, crossfade, wipe, slide) |
-| `TestSubModels` | 6 | CropSpec, CaptionSpec, AudioSpec, SplitScreenSpec, PipSpec validation |
+#### `tests/test_captions.py` -- 14 tests
 
-#### `tests/test_captions.py` -- 15 tests
+Caption chunking, timestamp remapping, ASS generation, and drawtext filters.
 
-Tests caption chunking, timestamp remapping, ASS generation, and drawtext filters.
+#### `tests/test_smart_crop.py` -- 15 tests
 
-| Class | Tests | Scenarios |
-|-------|-------|-----------|
-| `TestChunkTranscriptWords` | 4 | Word chunking with max_words, punctuation breaks, min/max display duration (500-3000ms) |
-| `TestRemapTimestamps` | 3 | Speed-based timestamp adjustment (0.5x-2.0x) |
-| `TestASSGeneration` | 3 | ASS subtitle format with bold_centered, subtitle_bar, karaoke styles |
-| `TestDrawtextFilters` | 2 | FFmpeg drawtext filter creation |
-| `TestFetchWordsFromDB` | 3 | DB word retrieval and timing validation |
+Crop region computation, scene-based strategies, position smoothing, and aspect ratio parsing.
 
-#### `tests/test_smart_crop.py` -- 16 tests
+#### `tests/test_editing_tools.py` -- 10 tests (async)
 
-Tests crop region computation, scene-based strategies, position smoothing, and aspect ratio parsing.
+Create/modify/list edits, metadata generation with a complete Phase 2 database.
 
-| Class | Tests | Scenarios |
-|-------|-------|-----------|
-| `TestComputeCropRegion` | 5 | Aspect ratio conversions (16:9->9:16, 16:9->1:1), face position clamping, safe area |
-| `TestGetCropForScene` | 4 | Scene shot type strategies (extreme_closeup, medium, wide) |
-| `TestSmoothCropPositions` | 3 | EMA smoothing of crop positions |
-| `TestParseAspectRatio` | 4 | Aspect ratio parsing for all 7 platforms |
+#### `tests/test_rendering.py` -- 14 tests
 
-#### `tests/test_editing_tools.py` -- 11 tests (async)
-
-Tests editing MCP tool functions with a complete Phase 2 database.
-
-| Class | Tests | Scenarios |
-|-------|-------|-----------|
-| `TestCreateEdit` | 3 | Valid creation, segment DB persistence, auto caption chunking |
-| `TestListEdits` | 2 | Listing edits, status filtering |
-| `TestModifyEdit` | 3 | Draft modification, non-draft rejection |
-| `TestGenerateMetadata` | 3 | Title/description/hashtags from VUD data |
-
-#### `tests/test_rendering.py` -- 19 tests
-
-Tests encoding profiles, software fallback, platform dimensions, and generation loss prevention.
-
-| Class | Tests | Scenarios |
-|-------|-------|-----------|
-| `TestGetProfile` | 2 | Profile lookup by name |
-| `TestListProfiles` | 2 | All 7 platform profiles enumeration |
-| `TestSoftwareFallback` | 3 | Codec fallback (h264_nvenc->libx264, hevc_nvenc->libx265) |
-| `TestEncodingProfileFields` | 3 | Profile field validation |
-| `TestPlatformProfiles` | 7 | Resolution, fps, duration limits per platform |
-| `TestGenerationLossPrevention` | 2 | Rejects renders from /renders/ paths |
+Encoding profiles, software fallback, platform dimensions, and generation loss prevention.
 
 #### `tests/test_audio_generation.py` -- 15 tests
 
-Tests SFX generation and MIDI composition.
+All 9 SFX types (whoosh, riser, downer, impact, chime, tick, bass_drop, shimmer, stinger), all 6 MIDI presets.
 
-| Class | Tests | Scenarios |
-|-------|-------|-----------|
-| `TestGenerateSfx` | 9 | All 9 SFX types (whoosh, riser, downer, impact, chime, tick, bass_drop, shimmer, stinger), WAV format, duration |
-| `TestComposeMidi` | 6 | All 6 presets, tempo override, key override |
-
-### Phase 2 Dashboard Tests
-
-#### `tests/test_dashboard_phase2.py` -- 12 tests
-
-Tests Phase 2 dashboard endpoints.
-
-| Class | Tests | Scenarios |
-|-------|-------|-----------|
-| `TestTimelineEndpoints` | 3 | Timeline API, transcript search, enhanced view |
-| `TestEditEndpoints` | 3 | Edit CRUD, listing, detail |
-| `TestReviewEndpoints` | 3 | Review queue, batch operations, stats |
-| `TestErrorHandling` | 3 | Missing project/edit errors, validation |
-
-### Phase 1 Dashboard Tests
+### Dashboard Tests
 
 #### `tests/dashboard/test_dashboard.py` -- 18 tests
 
-*(Unchanged from Phase 1)*
+Phase 1 dashboard endpoints.
+
+#### `tests/test_dashboard_phase2.py` -- 12 tests
+
+Timeline, editing, review API endpoints.
 
 ### Integration Tests
 
-#### `tests/integration/test_full_pipeline.py` -- 19 tests
+#### `tests/integration/test_full_pipeline.py` -- 22 tests
 
 Full pipeline integration with real test video.
 
@@ -182,15 +119,29 @@ Full pipeline integration with real test video.
 |-------|-------|-----------|
 | `TestProbe` | 2 | Metadata extraction, value validation |
 | `TestAudioExtract` | 2 | WAV file generation, size validation |
-| `TestFrameExtract` | 2 | Frame count (400-440 expected) |
-| `TestFullPipeline` | 10 | All stages succeed, DB contents, provenance chain |
-| `TestEdgeCases` | 3 | Nonexistent video, fresh project, tamper detection |
+| `TestFrameExtract` | 2 | Frame count validation |
+| `TestFullPipeline` | 10+ | All stages succeed, DB contents, provenance chain |
+| `TestEdgeCases` | 3+ | Nonexistent video, fresh project, tamper detection |
 
 ---
 
 ## FSV (Full State Verification) Tests
 
-*(Unchanged from Phase 1 -- 4 FSV scripts with ~750 checks total)*
+### Phase 1 FSV Scripts (4 scripts)
+
+| Script | Checks | Domain |
+|--------|--------|--------|
+| `tests/fsv_core_infrastructure.py` | ~154 | Exceptions, DB, schema, config, GPU, provenance |
+| `tests/fsv_pipeline_tools.py` | ~189 | DAG resolution, stage registration, MCP tools |
+| `tests/fsv_billing_dashboard.py` | ~84 | HMAC, credits, license server, dashboard |
+| `tests/fsv_server_integration.py` | ~323 | Server integration, tool dispatch |
+
+### Extended FSV Scripts (2 scripts)
+
+| Script | Lines | Domain |
+|--------|-------|--------|
+| `tests/manual_fsv_full.py` | 1180 | Comprehensive full-system verification |
+| `tests/manual_fsv_phase3.py` | 787 | Phase 2+ feature verification: editing, rendering, audio, new tools |
 
 ---
 
@@ -198,18 +149,20 @@ Full pipeline integration with real test video.
 
 | Category | File Count | Test Count |
 |----------|-----------|------------|
-| Phase 1 unit tests | 6 | 145 |
-| Phase 2 unit tests | 6 | 102 |
+| Phase 1 unit tests | 6 | 139 |
+| Phase 2 unit tests | 6 | 87 |
 | Phase 1 dashboard tests | 1 | 18 |
 | Phase 2 dashboard tests | 1 | 12 |
-| Integration tests | 1 | 19 |
+| Integration tests | 1 | 22 |
 | Shared fixtures | 2 | -- |
-| **Pytest total** | **17** | **296** |
+| **Pytest total** | **17** | **278** |
 | FSV: Core Infrastructure | 1 | ~154 checks |
 | FSV: Pipeline + Tools | 1 | ~189 checks |
 | FSV: Billing + Dashboard | 1 | ~84 checks |
 | FSV: Server Integration | 1 | ~323 checks |
-| **FSV total** | **4** | **~750 checks** |
+| FSV: Full System | 1 | ~1180 lines |
+| FSV: Phase 3 Features | 1 | ~787 lines |
+| **FSV total** | **6** | **~750+ checks** |
 
 ---
 
@@ -241,6 +194,8 @@ python tests/fsv_core_infrastructure.py
 python tests/fsv_pipeline_tools.py
 python tests/fsv_billing_dashboard.py
 python tests/fsv_server_integration.py
+python tests/manual_fsv_full.py
+python tests/manual_fsv_phase3.py
 ```
 
 ### Lint

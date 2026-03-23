@@ -14,10 +14,11 @@ The audio engine provides a three-tier audio generation system with mixing and e
 │  Tier 2 (Synth):  compose_midi() + render_midi_to_wav() │
 │  Tier 3 (DSP):    generate_sfx() [9 effect types]       │
 ├─────────────────────────────────────────────────────────┤
+│  Cleanup:         cleanup_audio() [noise/norm/trim/EQ]  │
 │  Processing:      apply_effects() [5 effects chains]    │
 │  Mixing:          mix_audio() [speech-aware ducking]     │
 ├─────────────────────────────────────────────────────────┤
-│  MCP Integration: audio.py [3 tools + database storage] │
+│  MCP Integration: audio.py [4 tools + database storage] │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -216,7 +217,41 @@ When `normalize=True` (default), the final mix is peak-normalized to -1 dBFS usi
 
 ---
 
-## 6. Database Storage
+## 6. Audio Cleanup
+
+**Source:** `src/clipcannon/audio/cleanup.py`
+
+### CleanupResult Dataclass
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file_path` | `Path` | Path to cleaned WAV file |
+| `duration_ms` | `int` | Duration in ms |
+| `sample_rate` | `int` | Sample rate |
+| `operations_applied` | `list[str]` | List of cleanup operations that were applied |
+
+### Supported Operations
+
+`SUPPORTED_CLEANUP_OPS` defines the available cleanup operations:
+
+| Operation | Description |
+|-----------|-------------|
+| `noise_reduction` | Reduces background noise using spectral gating |
+| `normalize` | Peak normalization to -1 dBFS |
+| `silence_trim` | Removes leading and trailing silence |
+| `eq_adjust` | Applies EQ adjustments (low cut, high cut) for speech clarity |
+
+### Processing
+
+`cleanup_audio(input_path, output_path, operations=None) -> CleanupResult`:
+
+- Applies specified operations in order (defaults to all operations)
+- Each operation is independently applied and can be selected individually
+- Output is WAV at the source sample rate
+
+---
+
+## 7. Database Storage
 
 All generated audio assets are stored in the `audio_assets` table with:
 - `asset_id`: unique identifier

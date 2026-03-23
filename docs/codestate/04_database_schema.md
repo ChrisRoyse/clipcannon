@@ -72,8 +72,8 @@ with `SELECT MAX(version) FROM schema_version`.
 
 ## 3. Core Tables
 
-There are 26 core tables (including `schema_version` and `provenance`),
-organized below by domain.
+There are 27 core tables (including `schema_version`, `provenance`, and
+`scene_map`), organized below by domain.
 
 ### 3.1 Project Metadata
 
@@ -218,7 +218,38 @@ organized below by domain.
 
 *(Unchanged from Phase 1)*
 
-### 3.8 Phase 2: Editing Tables
+### 3.8 Scene Analysis Table
+
+#### `scene_map`
+
+Created by the `scene_analysis` pipeline stage. Stores per-scene face positions, webcam regions, content areas, and pre-computed canvas regions.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `scene_id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Auto-incrementing ID |
+| `project_id` | TEXT | NOT NULL, FK -> project | Owning project |
+| `start_ms` | INTEGER | NOT NULL | Scene start time in ms |
+| `end_ms` | INTEGER | NOT NULL | Scene end time in ms |
+| `face_x` | INTEGER | | Face bounding box X |
+| `face_y` | INTEGER | | Face bounding box Y |
+| `face_w` | INTEGER | | Face bounding box width |
+| `face_h` | INTEGER | | Face bounding box height |
+| `face_confidence` | REAL | | Face detection confidence |
+| `webcam_x` | INTEGER | | Webcam overlay region X |
+| `webcam_y` | INTEGER | | Webcam overlay region Y |
+| `webcam_w` | INTEGER | | Webcam overlay region width |
+| `webcam_h` | INTEGER | | Webcam overlay region height |
+| `content_x` | INTEGER | | Content area X |
+| `content_y` | INTEGER | | Content area Y |
+| `content_w` | INTEGER | | Content area width |
+| `content_h` | INTEGER | | Content area height |
+| `content_type` | TEXT | DEFAULT 'unknown' | Content classification (code, slides, browser, etc.) |
+| `visible_text` | TEXT | DEFAULT '[]' | JSON array of detected text strings |
+| `layout_recommendation` | TEXT | DEFAULT 'A' | Recommended layout type (A/B/C/D) |
+| `canvas_regions_json` | TEXT | DEFAULT '{}' | JSON with pre-computed canvas regions for all layout types |
+| `transcript_text` | TEXT | DEFAULT '' | Aligned transcript text for this scene |
+
+### 3.9 Phase 2: Editing Tables
 
 #### `edits`
 
@@ -255,7 +286,7 @@ organized below by domain.
 | `transition_out_type` | TEXT | | Outgoing transition type |
 | `transition_out_duration_ms` | INTEGER | | Outgoing transition duration |
 
-### 3.9 Phase 2: Render Tables
+### 3.10 Phase 2: Render Tables
 
 #### `renders`
 
@@ -283,7 +314,7 @@ organized below by domain.
 | `completed_at` | TEXT | | Render completion timestamp |
 | `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |
 
-### 3.10 Phase 2: Audio Assets Table
+### 3.11 Phase 2: Audio Assets Table
 
 #### `audio_assets`
 
@@ -335,8 +366,9 @@ Phase 1 indexes (9) plus Phase 2 additions:
 
 ## 6. Pipeline Streams
 
-The `PIPELINE_STREAMS` constant defines the 16 stream names tracked in
-`stream_status`:
+The `PIPELINE_STREAMS` constant defines the 16 analysis stream names tracked in
+`stream_status`. The `scene_analysis` stage creates its own `scene_map` table
+and is tracked separately:
 
 ```
 source_separation, visual, ocr, quality, shot_type, transcription,
