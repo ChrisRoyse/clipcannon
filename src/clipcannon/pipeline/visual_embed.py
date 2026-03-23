@@ -166,7 +166,11 @@ def _load_and_embed_batch(
         images.append(img)
 
     inputs = processor(images=images, return_tensors="pt", padding=True)
-    inputs = {k: v.to(device) for k, v in inputs.items()}
+    # Cast float tensors to FP16 when model is in FP16 (CUDA), leave ints unchanged
+    inputs = {
+        k: v.to(device, dtype=torch.float16) if v.is_floating_point() else v.to(device)
+        for k, v in inputs.items()
+    }
 
     with torch.no_grad():
         outputs = model.get_image_features(**inputs)
@@ -203,11 +207,15 @@ def _run_embedding_pipeline(
 
     logger.info("Loading SigLIP model: %s", SIGLIP_MODEL_ID)
     processor = AutoProcessor.from_pretrained(SIGLIP_MODEL_ID)
-    model = AutoModel.from_pretrained(SIGLIP_MODEL_ID)
 
-    if device != "cpu" and torch.cuda.is_available():
+    # Use FP16 on CUDA for 2x memory savings and faster inference on RTX 5090
+    use_fp16 = device != "cpu" and torch.cuda.is_available()
+    if use_fp16:
+        model = AutoModel.from_pretrained(SIGLIP_MODEL_ID, torch_dtype=torch.float16)
         model = model.to(device)
+        logger.info("SigLIP loaded in FP16 on %s", device)
     else:
+        model = AutoModel.from_pretrained(SIGLIP_MODEL_ID)
         device = "cpu"
 
     model.eval()

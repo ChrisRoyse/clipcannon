@@ -5,11 +5,11 @@
 > Violations require explicit exception approval and documentation in the decision log.
 
 ```xml
-<constitution version="1.0">
+<constitution version="2.0">
 <metadata>
   <project_name>ClipCannon</project_name>
-  <spec_version>2.1.0</spec_version>
-  <created>2026-03-21</created>
+  <spec_version>2.2.0</spec_version>
+  <created>2026-03-23</created>
   <description>AI-native video editing MCP server — local GPU, 12-stream multimodal understanding, platform-ready output</description>
   <target_hardware>NVIDIA RTX 5090 (32GB GDDR7, CUDA 13.2) — degrades gracefully to RTX 2000+</target_hardware>
 </metadata>
@@ -91,7 +91,7 @@ clipcannon/
 │       ├── __init__.py
 │       ├── server.py                  # MCP server entry (mcp library, Server class, stdio transport)
 │       ├── config.py                  # Configuration management
-│       ├── tools/                     # MCP tool definitions (46 tools, 16 modules)
+│       ├── tools/                     # MCP tool definitions (51 tools, 17 modules)
 │       │   ├── __init__.py            # Understanding tools (ingest, VUD, transcript, frame, search)
 │       │   ├── project.py             # Project CRUD
 │       │   ├── understanding.py       # Understanding tool handlers
@@ -103,28 +103,29 @@ clipcannon/
 │       │   ├── editing_helpers.py     # Builder functions, DB storage
 │       │   ├── rendering.py           # Render, batch, preview, inspect, measure layout
 │       │   ├── rendering_defs.py      # JSON schema for rendering tools
+│       │   ├── storyboard.py          # Storyboard generation logic
 │       │   ├── audio.py               # Music gen, MIDI, SFX, audio cleanup
 │       │   ├── billing_tools.py       # Credits balance, history, estimate, spending limit
 │       │   ├── provenance_tools.py    # Provenance verify/query/chain/timeline
 │       │   ├── disk.py                # Disk management
-│       │   ├── config_tools.py        # Configuration tools
-│       │   ├── animation.py           # Lower thirds, Lottie (Phase 3)
-│       │   └── publishing.py          # Platform publish (Phase 3)
-│       ├── pipeline/                  # Processing pipeline stages (25 modules)
+│       │   └── config_tools.py        # Configuration tools
+│       ├── pipeline/                  # Processing pipeline stages (21 stages, 28 modules)
 │       │   ├── __init__.py
 │       │   ├── orchestrator.py        # DAG-based pipeline runner
 │       │   ├── dag.py                 # DAG dependency graph
 │       │   ├── registry.py            # Stage registry
+│       │   ├── source_resolution.py   # Source/audio path resolution helpers
+│       │   ├── frame_utils.py         # Frame extraction utilities
 │       │   ├── probe.py
 │       │   ├── vfr_normalize.py
-│       │   ├── source_resolution.py   # Source resolution detection
 │       │   ├── audio_extract.py
 │       │   ├── source_separation.py   # HTDemucs
 │       │   ├── frame_extract.py
-│       │   ├── transcribe.py          # WhisperX
+│       │   ├── transcribe.py          # WhisperX + anti-hallucination
 │       │   ├── visual_embed.py        # SigLIP + scene detection
 │       │   ├── ocr.py                 # PaddleOCR
 │       │   ├── screen_layout.py       # Screen layout detection
+│       │   ├── scene_analysis.py      # Face detection + layout recommendations (Phase 2)
 │       │   ├── quality.py             # BRISQUE + DOVER
 │       │   ├── shot_type.py           # ResNet-50
 │       │   ├── semantic_embed.py      # Nomic + topics
@@ -137,11 +138,9 @@ clipcannon/
 │       │   ├── highlights.py
 │       │   ├── storyboard.py
 │       │   └── finalize.py
-│       ├── editing/                   # Edit decision engine (edl.py, captions.py, caption_render.py, smart_crop.py, metadata_gen.py, auto_trim.py, motion.py, overlays.py, measure_layout.py)
+│       ├── editing/                   # Edit decision engine (edl.py, captions.py, caption_render.py, smart_crop.py, metadata_gen.py, auto_trim.py, motion.py, overlays.py, subject_extraction.py, measure_layout.py)
 │       ├── rendering/                 # FFmpeg rendering (renderer.py, ffmpeg_cmd.py, profiles.py, batch.py, thumbnail.py, inspector.py, preview.py)
 │       ├── audio/                     # Audio generation (music_gen.py, midi_compose.py, midi_render.py, sfx.py, mixer.py, effects.py, cleanup.py)
-│       ├── animation/                 # Motion graphics (Phase 3)
-│       ├── publishing/                # Platform APIs (Phase 3)
 │       ├── billing/                   # Credit system
 │       │   ├── __init__.py
 │       │   ├── license_client.py
@@ -173,43 +172,39 @@ clipcannon/
 │   ├── server.py
 │   ├── d1_sync.py
 │   └── stripe_webhooks.py
-├── tests/
-│   ├── unit/                          # Unit tests mirror src/ structure
-│   │   ├── test_pipeline/
-│   │   ├── test_provenance/
-│   │   ├── test_billing/
-│   │   └── test_db/
-│   ├── integration/
-│   │   ├── test_full_pipeline.py
-│   │   ├── test_render_workflow.py
-│   │   └── test_publish_workflow.py
-│   └── fixtures/
-│       ├── sample_video_10s.mp4
-│       └── sample_audio_10s.wav
+├── tests/                             # Flat test directory (15 pytest files, 9 FSV scripts)
+│   ├── conftest.py                    # Shared session-scoped fixtures
+│   ├── test_pipeline_stages.py
+│   ├── test_visual_pipeline.py
+│   ├── test_derived_stages.py
+│   ├── test_understanding_tools.py
+│   ├── test_billing.py
+│   ├── test_provenance_integration.py
+│   ├── test_edl.py
+│   ├── test_captions.py
+│   ├── test_smart_crop.py
+│   ├── test_editing_tools.py
+│   ├── test_rendering.py
+│   ├── test_audio_generation.py
+│   ├── test_dashboard_phase2.py
+│   ├── fsv_*.py                       # 6 FSV scripts (750+ checks)
+│   ├── manual_fsv_full.py
+│   ├── manual_fsv_phase3.py
+│   ├── dashboard/
+│   │   └── test_dashboard.py
+│   └── integration/
+│       ├── conftest.py
+│       ├── test_full_pipeline.py
+│       └── manual_verify.py
 ├── config/
 │   ├── default_config.json
-│   ├── platform_profiles.json
 │   └── docker-compose.yml
 ├── scripts/
 │   ├── setup.sh
 │   ├── download_models.py
 │   └── validate_gpu.py
 ├── assets/
-│   ├── lottie/                        # 28 shipped Lottie animations (Phase 3)
-│   ├── webm/                          # 20 pre-rendered WebM effects (Phase 3)
-│   ├── transitions/                   # 60+ GL Transition expressions (Phase 3)
-│   ├── fonts/                         # Bundled fonts (Montserrat, Inter)
-│   ├── soundfonts/                    # GeneralUser_GS.sf2 (Phase 2)
 │   └── profanity/                     # Profanity word list
-├── specs/                             # Specification hierarchy
-│   ├── constitution.md                # THIS FILE (immutable rules)
-│   ├── functional/
-│   ├── technical/
-│   └── tasks/
-├── .ai/                               # AI agent memory
-│   ├── activeContext.md
-│   ├── decisionLog.md
-│   └── progress.md
 ├── docs2/                             # PRD and planning documents
 ├── Dockerfile
 ├── pyproject.toml
@@ -485,30 +480,30 @@ clipcannon/
   </test_patterns>
 
   <test_structure>
-    <!-- Actual test file layout -->
+    <!-- Actual test file layout (278 tests across 15 pytest files) -->
     tests/
-    ├── conftest.py                    # Shared fixtures
-    ├── test_pipeline_stages.py        # Module-scoped: real video, FFmpeg ops run once
-    ├── test_visual_pipeline.py        # Function-scoped: synthetic PIL frames, no FFmpeg
-    ├── test_derived_stages.py         # Function-scoped: synthetic DB data, no models
-    ├── test_understanding_tools.py    # Function-scoped: synthetic DB data, tool response format
-    ├── test_provenance_integration.py # Function-scoped: fresh DB per chain test
-    ├── test_billing.py                # Function-scoped: FastAPI TestClient, HMAC tests
-    ├── test_editing_tools.py          # Editing tool handler tests
-    ├── test_edl.py                    # EDL format tests
-    ├── test_captions.py               # Caption generation tests
-    ├── test_smart_crop.py             # Smart crop tests
-    ├── test_rendering.py              # Rendering pipeline tests
-    ├── test_audio_generation.py       # Audio generation tests
-    ├── test_dashboard_phase2.py       # Phase 2 dashboard routes
-    ├── fsv_*.py                       # Full-stack verification suites (6 files)
-    ├── manual_fsv_full.py             # Manual FSV runner
-    ├── manual_fsv_phase3.py           # Phase 3 FSV runner
+    ├── conftest.py                    # Session-scoped shared fixtures
+    ├── test_pipeline_stages.py        # 12 tests — probe, audio/frame extract, DAG, orchestrator
+    ├── test_visual_pipeline.py        # 34 tests — storyboard, quality, visual embed, OCR, shot type
+    ├── test_derived_stages.py         # 14 tests — profanity, chronemic, highlights, finalize
+    ├── test_understanding_tools.py    # 20 tests — VUD, analytics, transcript, search
+    ├── test_provenance_integration.py # 19 tests — hash chain, tamper detection
+    ├── test_billing.py                # 40 tests — HMAC, credits, license server, D1, Stripe
+    ├── test_edl.py                    # 19 tests — EDL models, validation, platform constraints
+    ├── test_captions.py               # 14 tests — caption chunking, ASS generation
+    ├── test_editing_tools.py          # 10 tests — create/modify/list edits, metadata
+    ├── test_smart_crop.py             # 15 tests — crop regions, face tracking, aspect ratios
+    ├── test_rendering.py              # 14 tests — encoding profiles, codec fallback
+    ├── test_audio_generation.py       # 15 tests — 9 SFX types, 6 MIDI presets
+    ├── test_dashboard_phase2.py       # 12 tests — timeline, editing, review endpoints
+    ├── fsv_*.py                       # 6 FSV scripts (750+ checks total)
+    ├── manual_fsv_full.py             # Comprehensive system-wide FSV
+    ├── manual_fsv_phase3.py           # Editing, rendering, audio FSV
     ├── dashboard/
     │   └── test_dashboard.py          # Function-scoped: FastAPI TestClient, API endpoints
     └── integration/
         ├── conftest.py                # Integration fixtures
-        ├── test_full_pipeline.py      # Module-scoped: full pipeline on real video
+        ├── test_full_pipeline.py      # 22 tests — full pipeline with real video
         └── manual_verify.py           # Standalone: prints physical proof of every table and file
   </test_structure>
 
@@ -537,8 +532,8 @@ clipcannon/
   <rule id="PROV-04">Chain verification: if any record is tampered, all downstream chain hashes become invalid</rule>
   <rule id="PROV-05">File hasher uses streaming (8KB chunks) for large files (>1GB video files)</rule>
   <rule id="PROV-06">Table content hashing: serialize query results deterministically (sorted keys) then hash</rule>
-  <rule id="PROV-07">19 provenance points per full Phase 1 pipeline run (probe through finalize)</rule>
-  <rule id="PROV-08">Phase 2 adds: EDL create, music gen, SFX gen, audio mix, video render (5 more). Phase 3+ adds: animation render, publish</rule>
+  <rule id="PROV-07">21 provenance points per full pipeline run (probe through finalize, including scene_analysis added in Phase 2)</rule>
+  <rule id="PROV-08">Editing operations add: EDL create, music gen, SFX gen, audio mix, video render. Phase 3+ adds: animation render, publish</rule>
   <rule id="PROV-09">clipcannon_provenance_verify MUST pass on every completed project before status = "ready"</rule>
 </provenance_rules>
 
@@ -610,6 +605,8 @@ clipcannon/
     <stage fallback="no pacing data">chronemic</stage>
     <stage fallback="highlights from available data only">highlights</stage>
     <stage fallback="AI requests frames via get_frame instead">storyboard</stage>
+    <stage fallback="no face/layout data for scene map">scene_analysis</stage>
+    <stage fallback="no screen layout regions">screen_layout</stage>
   </optional_stages>
   <rule>VUD marks failed streams explicitly in stream_status and degradation_note</rule>
   <rule>AI reads degradation_note and adjusts editing strategy — it works with what it has</rule>
@@ -625,7 +622,7 @@ clipcannon/
   </phase>
   <phase number="2" name="Editing Engine" status="COMPLETE">
     <scope>EDL format, rendering pipeline, AI audio generation, captions, smart cropping, auto-trim, color adjust, motion, overlays, preview/inspect tools, audio cleanup, screen layout detection, full dashboard</scope>
-    <creates>editing/*, rendering/*, audio/*, tools/{editing,editing_defs,editing_helpers,rendering,rendering_defs,audio}.py, pipeline/{screen_layout,source_resolution,dag,registry}.py, dashboard routes/*</creates>
+    <creates>editing/*, rendering/*, audio/*, tools/{editing,editing_defs,editing_helpers,rendering,rendering_defs,storyboard,audio}.py, pipeline/{scene_analysis,screen_layout,frame_utils,source_resolution}.py, dashboard routes/{editing,review,timeline}.py</creates>
   </phase>
   <phase number="3" name="Motion Graphics &amp; Publishing">
     <scope>4-tier animation engine, platform OAuth, publishing APIs, complete dashboard</scope>

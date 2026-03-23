@@ -8,8 +8,8 @@
   "processing": {
     "frame_extraction_fps": 2,
     "whisper_model": "large-v3",
-    "whisper_compute_type": "int8",
-    "batch_size_visual": 64,
+    "whisper_compute_type": "float16",
+    "batch_size_visual": 128,
     "scene_change_threshold": 0.75,
     "highlight_count_default": 20,
     "min_clip_duration_ms": 5000,
@@ -42,7 +42,7 @@
   },
   "gpu": {
     "device": "cuda:0",
-    "max_vram_usage_gb": 24,
+    "max_vram_usage_gb": 32,
     "concurrent_models": true
   }
 }

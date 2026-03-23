@@ -491,9 +491,12 @@ async def _transcribe_faster_whisper(
             device=device,
             compute_type=compute_type,
         )
+        # beam_size=1 (greedy) is ~3-5x faster than beam_size=5 with
+        # minimal quality loss. Combined with vad_filter=True this
+        # keeps transcription under 2 minutes for 8-minute videos.
         segments_iter, info = model.transcribe(
             str(audio_path),
-            beam_size=5,
+            beam_size=1,
             word_timestamps=True,
             vad_filter=True,
             vad_parameters={"min_silence_duration_ms": 500},
@@ -778,7 +781,7 @@ async def run_transcribe(
                 version=model_name,
                 quantization=compute_type,
                 parameters={
-                    "beam_size": 5,
+                    "beam_size": 1,
                     "vad_filter": True,
                     "vad_onset": _VAD_ONSET,
                     "vad_offset": _VAD_OFFSET,
