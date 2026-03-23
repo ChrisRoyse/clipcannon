@@ -34,7 +34,7 @@ from clipcannon.pipeline.orchestrator import (
     PipelineStage,
     StageResult,
 )
-from clipcannon.pipeline.registry import _STAGE_DEFS, build_pipeline
+from clipcannon.pipeline.registry import _STAGES, build_pipeline
 from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all, fetch_one
@@ -188,8 +188,8 @@ def test_stage_registration():
     }
     actual_names = {s.name for s in pipeline.stages}
 
-    _test(f"Registry defines {len(_STAGE_DEFS)} stages", len(_STAGE_DEFS) == 20,
-          f"got {len(_STAGE_DEFS)}")
+    _test(f"Registry defines {len(_STAGES)} stages", len(_STAGES) == 20,
+          f"got {len(_STAGES)}")
     _test(f"Pipeline has {len(pipeline.stages)} registered stages",
           len(pipeline.stages) == 20,
           f"got {len(pipeline.stages)}")
@@ -297,11 +297,10 @@ def test_stage_signatures():
               params == expected_params,
               f"expected {expected_params}, got {params}")
 
-    # Verify each stage_def in registry has a non-None run function
-    for stage_def in _STAGE_DEFS:
-        sname = stage_def["name"]
-        _test(f"Stage '{sname}' has run function assigned",
-              stage_def.get("run") is not None)
+    # Verify each stage in registry has a non-None run function
+    for stage in _STAGES:
+        _test(f"Stage '{stage.name}' has run function assigned",
+              stage.run is not None)
 
 
 # ============================================================================

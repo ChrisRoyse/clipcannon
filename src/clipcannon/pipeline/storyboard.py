@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert, fetch_one
+from clipcannon.pipeline.frame_utils import frame_timestamp_ms
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.provenance import (
     ExecutionInfo,
@@ -40,21 +41,6 @@ CELL_SIZE = 348
 GRID_SIZE = CELL_SIZE * GRID_COLS  # 1044
 JPEG_QUALITY = 80
 TIMESTAMP_BAR_HEIGHT = 20
-
-
-def _frame_timestamp_ms(frame_path: Path, fps: int) -> int:
-    """Compute timestamp in ms from frame filename.
-
-    Args:
-        frame_path: Path like frame_000001.jpg (1-indexed).
-        fps: Frame extraction rate.
-
-    Returns:
-        Timestamp in milliseconds.
-    """
-    stem = frame_path.stem
-    frame_number = int(stem.split("_")[1])
-    return int((frame_number - 1) * 1000 / fps)
 
 
 def _format_timestamp(ms: int) -> str:
@@ -307,7 +293,7 @@ async def run_storyboard(
         selected = _select_frames(all_frames, duration_ms, extraction_fps)
 
         # Compute timestamps for selected frames
-        timestamps = [_frame_timestamp_ms(fp, extraction_fps) for fp in selected]
+        timestamps = [frame_timestamp_ms(fp, extraction_fps) for fp in selected]
 
         logger.info(
             "Generating storyboards: %d frames selected from %d total (duration=%d ms, fps=%d)",

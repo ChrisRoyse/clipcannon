@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert
+from clipcannon.pipeline.frame_utils import frame_timestamp_ms
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.provenance import (
     ExecutionInfo,
@@ -90,21 +91,6 @@ def _estimate_font_size(bbox: list[list[float]], img_height: int) -> str:
     if relative_height < 0.08:
         return "medium"
     return "large"
-
-
-def _frame_timestamp_ms(frame_path: Path, fps: int) -> int:
-    """Compute timestamp in ms from frame filename and extraction fps.
-
-    Args:
-        frame_path: Path like frame_000001.jpg (1-indexed).
-        fps: Frame extraction rate (e.g. 2).
-
-    Returns:
-        Timestamp in milliseconds.
-    """
-    stem = frame_path.stem
-    frame_number = int(stem.split("_")[1])
-    return int((frame_number - 1) * 1000 / fps)
 
 
 def _texts_differ_significantly(
@@ -218,7 +204,7 @@ def _run_ocr_on_frames(
                 "OCR progress: %d/%d frames processed", idx + 1, total_frames,
             )
 
-        ts_ms = _frame_timestamp_ms(fp, extraction_fps)
+        ts_ms = frame_timestamp_ms(fp, extraction_fps)
 
         try:
             img = Image.open(fp)
@@ -353,12 +339,17 @@ async def run_ocr(
 
         extraction_fps = int(config.get("processing.frame_extraction_fps"))
 
-        # Process at 1fps: take every other frame (since extraction is 2fps)
+        # Sample frames for OCR. EasyOCR processes ~1-3 frames/sec.
+        # Cap at 120 frames to stay well within the 600s stage timeout.
+        max_ocr_frames = 120
         step = max(1, extraction_fps)
         ocr_frames = all_frames[::step]
+        if len(ocr_frames) > max_ocr_frames:
+            further_step = max(1, len(ocr_frames) // max_ocr_frames)
+            ocr_frames = ocr_frames[::further_step]
 
         logger.info(
-            "Running OCR on %d frames (1fps from %d total at %dfps)",
+            "Running OCR on %d frames (sampled from %d total at %dfps)",
             len(ocr_frames),
             len(all_frames),
             extraction_fps,

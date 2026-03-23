@@ -143,7 +143,7 @@ async def clipcannon_ingest(
         "status": final_status,
         "pipeline_success": result.success,
         "total_duration_ms": result.total_duration_ms,
-        "stages_completed": len([s for s in result.stage_results.values() if s.success]),
+        "stages_completed": sum(1 for s in result.stage_results.values() if s.success),
         "stages_failed": len(result.failed_required) + len(result.failed_optional),
         "failed_required": result.failed_required,
         "failed_optional": result.failed_optional,

@@ -450,11 +450,11 @@ class TestVisualEmbedHelpers:
 
     def test_frame_timestamp_ms(self) -> None:
         """Verify frame timestamp calculation."""
-        from clipcannon.pipeline.visual_embed import _frame_timestamp_ms
+        from clipcannon.pipeline.frame_utils import frame_timestamp_ms
 
-        assert _frame_timestamp_ms(Path("frame_000001.jpg"), 2) == 0
-        assert _frame_timestamp_ms(Path("frame_000002.jpg"), 2) == 500
-        assert _frame_timestamp_ms(Path("frame_000003.jpg"), 2) == 1000
+        assert frame_timestamp_ms(Path("frame_000001.jpg"), 2) == 0
+        assert frame_timestamp_ms(Path("frame_000002.jpg"), 2) == 500
+        assert frame_timestamp_ms(Path("frame_000003.jpg"), 2) == 1000
 
     def test_extract_dominant_colors(
         self, tmp_path: Path,

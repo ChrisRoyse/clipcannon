@@ -81,9 +81,6 @@ _INSERT_SQL = """INSERT INTO scene_map (
 ) VALUES (?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?, ?,?,?)"""
 
 
-# ============================================================
-# DOWNSAMPLING
-# ============================================================
 def _downsample(frame: np.ndarray) -> tuple[np.ndarray, float, float]:
     """Downsample frame to analysis resolution. Returns (small, scale_x, scale_y)."""
     h, w = frame.shape[:2]
@@ -98,9 +95,6 @@ def _downsample(frame: np.ndarray) -> tuple[np.ndarray, float, float]:
     return small, w / new_w, h / new_h
 
 
-# ============================================================
-# FACE DETECTION (reusable detector)
-# ============================================================
 def _create_face_detector() -> object:
     """Create a reusable MediaPipe face detector."""
     from mediapipe.tasks.python import BaseOptions
@@ -185,9 +179,6 @@ def _detect_face_with_detector(
     return None
 
 
-# ============================================================
-# SCENE & CONTENT DETECTION
-# ============================================================
 def _compute_ssim(frame_a: np.ndarray, frame_b: np.ndarray) -> float:
     """Fast SSIM-like comparison on 320x180 thumbnails."""
     gray_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2GRAY)
@@ -286,9 +277,6 @@ def _detect_content_region(
             "w": max(100, cw), "h": max(100, ch)}
 
 
-# ============================================================
-# CANVAS REGION PRE-COMPUTATION
-# ============================================================
 def _region(
     rid: str, sx: int, sy: int, sw: int, sh: int,
     ox: int, oy: int, ow: int, oh: int, z: int,
@@ -384,9 +372,6 @@ def _build_canvas_regions(
     return result
 
 
-# ============================================================
-# HELPERS
-# ============================================================
 def _ensure_scene_map_table(db_path: Path) -> None:
     conn = sqlite3.connect(str(db_path))
     try:
@@ -500,9 +485,6 @@ def _store_scene_records(db_path: Path, records: list[dict[str, object]]) -> Non
         conn.close()
 
 
-# ============================================================
-# MAIN PIPELINE STAGE
-# ============================================================
 async def run_scene_analysis(
     project_id: str,
     db_path: Path,
@@ -693,6 +675,7 @@ async def run_scene_analysis(
                 sha256=content_hash,
                 record_count=len(scene_records),
             ),
+            model_info=None,
             execution_info=ExecutionInfo(duration_ms=elapsed_ms),
             parent_record_id=None,
             description=(

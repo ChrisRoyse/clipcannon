@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert
 from clipcannon.exceptions import PipelineError
+from clipcannon.pipeline.frame_utils import frame_timestamp_ms
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.provenance import (
     ExecutionInfo,
@@ -66,21 +67,6 @@ def _get_sorted_frames(frames_dir: Path) -> list[Path]:
             operation=OPERATION,
         )
     return frames
-
-
-def _frame_timestamp_ms(frame_path: Path, fps: int) -> int:
-    """Compute timestamp in ms from frame filename and extraction fps.
-
-    Args:
-        frame_path: Path like frame_000001.jpg (1-indexed).
-        fps: Frame extraction rate (e.g. 2).
-
-    Returns:
-        Timestamp in milliseconds.
-    """
-    stem = frame_path.stem  # "frame_000001"
-    frame_number = int(stem.split("_")[1])  # 1-indexed
-    return int((frame_number - 1) * 1000 / fps)
 
 
 def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
@@ -293,8 +279,8 @@ def _detect_scenes(
         else:
             end_frame_idx = len(frame_paths) - 1
 
-        start_ms = _frame_timestamp_ms(frame_paths[start_frame_idx], fps)
-        end_ms = _frame_timestamp_ms(frame_paths[end_frame_idx], fps)
+        start_ms = frame_timestamp_ms(frame_paths[start_frame_idx], fps)
+        end_ms = frame_timestamp_ms(frame_paths[end_frame_idx], fps)
 
         # Key frame is the first frame of the scene
         key_frame_path = str(frame_paths[start_frame_idx])
@@ -372,20 +358,35 @@ async def run_visual_embed(
             device,
         )
 
-        # Clear old data before inserting (idempotent re-runs)
+        # Clear old data before inserting (idempotent re-runs).
+        # vec0 virtual tables: DROP + recreate is the most reliable cleanup.
         conn = get_connection(db_path, enable_vec=True, dict_rows=True)
         try:
+            conn.execute("DROP TABLE IF EXISTS vec_frames")
             conn.execute(
-                "DELETE FROM vec_frames WHERE project_id = ?",
-                (project_id,),
+                "CREATE VIRTUAL TABLE vec_frames USING vec0("
+                "frame_id INTEGER PRIMARY KEY, "
+                "project_id TEXT, "
+                "timestamp_ms INTEGER, "
+                "frame_path TEXT, "
+                "visual_embedding float[1152])"
             )
+            conn.commit()
+            logger.info("Cleared vec_frames table for re-ingest")
+        except Exception as exc:
+            logger.warning("vec_frames cleanup failed: %s", exc)
+        finally:
+            conn.close()
+
+        conn = get_connection(db_path, enable_vec=False, dict_rows=True)
+        try:
             conn.execute(
                 "DELETE FROM scenes WHERE project_id = ?",
                 (project_id,),
             )
             conn.commit()
         except Exception as exc:
-            logger.debug("Pre-cleanup skipped (tables may not exist yet): %s", exc)
+            logger.debug("scenes cleanup skipped: %s", exc)
         finally:
             conn.close()
 
@@ -394,7 +395,7 @@ async def run_visual_embed(
         try:
             vec_rows: list[tuple[object, ...]] = []
             for idx, (fp, emb) in enumerate(zip(frame_paths, embeddings, strict=False)):
-                ts_ms = _frame_timestamp_ms(fp, extraction_fps)
+                ts_ms = frame_timestamp_ms(fp, extraction_fps)
                 vec_rows.append(
                     (
                         idx + 1,
@@ -423,19 +424,18 @@ async def run_visual_embed(
         # Insert scenes
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
-            scene_rows: list[tuple[object, ...]] = []
-            for scene in scenes:
-                scene_rows.append(
-                    (
-                        project_id,
-                        scene["start_ms"],
-                        scene["end_ms"],
-                        scene["key_frame_path"],
-                        scene["key_frame_timestamp_ms"],
-                        scene["visual_similarity_avg"],
-                        scene["dominant_colors"],
-                    )
+            scene_rows: list[tuple[object, ...]] = [
+                (
+                    project_id,
+                    scene["start_ms"],
+                    scene["end_ms"],
+                    scene["key_frame_path"],
+                    scene["key_frame_timestamp_ms"],
+                    scene["visual_similarity_avg"],
+                    scene["dominant_colors"],
                 )
+                for scene in scenes
+            ]
 
             batch_insert(
                 conn,

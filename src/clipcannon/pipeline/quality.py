@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all
+from clipcannon.pipeline.frame_utils import frame_timestamp_ms
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.provenance import (
     ExecutionInfo,
@@ -73,10 +74,9 @@ def _classify_quality(score: float) -> str:
     """
     if score > GOOD_THRESHOLD:
         return "good"
-    elif score > ACCEPTABLE_THRESHOLD:
+    if score > ACCEPTABLE_THRESHOLD:
         return "acceptable"
-    else:
-        return "poor"
+    return "poor"
 
 
 def _detect_issues(
@@ -138,11 +138,7 @@ def _run_pyiqa_scoring(
 
     metric = pyiqa.create_metric("brisque", device=device)
 
-    transform = transforms.Compose(
-        [
-            transforms.ToTensor(),
-        ]
-    )
+    transform = transforms.ToTensor()
 
     quality_scores: list[float] = []
     batch_size = 16
@@ -258,21 +254,6 @@ def _run_laplacian_fallback(frame_paths: list[Path]) -> list[float]:
     return quality_scores
 
 
-def _frame_timestamp_ms(frame_path: Path, fps: int) -> int:
-    """Compute timestamp in ms from frame filename.
-
-    Args:
-        frame_path: Path like frame_000001.jpg (1-indexed).
-        fps: Frame extraction rate.
-
-    Returns:
-        Timestamp in milliseconds.
-    """
-    stem = frame_path.stem
-    frame_number = int(stem.split("_")[1])
-    return int((frame_number - 1) * 1000 / fps)
-
-
 async def run_quality(
     project_id: str,
     db_path: Path,
@@ -338,7 +319,7 @@ async def run_quality(
         # Build frame -> quality mapping
         frame_quality: dict[int, float] = {}
         for fp, score in zip(frame_paths, quality_scores, strict=False):
-            ts_ms = _frame_timestamp_ms(fp, extraction_fps)
+            ts_ms = frame_timestamp_ms(fp, extraction_fps)
             frame_quality[ts_ms] = score
 
         # Fetch scenes and update with quality metrics
