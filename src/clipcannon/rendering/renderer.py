@@ -133,30 +133,25 @@ class RenderEngine:
             ass_path = self._write_captions(edl, profile, render_dir, render_id)
             crop_region = self._compute_crop(edl, profile)
 
-            # Build and execute FFmpeg command
+            # Build and execute FFmpeg — segmented rendering to prevent OOM
             nvenc_preset = (
                 str(self.config.get("rendering.nvenc_preset"))
                 if "nvenc" in profile.video_codec
                 else None
             )
             encoding_args = build_encoding_args(profile, nvenc_preset)
-            # Pass canvas spec if enabled (full AI compositing control)
-            canvas_spec = edl.canvas if edl.canvas.enabled else None
 
-            cmd = build_ffmpeg_cmd(
+            await self._render_segmented(
+                edl=edl,
                 source_path=source_path,
                 output_path=output_path,
-                segments=edl.segments,
                 profile=profile,
                 crop_region=crop_region,
                 ass_path=ass_path,
                 encoding_args=encoding_args,
-                canvas=canvas_spec,
-                global_color=edl.color,
-                overlays=edl.overlays or None,
-                removals=edl.removals or None,
+                render_id=render_id,
+                render_dir=render_dir,
             )
-            await self._execute_ffmpeg(cmd, render_id)
 
             if not output_path.exists():
                 raise PipelineError(
@@ -405,6 +400,219 @@ class RenderEngine:
             face_position_y=0.5,
             safe_area_pct=edl.crop.safe_area_pct,
         )
+
+    # ----------------------------------------------------------------
+    # Segmented rendering (OOM prevention)
+    # ----------------------------------------------------------------
+    async def _render_segmented(
+        self,
+        edl: EditDecisionList,
+        source_path: Path,
+        output_path: Path,
+        profile: EncodingProfile,
+        crop_region: CropRegion | None,
+        ass_path: Path | None,
+        encoding_args: list[str],
+        render_id: str,
+        render_dir: Path,
+    ) -> None:
+        """Render each segment independently then concatenate.
+
+        This limits peak memory to ONE segment at a time instead of
+        holding all segments in a single filter_complex. Critical for
+        4K source videos in WSL2 where GPU paravirtualization limits
+        memory allocation.
+
+        Args:
+            edl: The Edit Decision List to render.
+            source_path: Path to the source video.
+            output_path: Path for the final output file.
+            profile: Encoding profile to use.
+            crop_region: Optional crop region.
+            ass_path: Path to ASS captions file, or None.
+            encoding_args: Encoding arguments for FFmpeg.
+            render_id: Unique render identifier.
+            render_dir: Directory for render artifacts.
+        """
+        segments = edl.segments
+        canvas_spec = edl.canvas if edl.canvas.enabled else None
+
+        if len(segments) <= 1:
+            # Single segment: use direct rendering (no concat needed)
+            cmd = build_ffmpeg_cmd(
+                source_path=source_path,
+                output_path=output_path,
+                segments=segments,
+                profile=profile,
+                crop_region=crop_region,
+                ass_path=ass_path,
+                encoding_args=encoding_args,
+                canvas=canvas_spec,
+                global_color=edl.color,
+                overlays=edl.overlays or None,
+                removals=edl.removals or None,
+            )
+            await self._execute_ffmpeg(cmd, render_id)
+            return
+
+        # Multi-segment: render each independently
+        import shutil
+        from copy import deepcopy
+
+        temp_dir = render_dir / "segments"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        segment_files: list[Path] = []
+
+        try:
+            for i, seg in enumerate(segments):
+                seg_output = temp_dir / f"seg_{i:03d}.mp4"
+                logger.info(
+                    "Render %s: segment %d/%d (%d-%dms)",
+                    render_id,
+                    i + 1,
+                    len(segments),
+                    seg.source_start_ms,
+                    seg.source_end_ms,
+                )
+
+                # Build command for this single segment
+                single_seg_list = [seg]
+
+                # For segmented rendering, captions are burned in during
+                # the concat pass to maintain correct cross-segment timing
+                seg_ass_path = None
+
+                # Overlays: only include overlays that fall within this
+                # segment's output time range, remapped to local times
+                seg_start_output_ms = sum(
+                    int(
+                        (s.source_end_ms - s.source_start_ms) / s.speed
+                    )
+                    for s in segments[:i]
+                )
+                seg_end_output_ms = seg_start_output_ms + int(
+                    (seg.source_end_ms - seg.source_start_ms) / seg.speed
+                )
+                seg_overlays = None
+                if edl.overlays:
+                    matching = [
+                        ov
+                        for ov in edl.overlays
+                        if ov.start_ms < seg_end_output_ms
+                        and ov.end_ms > seg_start_output_ms
+                    ]
+                    if matching:
+                        remapped = []
+                        for ov in matching:
+                            ov_copy = deepcopy(ov)
+                            ov_copy.start_ms = max(
+                                0, ov.start_ms - seg_start_output_ms
+                            )
+                            ov_copy.end_ms = min(
+                                seg_end_output_ms - seg_start_output_ms,
+                                ov.end_ms - seg_start_output_ms,
+                            )
+                            remapped.append(ov_copy)
+                        seg_overlays = remapped if remapped else None
+
+                cmd = build_ffmpeg_cmd(
+                    source_path=source_path,
+                    output_path=seg_output,
+                    segments=single_seg_list,
+                    profile=profile,
+                    crop_region=crop_region,
+                    ass_path=seg_ass_path,
+                    encoding_args=encoding_args,
+                    canvas=canvas_spec,
+                    global_color=edl.color,
+                    overlays=seg_overlays,
+                    removals=edl.removals or None,
+                )
+                await self._execute_ffmpeg(cmd, f"{render_id}_seg{i}")
+
+                if (
+                    not seg_output.exists()
+                    or seg_output.stat().st_size == 0
+                ):
+                    raise PipelineError(
+                        f"Segment {i} render produced no output",
+                        stage_name="rendering",
+                        operation="segment_render",
+                        details={
+                            "segment": i,
+                            "path": str(seg_output),
+                        },
+                    )
+
+                segment_files.append(seg_output)
+                logger.info(
+                    "Render %s: segment %d/%d complete (%.1f MB)",
+                    render_id,
+                    i + 1,
+                    len(segments),
+                    seg_output.stat().st_size / 1024 / 1024,
+                )
+
+            # Concatenate all segments
+            concat_list = temp_dir / "concat.txt"
+            with open(concat_list, "w") as f:
+                for sf in segment_files:
+                    f.write(f"file '{sf}'\n")
+
+            # Build concat command
+            concat_cmd: list[str] = [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_list),
+            ]
+
+            # Add captions to the concat pass if we have them
+            if ass_path is not None:
+                escaped_ass = (
+                    str(ass_path)
+                    .replace("\\", "/")
+                    .replace(":", "\\:")
+                )
+                concat_cmd.extend(
+                    ["-vf", f"subtitles='{escaped_ass}'"]
+                )
+                # Re-encode video for subtitle burn-in
+                concat_cmd.extend(
+                    [
+                        "-c:v",
+                        profile.video_codec,
+                        "-b:v",
+                        str(profile.video_bitrate),
+                    ]
+                )
+            else:
+                # No subtitles: just copy streams (near-zero memory)
+                concat_cmd.extend(["-c", "copy"])
+
+            concat_cmd.extend(["-c:a", "copy"])
+            concat_cmd.append(str(output_path))
+
+            logger.info(
+                "Render %s: concatenating %d segments",
+                render_id,
+                len(segment_files),
+            )
+            await self._execute_ffmpeg(
+                concat_cmd, f"{render_id}_concat"
+            )
+
+        finally:
+            # Clean up temp segment files
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                logger.debug(
+                    "Cleaned up temp segments: %s", temp_dir
+                )
 
     # ----------------------------------------------------------------
     # FFmpeg execution

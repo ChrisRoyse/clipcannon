@@ -162,6 +162,16 @@ def _detect_reactions_funasr(
         pos += stride_samples
 
     del model
+    import gc
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
     return reactions
 
 

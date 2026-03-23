@@ -118,6 +118,35 @@ class PipelineOrchestrator:
         self._completed: set[str] = set()
         self._failed: set[str] = set()
 
+    @staticmethod
+    def _cleanup_gpu() -> None:
+        """Release GPU memory between pipeline levels.
+
+        Calls gc.collect() and torch.cuda.empty_cache() to free
+        VRAM from models loaded by completed stages. This prevents
+        memory accumulation across levels that can cause OOM.
+        """
+        import gc
+
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                before = torch.cuda.memory_allocated(0)
+                torch.cuda.empty_cache()
+                after = torch.cuda.memory_allocated(0)
+                freed_mb = (before - after) / 1024 / 1024
+                if freed_mb > 10:
+                    logger.info(
+                        "GPU cleanup: freed %.0f MB VRAM (%.0f MB -> %.0f MB)",
+                        freed_mb,
+                        before / 1024 / 1024,
+                        after / 1024 / 1024,
+                    )
+        except ImportError:
+            pass
+
     def register_stage(self, stage: PipelineStage) -> None:
         """Register a pipeline stage.
 
@@ -242,6 +271,10 @@ class PipelineOrchestrator:
                             pipeline_aborted = True
                         else:
                             failed_optional.append(stage.name)
+
+            # Release GPU memory between levels to prevent OOM.
+            # Stages load models but may not fully clean up.
+            self._cleanup_gpu()
 
         total_ms = int((time.monotonic() - pipeline_start) * 1000)
         success = len(failed_required) == 0

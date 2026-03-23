@@ -187,6 +187,15 @@ def _run_pyiqa_scoring(
                 scored_so_far / total_frames * 100,
             )
 
+    # Clean up GPU memory — model stays loaded otherwise
+    del metric
+    import gc
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    logger.info("BRISQUE model unloaded, GPU memory released")
+
     return quality_scores
 
 

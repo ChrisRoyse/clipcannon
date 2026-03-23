@@ -392,6 +392,61 @@ async def clipcannon_get_segment_detail(
     finally:
         conn.close()
 
+    # -- Derived cross-stream intelligence (no new DB queries) --
+
+    # Derive emphasis words from word-level timing gaps (pause > 300ms)
+    emphasis_words: list[dict[str, object]] = []
+    if len(words) >= 2:
+        for i in range(1, len(words)):
+            prev_end = int(words[i - 1].get("end_ms", 0))
+            curr_start = int(words[i].get("start_ms", 0))
+            gap_ms = curr_start - prev_end
+            if gap_ms > 300:
+                emphasis_words.append({
+                    "word": str(words[i].get("word", "")),
+                    "start_ms": curr_start,
+                    "pause_before_ms": gap_ms,
+                })
+
+    # Detect speech-content alignment (speaker references screen content)
+    speech_screen_alignment: list[dict[str, object]] = []
+    visual_keywords = [
+        "look at", "you can see", "right here", "this is", "let me show",
+        "check this", "dashboard", "screen", "code", "file", "click",
+        "open", "scroll", "tab", "window", "button",
+    ]
+    on_screen_dicts = [dict(o) for o in on_screen]
+    for seg in transcript:
+        seg_text = str(seg.get("text", "")).lower()
+        matched_keywords = [kw for kw in visual_keywords if kw in seg_text]
+        if matched_keywords:
+            seg_start = int(seg.get("start_ms", 0))
+            seg_end = int(seg.get("end_ms", 0))
+            visible_ocr = [
+                o for o in on_screen_dicts
+                if int(o.get("start_ms", 0)) <= seg_end
+                and int(o.get("end_ms", 0)) >= seg_start
+            ]
+            speech_screen_alignment.append({
+                "transcript_ms": seg_start,
+                "text": str(seg.get("text", "")),
+                "keywords": matched_keywords,
+                "screen_text_visible": len(visible_ocr) > 0,
+            })
+
+    # Find peak emotion moments in this range (top 3 by energy)
+    emotion_peaks: list[dict[str, object]] = []
+    if emotion:
+        sorted_by_energy = sorted(
+            emotion, key=lambda e: float(e.get("energy", 0)), reverse=True,
+        )
+        for e in sorted_by_energy[:3]:
+            emotion_peaks.append({
+                "start_ms": int(e["start_ms"]),
+                "energy": round(float(e["energy"]), 4),
+                "arousal": round(float(e["arousal"]), 4),
+            })
+
     return {
         "project_id": project_id,
         "start_ms": start_ms,
@@ -402,7 +457,7 @@ async def clipcannon_get_segment_detail(
         "speakers": speakers,
         "reactions": [dict(r) for r in reactions],
         "beat_sections": [dict(b) for b in beat_sections],
-        "on_screen_text": [dict(o) for o in on_screen],
+        "on_screen_text": on_screen_dicts,
         "text_change_events": [dict(tc) for tc in text_changes],
         "pacing": [dict(p) for p in pacing],
         "scenes_quality": [dict(s) for s in scenes],
@@ -412,4 +467,7 @@ async def clipcannon_get_segment_detail(
         "topics": [dict(t) for t in topics],
         "profanity": [dict(p) for p in profanity],
         "music_sections": [dict(m) for m in music],
+        "emphasis_words": emphasis_words,
+        "speech_screen_alignment": speech_screen_alignment,
+        "emotion_peaks": emotion_peaks,
     }

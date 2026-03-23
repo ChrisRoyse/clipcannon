@@ -356,11 +356,26 @@ Pattern interrupts increase watch time by up to 85% and boost conversion rates b
 
 ## 10. Platform Strategy (Data-Driven)
 
+### Monetization Quick Reference
+
+| Platform | Min Length to Earn | Revenue per 1M Views | Best Length for Profit |
+|---|---|---|---|
+| **TikTok** | **60s** (Creator Rewards) | **$200-$1,000** | **90-120s** |
+| **YouTube Shorts** | No minimum (but needs YPP) | $30-$100 | 30-60s (funnel to long-form) |
+| **YouTube Standard** | 8+ min (mid-roll ads) | $1,000-$10,000+ | 8-15 min |
+| **Instagram Reels** | 15s (bonus programs) | Varies (invite-only) | 60-90s |
+| **Facebook** | 60s (in-stream ads) | $100-$500 | 60-90s |
+| **LinkedIn** | N/A (brand building) | $0 (indirect revenue) | Under 30s |
+
+**Key insight: TikTok videos UNDER 60 seconds earn ZERO platform revenue.** Always target 60-180s for TikTok. For YouTube, Shorts pay 10-50x less than long-form — use Shorts to funnel viewers to 8+ minute videos where the real money is.
+
 ### TikTok
 
 | Metric | Value |
 |---|---|
-| Optimal length | 15-35s (sweet spot for completion rate) |
+| **Monetization minimum** | **60s+ required** for Creator Rewards Program |
+| **Monetization sweet spot** | **60-180s** (1-3 min: eligible + high watch time) |
+| Viral sweet spot (non-monetized) | 15-35s (highest completion rate) |
 | Hook window | 1-3s (84% of viral TikToks use psychological triggers in first 3s) |
 | Completion threshold | 70%+ for viral promotion, 85%+ for explosive reach |
 | Visual change cadence | Every 3-5s |
@@ -368,10 +383,22 @@ Pattern interrupts increase watch time by up to 85% and boost conversion rates b
 | Avg daily watch time | 95 min globally, 52 min US |
 | Engagement rate | 3.70% (up 49% YoY) |
 | Algorithm weight | Watch time (~50%), shares (6/10), saves, comments, likes (weakest) |
+| **CPM (revenue/1K views)** | **$0.20-$1.00** (avg $0.50-$0.70). 1M views = $200-$1000 |
+| **Monetization requirements** | 10K followers, 100K views in 30 days, 18+, US/UK/FR/DE/JP/KR/BR |
 
-**Strategy:** Bold hook (Layout D, face close-up), aggressive pacing (3-5s layout changes), trending audio, bold captions for sound-off, CTA in last 3s. A 15-second video watched fully beats a 60-second video watched halfway.
+**MONETIZATION STRATEGY:** Videos MUST be 60+ seconds to earn money. Target 90-120s for the optimal balance of monetization eligibility + completion rate. A 90-second video with 70% completion earns revenue; a 30-second viral video earns nothing from the platform.
 
-**Auto-trim tuning:** Aggressive -- `pause_threshold_ms=500, merge_gap_ms=200, min_segment_ms=300`
+**For profit, ALWAYS make TikTok videos 60-180 seconds.** Under 60s = zero platform revenue regardless of views.
+
+**Editing for 60s+ monetization:**
+- Hook (0-3s): Layout D face, bold statement
+- Setup (3-15s): Layout B, context + screen
+- Body (15-60s): Layout A/C alternating, full demo with screen content
+- Results (60-90s): Layout C PIP, show the finished product
+- CTA (last 5s): Layout D face, specific call to action
+- Pattern interrupt every 5-8s to maintain watch time through the full 60s+
+
+**Auto-trim tuning:** Moderate -- `pause_threshold_ms=700, merge_gap_ms=200, min_segment_ms=400` (less aggressive to preserve 60s+ length)
 
 **Color:** `contrast=1.2, saturation=1.15` -- saturated, punchy colors perform best
 
@@ -380,12 +407,14 @@ Pattern interrupts increase watch time by up to 85% and boost conversion rates b
 | Metric | Value |
 |---|---|
 | Optimal length | 60-90s for max engagement and views |
+| **Monetization minimum** | **15s+** (bonus programs), **5K followers** required |
 | Hook window | 2-3s (up to 50% drop in first 3s) |
 | 3s hold rate | 60%+ = 5-10x more total reach |
 | Visual change cadence | Every 4-6s |
 | Music | Trending audio preferred |
 | Engagement rate | 1.23% (Reels specifically) |
 | #1 algorithm signal | Watch time; DM sends/reach is strongest for NEW audience |
+| **Revenue model** | Bonus programs (invite-only), brand deals, affiliate links |
 
 **Strategy:** More polished than TikTok. Cover frame matters. 10-second Reel with 80% retention beats a 60-second Reel at 30%. Design for DM shareability ("send this to your [friend who...]").
 
@@ -396,12 +425,19 @@ Pattern interrupts increase watch time by up to 85% and boost conversion rates b
 | Metric | Value |
 |---|---|
 | Optimal length | 30-60s (highest view counts) |
+| **Monetization minimum** | **No min length**, but needs YPP (1K subs + 10M Short views in 90 days) |
+| **Revenue share** | **45% to creator** (YouTube keeps 55% of Shorts ad pool) |
+| **CPM** | **$0.03-$0.10 per 1K views** ($30-$100 per 1M views) |
 | Hook window | 2s |
 | Top performer retention | 80-90% completion |
 | "Skippable" threshold | Below 50% completion |
 | Visual change cadence | Every 4-7s |
 | Music | Optional; educational content often better without |
 | Key metric | Every loop counts as a new view |
+| **YPP Tier 1** | 500 subs + 3M Short views in 90 days (fan funding only) |
+| **YPP Tier 2** | 1K subs + 10M Short views in 90 days (full ad revenue) |
+
+**MONETIZATION STRATEGY:** YouTube Shorts pay the least per view ($0.03-$0.10/1K) but have no minimum length. The real money is driving Shorts viewers to long-form content (which pays 10-50x more per view). Every Short should funnel to a longer video.
 
 **Strategy:** Educational content dominates. Title card critical. Subscribe CTA valuable. Design for loops: seamless ending that leads back to start. Median views tripled YoY (86 in 2024 to 268 in 2025).
 
@@ -694,28 +730,139 @@ Workflow: decide coords → preview_layout → adjust → repeat → render → 
 
 ```
 1. project_create → ingest → wait "ready"
-2. get_scene_map (primary intelligence) + get_editing_context + get_vud_summary
-3. Analyze OCR data: identify slide transitions, text-heavy scenes, zoom targets
-4. auto_trim → clean segments (platform-specific aggressiveness)
-5. create_edit:
-   - Use scene_map canvas_regions for coordinates
-   - Use OCR slide transitions as segment boundaries
-   - Hook = first 3s, Layout D, face close-up
-   - CTA = last 3-5s, Layout D
-   - Dynamic layout switching every 5-8s
-6. color_adjust (platform-specific grade)
-7. add_motion (zoom on key moments, OCR text regions)
-8. add_overlay (title cards from OCR titles, stat overlays, lower third, CTA)
-9. audio_cleanup + generate_sfx (whoosh on transitions, impact on text pops)
-10. preview_clip + preview_layout at hook, CTA, and key transitions
-11. generate_metadata
-12. render
-13. inspect_render → if issues → modify_edit → re-render
+
+2. UNDERSTAND THE VIDEO (before ANY editing decisions):
+   a. get_editing_context → data manifest (what data exists, which tools to use)
+   b. get_vud_summary → speakers, topics, highlights, beats, content safety
+   c. get_transcript(start_ms=0) → READ THE FULL TRANSCRIPT
+   d. Identify the narrative arc: intro → setup → demo → results → closing
+   e. Mark complete sentences/thoughts that could serve as segment boundaries
+
+3. DISCOVER BEST MOMENTS:
+   a. find_best_moments(purpose="hook") → top hook candidates with emotion + emphasis
+   b. find_best_moments(purpose="highlight") → best body content
+   c. find_best_moments(purpose="cta") → closing candidates
+   d. For each candidate: read the transcript, verify the thought is COMPLETE
+   e. find_cut_points(around_ms) at start/end of each segment → find sentence_end cut points
+
+4. PLAN THE EDIT (decide segments BEFORE building):
+   - Map the story: which segments tell the complete narrative?
+   - Plan layout progression: D → B → A → C → D (smooth, never jump >1 level)
+   - Verify total duration fits platform (TikTok: 15-60s, Shorts: 30-60s)
+   - Every segment MUST start and end at a sentence boundary or silence gap
+
+5. VERIFY REGIONS (preview loop — MANDATORY):
+   For EACH planned segment:
+   a. preview_layout(timestamp_ms, regions) → look at the frame
+   b. Check: face clean? No text artifacts? No duplicate webcam?
+   c. If issues → adjust source_x/y/w/h → preview again
+   d. Only proceed when ALL segments preview clean
+
+6. BUILD THE EDIT:
+   a. create_edit with verified regions from step 5
+   b. color_adjust (platform-specific grade)
+   c. add_motion (zoom on hook + CTA, ken_burns on screen content)
+   d. add_overlay (title card on hook, CTA on closing)
+   e. audio_cleanup if source audio needs it
+
+7. RENDER AND VERIFY:
+   a. render
+   b. inspect_render → extract frames at 0/25/50/75/100%
+   c. Verify each frame matches the preview from step 5
+   d. If issues → modify_edit → re-render
 ```
 
 ---
 
-## 21. Quality Checklist
+## 21. Common Editing Mistakes (NEVER Do These)
+
+These are real failures from production edits. Each one degraded the output video. Learn from them.
+
+### Mistake 1: Cutting mid-sentence / mid-thought
+
+**What happened**: Segments were cut at arbitrary timestamps (6190ms, 14349ms) that fell in the middle of sentences. The speaker says "I built the world's first video editor specifically designed—" and it cuts. The viewer never hears the complete thought.
+
+**Rule**: ALWAYS cut at sentence endings. Use `find_cut_points(around_ms)` to find sentence_end cut points. NEVER set `source_end_ms` at an arbitrary timestamp — always align to a sentence boundary or silence gap. If `find_cut_points` returns a sentence_end at 13410ms with `text_before: "Cloud Code can now edit my videos"`, use 13410ms as your cut point, not 14349ms.
+
+**How to verify**: Read the transcript for every segment. If the last word is not a sentence-ending word (period, question mark, or natural pause), the cut is wrong. Fix it.
+
+### Mistake 2: Video way too short — not using available duration
+
+**What happened**: Created a 46-second TikTok from an 8-minute video when the user said "under 3 minutes." Left 134 seconds of allowed duration unused. The video felt rushed and incomplete because it skipped the entire middle of the story.
+
+**Rule**: Use the transcript to map the full narrative arc BEFORE choosing segments. Identify: introduction, setup, demonstration, results, closing. Include ALL narrative beats — don't skip from intro to closing. If the platform allows 3 minutes, use 2-2.5 minutes minimum. Fill the time with the story, not silence.
+
+**Narrative arc template**:
+```
+Hook (0-5s):    Bold statement, face close-up. Viewer decides to stay.
+Setup (5-20s):  Context. WHY should viewer care? What problem is solved?
+Demo (20-90s):  Show the thing. Screen content. This is the meat.
+Results (90-120s): What was the outcome? Show the finished product.
+CTA (last 5s):  Face close-up. Specific call to action.
+```
+
+### Mistake 3: Skipping the preview loop
+
+**What happened**: Went straight from `get_scene_at` coordinates to `create_edit` to `render` without previewing. The hook frame had terminal JSON text bleeding into the face close-up. This was only discovered after a full render that took 2 minutes and crashed WSL.
+
+**Rule**: ALWAYS preview EVERY segment before creating the edit.
+```
+For each segment:
+  1. preview_layout(timestamp_ms, regions) → look at the image
+  2. If text/artifacts visible → adjust source_x/y/w/h → re-preview
+  3. Only proceed when the preview is clean
+```
+This takes ~300ms per preview. A 4-segment edit takes 1.2 seconds to verify. A bad render takes 2 minutes and may crash the system.
+
+### Mistake 4: Jarring layout jumps (face size inconsistency)
+
+**What happened**: The face went from 1080px wide (full screen) → 240px (tiny PIP box) between consecutive segments. The viewer's focus was on a large face, then suddenly it's a tiny corner box. This is disorienting.
+
+**Rule**: Use smooth layout progression, never jump more than one layout level:
+```
+SMOOTH:  D (full face) → B (40/60) → A (30/70) → C (PIP) → D (face CTA)
+JARRING: D (full face) → C (PIP)  ← NEVER do this
+JARRING: D (full face) → A (30/70) → D (full face) → C (PIP)  ← inconsistent
+```
+
+Each layout transition should feel like a gentle "zoom out" (D→B→A→C) or "zoom in" (C→A→B→D). The viewer's eye should track the face as it smoothly changes size.
+
+### Mistake 5: Using generic scene_map regions instead of per-timestamp analysis
+
+**What happened**: Used pre-computed canvas_regions from `get_scene_at` which represent the general scene (8-second average). But at the specific timestamp, the webcam overlay overlapped with terminal text, making the face crop include code artifacts.
+
+**Rule**: For face-dominant layouts (D, B, A speaker region), ALWAYS verify the source crop coordinates with `preview_layout` at the EXACT start timestamp of the segment. The webcam overlay position shifts slightly between frames, and surrounding content changes constantly in screen recordings.
+
+### Mistake 6: Not reading the full transcript before editing
+
+**What happened**: Selected segments based on highlight scores and timestamps without reading what the speaker actually says at those times. The result: segments that look good on paper (high emotion score, visual reference detected) but don't tell a coherent story when played in sequence.
+
+**Rule**: Before creating any edit, call `get_transcript(project_id, start_ms=0)` and read the full transcript. Identify the story structure. Mark the key moments where the speaker makes complete statements. THEN choose segments that preserve complete thoughts and tell the story in order.
+
+### Mistake 7: Zooming into face instead of capturing full webcam overlay
+
+**What happened**: For face-dominant layouts (D, B, A speaker region), used the **face bounding box** (482x482px — just the face) instead of the **webcam overlay region** (831x686px — head, shoulders, and chair). The result: every face segment was an extreme close-up showing only forehead-to-chin. The viewer couldn't see the speaker's body language, microphone, chair, or natural framing. This happened across ALL THREE versions (v1, v2, v3) despite the guide explicitly saying in bold: **"Capture the ENTIRE webcam image. Do NOT zoom into face."**
+
+**Root cause**: The scene_map stores BOTH `face` coordinates (tight bounding box around the face) and `webcam` coordinates (the full webcam overlay area). I used `face` when I should have used `webcam`. The face data is for DETECTION — knowing WHERE the face is. The webcam data is for CROPPING — the actual source region to use in canvas regions.
+
+**Rule**: ALWAYS use the `webcam` region from scene_map for speaker source crop, NEVER the `face` region. The face region is for detection only.
+
+```
+WRONG:  source_x=2925, source_y=1563, source_width=482, source_height=482  (face bbox — zoomed)
+RIGHT:  source_x=2718, source_y=1474, source_width=831, source_height=686  (webcam overlay — full)
+```
+
+In `get_scene_at` response:
+- `scene.face` = detection data (where the face IS). Use for knowing IF a face exists.
+- `scene.webcam` = crop data (what to SHOW). Use for canvas region source coordinates.
+
+For Layout D (full-screen speaker): use webcam region as source, output to full 1080x1920 canvas.
+For Layout A/B (split): use webcam region as source, output to speaker strip.
+For Layout C (PIP): use webcam region as source, output to PIP box.
+
+---
+
+## 22. Quality Checklist
 
 - No stretching (cover or contain, NEVER stretch)
 - Face centered horizontally (±20px of center)

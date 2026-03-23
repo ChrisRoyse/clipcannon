@@ -167,16 +167,11 @@ def _compute_emotion_model(
     gc.collect()
 
     feature_extractor = AutoFeatureExtractor.from_pretrained(MODEL_ID)
-    model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.float16)
-    try:
-        model = model.to(device)
-    except NotImplementedError:
-        logger.warning("Meta tensor detected, reloading Wav2Vec2 with device_map")
-        del model
-        torch.cuda.empty_cache()
-        model = AutoModel.from_pretrained(
-            MODEL_ID, torch_dtype=torch.float16, device_map={"": device},
-        )
+    # Wav2Vec2 must stay FP32 — its Conv1d feature extractor does not
+    # support FP16 (input/weight dtype mismatch). At 1.2GB it's tiny
+    # for the RTX 5090's 32GB VRAM.
+    model = AutoModel.from_pretrained(MODEL_ID)
+    model = model.to(device)
     model.eval()
 
     results: list[dict[str, object]] = []

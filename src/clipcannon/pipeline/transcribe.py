@@ -533,8 +533,10 @@ async def _transcribe_faster_whisper(
             )
 
         del model
+        import gc
         import torch
 
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 

@@ -158,7 +158,11 @@ async def clipcannon_find_best_moments(
 
     Queries highlights ranked by score, snaps to natural cut points
     via silence gaps, includes transcript text and canvas region data.
-    Applies purpose-aware scoring adjustments.
+    Applies purpose-aware scoring adjustments with cross-stream
+    intelligence boosts:
+    - Emotion peak energy from Wav2Vec2 emotion_curve (up to +0.5)
+    - Speech-content alignment when speaker references visuals (+0.3)
+    - Emphasis pause detection for word gaps > 300ms (up to +0.3)
 
     Args:
         project_id: Project identifier.
@@ -273,9 +277,88 @@ async def clipcannon_find_best_moments(
 
             # purpose == "highlight" uses raw scores (no adjustment)
 
+            # --- Cross-stream intelligence boosts ---
+            # Enhancement 1: Emotion boost from emotion_curve data
+            _emotion_peak_energy: float | None = None
+            _emotion_peak_arousal: float | None = None
+            try:
+                emotion_row = fetch_one(
+                    conn,
+                    "SELECT MAX(energy) as peak_energy, "
+                    "MAX(arousal) as peak_arousal "
+                    "FROM emotion_curve WHERE project_id = ? "
+                    "AND start_ms < ? AND end_ms > ?",
+                    (project_id, int(h["end_ms"]), int(h["start_ms"])),
+                )
+                if emotion_row and emotion_row.get("peak_energy"):
+                    _emotion_peak_energy = float(emotion_row["peak_energy"])
+                    _emotion_peak_arousal = float(
+                        emotion_row.get("peak_arousal") or 0.0
+                    )
+                    # Boost score by peak emotion (energy 0-1, add up to 0.5)
+                    emotion_boost = _emotion_peak_energy * 0.5
+                    adjusted_score += emotion_boost
+            except Exception:
+                pass  # emotion_curve may not be populated
+
+            # Enhancement 2: Speech-content alignment detection
+            _has_visual_reference = False
+            try:
+                visual_keywords = [
+                    "look at", "you can see", "right here", "this is",
+                    "let me show", "check this", "dashboard", "screen",
+                    "code", "file", "click",
+                ]
+                trans_rows = fetch_all(
+                    conn,
+                    "SELECT text FROM transcript_segments "
+                    "WHERE project_id = ? "
+                    "AND start_ms < ? AND end_ms > ?",
+                    (project_id, int(h["end_ms"]), int(h["start_ms"])),
+                )
+                full_text = " ".join(
+                    str(r["text"]).lower() for r in trans_rows
+                )
+                _has_visual_reference = any(
+                    kw in full_text for kw in visual_keywords
+                )
+                if _has_visual_reference:
+                    adjusted_score += 0.3  # speech-content alignment boost
+            except Exception:
+                pass  # transcript_segments may not be populated
+
+            # Enhancement 3: Emphasis pause detection (word gaps > 300ms)
+            _emphasis_pauses = 0
+            try:
+                emphasis_count_row = fetch_one(
+                    conn,
+                    "SELECT COUNT(*) as cnt FROM ("
+                    "  SELECT w1.end_ms, w2.start_ms "
+                    "  FROM transcript_words w1 "
+                    "  JOIN transcript_words w2 "
+                    "    ON w2.word_id = w1.word_id + 1 "
+                    "  JOIN transcript_segments ts "
+                    "    ON w1.segment_id = ts.segment_id "
+                    "  WHERE ts.project_id = ? "
+                    "    AND w1.end_ms >= ? AND w1.end_ms <= ? "
+                    "    AND (w2.start_ms - w1.end_ms) > 300"
+                    ")",
+                    (project_id, int(h["start_ms"]), int(h["end_ms"])),
+                )
+                if emphasis_count_row and int(emphasis_count_row["cnt"]) > 0:
+                    _emphasis_pauses = int(emphasis_count_row["cnt"])
+                    emphasis_boost = min(0.3, _emphasis_pauses * 0.1)
+                    adjusted_score += emphasis_boost
+            except Exception:
+                pass  # transcript_words may not be joinable
+
             scored_highlights.append({
                 **dict(h),
                 "_adjusted_score": adjusted_score,
+                "_emotion_peak_energy": _emotion_peak_energy,
+                "_emotion_peak_arousal": _emotion_peak_arousal,
+                "_has_visual_reference": _has_visual_reference,
+                "_emphasis_pauses": _emphasis_pauses,
             })
 
         # Sort by adjusted score descending
@@ -355,6 +438,10 @@ async def clipcannon_find_best_moments(
             if purpose == "hook" and has_face:
                 adjusted_score *= 1.15
 
+            # Extract cross-stream enrichment data from scoring pass
+            _ep_energy = h.get("_emotion_peak_energy")
+            _ep_arousal = h.get("_emotion_peak_arousal")
+
             moment: dict[str, object] = {
                 "rank": rank_idx,
                 "start_ms": h_start,
@@ -368,6 +455,22 @@ async def clipcannon_find_best_moments(
                 "layout": layout_name,
                 "canvas_regions": canvas_regions,
                 "transcript": transcript_text,
+                "emotion_peak": {
+                    "energy": (
+                        float(_ep_energy) if _ep_energy is not None
+                        else None
+                    ),
+                    "arousal": (
+                        float(_ep_arousal) if _ep_arousal is not None
+                        else None
+                    ),
+                },
+                "has_visual_reference": bool(
+                    h.get("_has_visual_reference", False)
+                ),
+                "emphasis_pauses": int(
+                    h.get("_emphasis_pauses", 0) or 0
+                ),
             }
             moments.append(moment)
 
@@ -585,8 +688,11 @@ async def clipcannon_find_cut_points(
     """Find natural edit boundaries near a timestamp.
 
     Searches silence gaps, scene boundaries, sentence endings, and
-    beat positions within the given range. Returns combined cut points
-    sorted by quality: silence_gap > beat_hit > scene_boundary > sentence_end.
+    beat positions within the given range. Applies cross-stream
+    convergence scoring: signals within 500ms are clustered and
+    scored by how many distinct signal types converge (3+ = perfect,
+    2 = excellent, 1 = good). Convergence clusters are merged into
+    a single point at the median timestamp.
 
     Args:
         project_id: Project identifier.
@@ -594,7 +700,7 @@ async def clipcannon_find_cut_points(
         search_range_ms: Search window radius in ms (default 5000).
 
     Returns:
-        Dictionary with ranked cut points.
+        Dictionary with convergence-scored cut points.
     """
     err = _validate_project(project_id)
     if err is not None:
@@ -707,31 +813,68 @@ async def clipcannon_find_cut_points(
     finally:
         conn.close()
 
-    # Deduplicate by ms value, keeping the highest-priority entry
-    # (silence_gap > beat_hit > scene_boundary > sentence_end)
-    type_priority = {"silence_gap": 0, "beat_hit": 1, "scene_boundary": 2, "sentence_end": 3}
-    quality_priority = {"excellent": 0, "good": 1}
+    # --- Cross-stream convergence scoring ---
+    CONVERGENCE_WINDOW_MS = 500
 
-    cut_points.sort(
-        key=lambda cp: (
-            quality_priority.get(str(cp["quality"]), 9),
-            type_priority.get(str(cp["type"]), 9),
-        )
-    )
+    # Group cut points into clusters by proximity
+    cut_points.sort(key=lambda cp: cp["ms"])
+    clusters: list[list[dict[str, object]]] = []
+    current_cluster: list[dict[str, object]] = []
 
-    seen_ms: set[int] = set()
-    unique_points: list[dict[str, object]] = []
     for cp in cut_points:
-        ms_val = int(cp["ms"])
-        if ms_val not in seen_ms:
-            seen_ms.add(ms_val)
-            unique_points.append(cp)
+        if not current_cluster:
+            current_cluster = [cp]
+        elif int(cp["ms"]) - int(current_cluster[0]["ms"]) <= CONVERGENCE_WINDOW_MS:
+            current_cluster.append(cp)
+        else:
+            clusters.append(current_cluster)
+            current_cluster = [cp]
+    if current_cluster:
+        clusters.append(current_cluster)
 
-    # Sort by quality tier, type priority, then proximity to around_ms
-    unique_points.sort(
+    # Score each cluster based on signal convergence
+    scored_points: list[dict[str, object]] = []
+    for cluster in clusters:
+        signal_types = set(str(cp["type"]) for cp in cluster)
+        n_signals = len(signal_types)
+
+        if n_signals >= 3:
+            quality = "perfect"
+        elif n_signals >= 2:
+            quality = "excellent"
+        else:
+            quality = "good"
+
+        # Median timestamp
+        ms_values = sorted(int(cp["ms"]) for cp in cluster)
+        median_ms = ms_values[len(ms_values) // 2]
+
+        # Build merged point
+        merged: dict[str, object] = {
+            "ms": median_ms,
+            "quality": quality,
+        }
+
+        if n_signals > 1:
+            merged["type"] = "convergence"
+            merged["signals"] = sorted(signal_types)
+        else:
+            merged["type"] = cluster[0]["type"]
+
+        # Carry forward metadata from constituent signals
+        for cp in cluster:
+            if cp.get("gap_duration_ms"):
+                merged["gap_duration_ms"] = cp["gap_duration_ms"]
+            if cp.get("text_before"):
+                merged["text_before"] = cp["text_before"]
+
+        scored_points.append(merged)
+
+    # Sort by quality (perfect > excellent > good), then proximity
+    quality_order = {"perfect": 0, "excellent": 1, "good": 2}
+    scored_points.sort(
         key=lambda cp: (
-            quality_priority.get(str(cp["quality"]), 9),
-            type_priority.get(str(cp["type"]), 9),
+            quality_order.get(str(cp["quality"]), 3),
             abs(int(cp["ms"]) - around_ms),
         )
     )
@@ -740,7 +883,7 @@ async def clipcannon_find_cut_points(
         "project_id": project_id,
         "timestamp_ms": around_ms,
         "search_range_ms": search_range_ms,
-        "cut_points": unique_points,
+        "cut_points": scored_points,
     }
 
 

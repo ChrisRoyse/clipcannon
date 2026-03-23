@@ -98,11 +98,14 @@ DISCOVERY_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
         name="clipcannon_find_cut_points",
         description=(
-            "Find natural edit boundaries near a timestamp. "
-            "Searches silence gaps, scene boundaries, and sentence "
-            "endings within a configurable range. Returns cut points "
-            "ranked by quality: silence_gap > scene_boundary > "
-            "sentence_end. No credits charged."
+            "Find natural edit boundaries near a timestamp with "
+            "cross-stream convergence scoring. Searches silence gaps, "
+            "beat hits, scene boundaries, and sentence endings within "
+            "a configurable range. Returns cut points scored by signal "
+            "convergence: 'perfect' when 3+ signals align (silence + "
+            "beat + sentence), 'excellent' for 2 signals, 'good' for "
+            "single signals. Convergence points include all contributing "
+            "signal types. No credits charged."
         ),
         inputSchema={
             "type": "object",
