@@ -121,9 +121,26 @@ async def clipcannon_ingest(
             err_conn.close()
         return _error("PIPELINE_ERROR", f"Pipeline failed: {exc}")
 
+    # Update project status based on pipeline result
+    final_status = "ready" if result.success else "ready_degraded"
+    if result.failed_required:
+        final_status = "error"
+
+    status_conn = get_connection(db, enable_vec=False, dict_rows=False)
+    try:
+        execute(
+            status_conn,
+            "UPDATE project SET status = ?, updated_at = datetime('now') "
+            "WHERE project_id = ?",
+            (final_status, project_id),
+        )
+        status_conn.commit()
+    finally:
+        status_conn.close()
+
     return {
         "project_id": project_id,
-        "status": "ready" if result.success else "error",
+        "status": final_status,
         "pipeline_success": result.success,
         "total_duration_ms": result.total_duration_ms,
         "stages_completed": len([s for s in result.stage_results.values() if s.success]),

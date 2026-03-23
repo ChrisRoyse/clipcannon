@@ -17,10 +17,24 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
+
+from clipcannon.pipeline.orchestrator import StageResult
+from clipcannon.provenance import (
+    ExecutionInfo,
+    InputInfo,
+    OutputInfo,
+    record_provenance,
+    sha256_string,
+)
+
+if TYPE_CHECKING:
+    from clipcannon.config import ClipCannonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -373,8 +387,8 @@ def _build_canvas_regions(
 # ============================================================
 # HELPERS
 # ============================================================
-def _ensure_scene_map_table(db_path: str) -> None:
-    conn = sqlite3.connect(db_path)
+def _ensure_scene_map_table(db_path: Path) -> None:
+    conn = sqlite3.connect(str(db_path))
     try:
         conn.execute(_CREATE_TABLE_SQL)
         conn.execute(
@@ -389,9 +403,9 @@ def _parse_frame_number(frame_path: Path) -> int:
     return int(frame_path.stem.split("_")[1])
 
 
-def _get_transcript_segments(db_path: str, project_id: str) -> list[dict[str, object]]:
+def _get_transcript_segments(db_path: Path, project_id: str) -> list[dict[str, object]]:
     segments: list[dict[str, object]] = []
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -465,8 +479,8 @@ def _detect_scene_boundaries(
     return scenes
 
 
-def _store_scene_records(db_path: str, records: list[dict[str, object]]) -> None:
-    conn = sqlite3.connect(db_path)
+def _store_scene_records(db_path: Path, records: list[dict[str, object]]) -> None:
+    conn = sqlite3.connect(str(db_path))
     try:
         for rec in records:
             face, webcam, content = rec["face"], rec["webcam"], rec["content"]
@@ -490,160 +504,217 @@ def _store_scene_records(db_path: str, records: list[dict[str, object]]) -> None
 # MAIN PIPELINE STAGE
 # ============================================================
 async def run_scene_analysis(
-    project_id: str, db_path: str, project_dir: str,
-    config: object, **kwargs: object,
-) -> dict[str, object]:
+    project_id: str,
+    db_path: Path,
+    project_dir: Path,
+    config: ClipCannonConfig,
+) -> StageResult:
     """Run scene analysis on all extracted frames.
 
     Performance-optimized: downsamples frames to 720p for analysis,
     reuses MediaPipe detector across all scenes, and only runs
     face detection on scene representative frames.
+
+    Args:
+        project_id: Project identifier.
+        db_path: Path to the project database.
+        project_dir: Path to the project directory.
+        config: ClipCannon configuration.
+
+    Returns:
+        StageResult indicating success or failure.
     """
-    frames_dir = Path(project_dir) / "frames"
-    if not frames_dir.exists():
-        raise FileNotFoundError(f"Frames directory not found: {frames_dir}")
+    start_time = time.monotonic()
+    operation = "scene_analysis"
 
-    frame_files = sorted(frames_dir.glob("frame_*.jpg"))
-    if not frame_files:
-        raise ValueError("No frames found")
-
-    fps = 2.0
-
-    # Get source resolution from DB
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
     try:
-        row = conn.execute(
-            "SELECT resolution FROM project WHERE project_id = ?",
-            (project_id,),
-        ).fetchone()
-    finally:
-        conn.close()
+        frames_dir = project_dir / "frames"
+        if not frames_dir.exists():
+            raise FileNotFoundError(f"Frames directory not found: {frames_dir}")
 
-    if row is None:
-        raise ValueError(f"Project not found: {project_id}")
+        frame_files = sorted(frames_dir.glob("frame_*.jpg"))
+        if not frame_files:
+            raise ValueError("No frames found")
 
-    res = str(row["resolution"]).split("x")
-    frame_w, frame_h = int(res[0]), int(res[1])
+        fps = 2.0
 
-    logger.info(
-        "Scene analysis: %d frames, %dx%d source, downsampling to %dx%d",
-        len(frame_files), frame_w, frame_h, ANALYSIS_W, ANALYSIS_H,
-    )
+        # Get source resolution from DB
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT resolution FROM project WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()
+        finally:
+            conn.close()
 
-    _ensure_scene_map_table(db_path)
+        if row is None:
+            raise ValueError(f"Project not found: {project_id}")
 
-    # Clear old data
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.execute("DELETE FROM scene_map WHERE project_id = ?", (project_id,))
-        conn.commit()
-    finally:
-        conn.close()
+        res = str(row["resolution"]).split("x")
+        frame_w, frame_h = int(res[0]), int(res[1])
 
-    transcript_segments = _get_transcript_segments(db_path, project_id)
+        logger.info(
+            "Scene analysis: %d frames, %dx%d source, downsampling to %dx%d",
+            len(frame_files), frame_w, frame_h, ANALYSIS_W, ANALYSIS_H,
+        )
 
-    # Phase 1: Scene boundary detection (uses downsampled SSIM)
-    scenes = _detect_scene_boundaries(frame_files, fps)
-    logger.info("Detected %d scenes from %d frames", len(scenes), len(frame_files))
+        _ensure_scene_map_table(db_path)
 
-    # Phase 2: Face detection (reuse detector, one call per scene)
-    detector = None
-    try:
-        detector = _create_face_detector()
-    except FileNotFoundError:
-        logger.warning("BlazeFace model not found - skipping face detection")
-    except Exception as exc:
-        logger.warning("Face detector creation failed: %s", exc)
+        # Clear old data
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("DELETE FROM scene_map WHERE project_id = ?", (project_id,))
+            conn.commit()
+        finally:
+            conn.close()
 
-    webcam_detections: list[dict[str, int]] = []
-    for scene in scenes:
-        mid_idx = scene["mid_frame_idx"]
-        mid_path = frame_files[mid_idx]
+        transcript_segments = _get_transcript_segments(db_path, project_id)
 
-        face = None
+        # Phase 1: Scene boundary detection (uses downsampled SSIM)
+        scenes = _detect_scene_boundaries(frame_files, fps)
+        logger.info("Detected %d scenes from %d frames", len(scenes), len(frame_files))
+
+        # Phase 2: Face detection (reuse detector, one call per scene)
+        detector = None
+        try:
+            detector = _create_face_detector()
+        except FileNotFoundError:
+            logger.warning("BlazeFace model not found - skipping face detection")
+        except Exception as exc:
+            logger.warning("Face detector creation failed: %s", exc)
+
+        webcam_detections: list[dict[str, int]] = []
+        for scene in scenes:
+            mid_idx = scene["mid_frame_idx"]
+            mid_path = frame_files[mid_idx]
+
+            face = None
+            if detector is not None:
+                try:
+                    face = _detect_face_with_detector(
+                        detector, mid_path, frame_w, frame_h,
+                    )
+                except Exception as exc:
+                    logger.debug("Face detection failed for scene: %s", exc)
+
+            scene["face"] = face
+            if face is not None:
+                webcam = _detect_webcam_region(face, frame_w, frame_h)
+                webcam_detections.append(webcam)
+
+        # Close detector
         if detector is not None:
-            try:
-                face = _detect_face_with_detector(
-                    detector, mid_path, frame_w, frame_h,
-                )
-            except Exception as exc:
-                logger.debug("Face detection failed for scene: %s", exc)
+            import contextlib
+            with contextlib.suppress(Exception):
+                detector.close()
 
-        scene["face"] = face
-        if face is not None:
-            webcam = _detect_webcam_region(face, frame_w, frame_h)
-            webcam_detections.append(webcam)
+        # Stable webcam region (median of detections)
+        stable_webcam: dict[str, int] | None = None
+        if webcam_detections:
+            stable_webcam = {
+                "x": int(np.median([w["x"] for w in webcam_detections])),
+                "y": int(np.median([w["y"] for w in webcam_detections])),
+                "w": int(np.median([w["w"] for w in webcam_detections])),
+                "h": int(np.median([w["h"] for w in webcam_detections])),
+            }
 
-    # Close detector
-    if detector is not None:
-        import contextlib
-        with contextlib.suppress(Exception):
-            detector.close()
+        # Phase 3: Content detection + canvas pre-computation
+        scene_records: list[dict[str, object]] = []
 
-    # Stable webcam region (median of detections)
-    stable_webcam: dict[str, int] | None = None
-    if webcam_detections:
-        stable_webcam = {
-            "x": int(np.median([w["x"] for w in webcam_detections])),
-            "y": int(np.median([w["y"] for w in webcam_detections])),
-            "w": int(np.median([w["w"] for w in webcam_detections])),
-            "h": int(np.median([w["h"] for w in webcam_detections])),
-        }
+        for scene in scenes:
+            mid_idx = scene["mid_frame_idx"]
+            start_idx = scene["start_frame"]
 
-    # Phase 3: Content detection + canvas pre-computation
-    scene_records: list[dict[str, object]] = []
+            mid_frame = cv2.imread(str(frame_files[mid_idx]))
+            start_frame = cv2.imread(str(frame_files[start_idx]))
 
-    for scene in scenes:
-        mid_idx = scene["mid_frame_idx"]
-        start_idx = scene["start_frame"]
+            content = _detect_content_region(
+                mid_frame, start_frame, stable_webcam, frame_w, frame_h,
+            )
 
-        mid_frame = cv2.imread(str(frame_files[mid_idx]))
-        start_frame = cv2.imread(str(frame_files[start_idx]))
+            face = scene.get("face")
+            canvas = _build_canvas_regions(
+                face, stable_webcam, content, frame_w, frame_h,
+            )
 
-        content = _detect_content_region(
-            mid_frame, start_frame, stable_webcam, frame_w, frame_h,
+            # Layout recommendation
+            layout = "A"
+            if face is not None:
+                face_area_pct = (int(face["w"]) * int(face["h"])) / (frame_w * frame_h) * 100
+                layout = "A" if face_area_pct > 5 else "C"
+
+            # Transcript alignment
+            scene_text_parts: list[str] = []
+            for seg in transcript_segments:
+                if int(seg["end_ms"]) > scene["start_ms"] and int(seg["start_ms"]) < scene["end_ms"]:
+                    scene_text_parts.append(str(seg["text"]))
+
+            scene_records.append({
+                "project_id": project_id,
+                "start_ms": scene["start_ms"],
+                "end_ms": scene["end_ms"],
+                "face": face,
+                "webcam": stable_webcam,
+                "content": content,
+                "layout": layout,
+                "canvas": canvas,
+                "transcript": " ".join(scene_text_parts),
+            })
+
+        _store_scene_records(db_path, scene_records)
+
+        elapsed_ms = int((time.monotonic() - start_time) * 1000)
+
+        logger.info(
+            "Scene analysis complete: %d scenes, webcam=%s, took %d ms",
+            len(scene_records),
+            "detected" if stable_webcam else "not found",
+            elapsed_ms,
         )
 
-        face = scene.get("face")
-        canvas = _build_canvas_regions(
-            face, stable_webcam, content, frame_w, frame_h,
+        content_hash = sha256_string(
+            f"scenes:{len(scene_records)},webcam:{stable_webcam is not None}",
         )
 
-        # Layout recommendation
-        layout = "A"
-        if face is not None:
-            face_area_pct = (int(face["w"]) * int(face["h"])) / (frame_w * frame_h) * 100
-            layout = "A" if face_area_pct > 5 else "C"
+        record_id = record_provenance(
+            db_path=db_path,
+            project_id=project_id,
+            operation=operation,
+            stage="scene_detector",
+            input_info=InputInfo(
+                file_path=str(frames_dir),
+                sha256=sha256_string(
+                    "\n".join(f.name for f in frame_files),
+                ),
+            ),
+            output_info=OutputInfo(
+                sha256=content_hash,
+                record_count=len(scene_records),
+            ),
+            execution_info=ExecutionInfo(duration_ms=elapsed_ms),
+            parent_record_id=None,
+            description=(
+                f"Scene analysis detected {len(scene_records)} scenes, "
+                f"webcam={'detected' if stable_webcam else 'not found'}"
+            ),
+        )
 
-        # Transcript alignment
-        scene_text_parts: list[str] = []
-        for seg in transcript_segments:
-            if int(seg["end_ms"]) > scene["start_ms"] and int(seg["start_ms"]) < scene["end_ms"]:
-                scene_text_parts.append(str(seg["text"]))
+        return StageResult(
+            success=True,
+            operation=operation,
+            duration_ms=elapsed_ms,
+            provenance_record_id=record_id,
+        )
 
-        scene_records.append({
-            "project_id": project_id,
-            "start_ms": scene["start_ms"],
-            "end_ms": scene["end_ms"],
-            "face": face,
-            "webcam": stable_webcam,
-            "content": content,
-            "layout": layout,
-            "canvas": canvas,
-            "transcript": " ".join(scene_text_parts),
-        })
-
-    _store_scene_records(db_path, scene_records)
-
-    logger.info(
-        "Scene analysis complete: %d scenes, webcam=%s",
-        len(scene_records),
-        "detected" if stable_webcam else "not found",
-    )
-
-    return {
-        "scenes_detected": len(scene_records),
-        "webcam_detected": stable_webcam is not None,
-        "webcam_region": stable_webcam,
-    }
+    except Exception as exc:
+        elapsed_ms = int((time.monotonic() - start_time) * 1000)
+        error_msg = f"{type(exc).__name__}: {exc}"
+        logger.error("Scene analysis failed after %d ms: %s", elapsed_ms, error_msg)
+        return StageResult(
+            success=False,
+            operation=operation,
+            error_message=error_msg,
+            duration_ms=elapsed_ms,
+        )

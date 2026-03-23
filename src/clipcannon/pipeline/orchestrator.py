@@ -79,6 +79,7 @@ class PipelineStage:
         depends_on: Stage names that must complete successfully first.
         run: Async function implementing the stage logic.
         fallback_values: Values to record if an optional stage fails.
+        timeout_s: Maximum seconds before the stage is killed. Default 600.
     """
 
     name: str
@@ -87,6 +88,7 @@ class PipelineStage:
     depends_on: list[str] = field(default_factory=list)
     run: StageRunFn | None = None
     fallback_values: dict[str, object] | None = None
+    timeout_s: int = 600
 
 
 # Re-export for backward compatibility with tests
@@ -341,7 +343,10 @@ class PipelineOrchestrator:
                     operation=stage.operation,
                 )
 
-            result = await stage.run(project_id, db_path, project_dir, self.config)
+            result = await asyncio.wait_for(
+                stage.run(project_id, db_path, project_dir, self.config),
+                timeout=stage.timeout_s,
+            )
             elapsed_ms = int((time.monotonic() - start) * 1000)
             result.duration_ms = elapsed_ms
 
@@ -363,6 +368,35 @@ class PipelineOrchestrator:
                 f": {result.error_message}" if result.error_message else "",
             )
             return result
+
+        except asyncio.TimeoutError:
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            error_msg = (
+                f"Stage '{stage.name}' timed out after {stage.timeout_s}s"
+            )
+            logger.error(error_msg)
+            update_stream_status(
+                db_path,
+                project_id,
+                stage.name,
+                "failed",
+                error_message=error_msg,
+                duration_ms=elapsed_ms,
+            )
+
+            if stage.required:
+                raise PipelineError(
+                    error_msg,
+                    stage_name=stage.name,
+                    operation=stage.operation,
+                )
+
+            return StageResult(
+                success=False,
+                operation=stage.operation,
+                error_message=error_msg,
+                duration_ms=elapsed_ms,
+            )
 
         except PipelineError:
             raise

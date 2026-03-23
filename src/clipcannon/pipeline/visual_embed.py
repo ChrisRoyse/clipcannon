@@ -372,6 +372,23 @@ async def run_visual_embed(
             device,
         )
 
+        # Clear old data before inserting (idempotent re-runs)
+        conn = get_connection(db_path, enable_vec=True, dict_rows=True)
+        try:
+            conn.execute(
+                "DELETE FROM vec_frames WHERE project_id = ?",
+                (project_id,),
+            )
+            conn.execute(
+                "DELETE FROM scenes WHERE project_id = ?",
+                (project_id,),
+            )
+            conn.commit()
+        except Exception as exc:
+            logger.debug("Pre-cleanup skipped (tables may not exist yet): %s", exc)
+        finally:
+            conn.close()
+
         # Insert embeddings into vec_frames
         conn = get_connection(db_path, enable_vec=True, dict_rows=True)
         try:

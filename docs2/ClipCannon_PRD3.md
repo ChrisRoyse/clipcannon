@@ -344,6 +344,8 @@ The database references disk files by path. Disk files are classified by tier (S
 
 ### 7.4 Database Schema (analysis.db)
 
+> **Phase 2 Status:** 31 database tables total (23 core + 4 vector + 4 editing/rendering). Phase 2 added: schema_version, edits, edit_segments, renders, audio_assets, scene_map. The publish_queue and session_state tables shown below are Phase 3 design.
+
 The entire project analysis is stored in a single SQLite database with sqlite-vec for vector columns. All MCP tools query this database internally and return results as JSON (under 25K tokens per response).
 
 -- ============================================================
@@ -354,6 +356,14 @@ PRAGMA journal_mode=WAL;          -- Concurrent reads during pipeline writes
 PRAGMA synchronous=NORMAL;        -- Performance + safety balance
 PRAGMA cache_size=-64000;         -- 64MB cache
 PRAGMA foreign_keys=ON;
+
+-- ============================================================
+-- SCHEMA VERSION TRACKING
+-- ============================================================
+CREATE TABLE schema_version (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 -- ============================================================
 -- PROJECT METADATA
@@ -715,41 +725,102 @@ CREATE TABLE edits (
     FOREIGN KEY (project_id) REFERENCES project(project_id)
 );
 
-CREATE TABLE renders (
-    render_id TEXT PRIMARY KEY,
+-- EDIT SEGMENTS (Phase 2: timeline entries within an edit)
+CREATE TABLE edit_segments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     edit_id TEXT NOT NULL,
-    output_path TEXT,
-    output_sha256 TEXT,
-    thumbnail_path TEXT,
-    duration_ms INTEGER,
-    file_size_bytes INTEGER,
-    status TEXT DEFAULT 'pending',
-    started_at TEXT,
-    completed_at TEXT,
+    segment_order INTEGER NOT NULL,
+    source_start_ms INTEGER NOT NULL,
+    source_end_ms INTEGER NOT NULL,
+    output_start_ms INTEGER NOT NULL,
+    speed REAL DEFAULT 1.0,
+    transition_in_type TEXT,
+    transition_in_duration_ms INTEGER,
+    transition_out_type TEXT,
+    transition_out_duration_ms INTEGER,
     FOREIGN KEY (edit_id) REFERENCES edits(edit_id)
 );
 
-CREATE TABLE publish_queue (
-    queue_id TEXT PRIMARY KEY,
-    render_id TEXT NOT NULL,
-    platform TEXT NOT NULL,
-    metadata TEXT NOT NULL,          -- JSON: title, description, hashtags
-    scheduled_time TEXT,
-    status TEXT DEFAULT 'pending_review',
-    published_at TEXT,
-    platform_post_id TEXT,
-    FOREIGN KEY (render_id) REFERENCES renders(render_id)
+CREATE TABLE renders (
+    render_id TEXT PRIMARY KEY,
+    edit_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    profile TEXT NOT NULL,
+    output_path TEXT,
+    output_sha256 TEXT,
+    file_size_bytes INTEGER,
+    duration_ms INTEGER,
+    resolution TEXT,
+    codec TEXT,
+    thumbnail_path TEXT,
+    render_duration_ms INTEGER,
+    error_message TEXT,
+    provenance_record_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT,
+    FOREIGN KEY (edit_id) REFERENCES edits(edit_id),
+    FOREIGN KEY (project_id) REFERENCES project(project_id)
 );
 
+-- AUDIO ASSETS (Phase 2: generated music, SFX, etc.)
+CREATE TABLE audio_assets (
+    asset_id TEXT PRIMARY KEY,
+    edit_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    sample_rate INTEGER DEFAULT 44100,
+    model_used TEXT,
+    generation_params TEXT,
+    seed INTEGER,
+    volume_db REAL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (edit_id) REFERENCES edits(edit_id),
+    FOREIGN KEY (project_id) REFERENCES project(project_id)
+);
+
+-- SCENE MAP (Phase 2: scene analysis with face/content detection for smart crop)
+CREATE TABLE scene_map (
+    scene_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    face_x INTEGER, face_y INTEGER, face_w INTEGER, face_h INTEGER,
+    face_confidence REAL,
+    webcam_x INTEGER, webcam_y INTEGER, webcam_w INTEGER, webcam_h INTEGER,
+    content_x INTEGER, content_y INTEGER, content_w INTEGER, content_h INTEGER,
+    content_type TEXT DEFAULT 'unknown',
+    visible_text TEXT DEFAULT '[]',
+    layout_recommendation TEXT DEFAULT 'A',
+    canvas_regions_json TEXT DEFAULT '{}',
+    transcript_text TEXT DEFAULT '',
+    FOREIGN KEY (project_id) REFERENCES project(project_id)
+);
+
+-- Phase 3 (not yet implemented):
+-- CREATE TABLE publish_queue (
+--     queue_id TEXT PRIMARY KEY,
+--     render_id TEXT NOT NULL,
+--     platform TEXT NOT NULL,
+--     metadata TEXT NOT NULL,          -- JSON: title, description, hashtags
+--     scheduled_time TEXT,
+--     status TEXT DEFAULT 'pending_review',
+--     published_at TEXT,
+--     platform_post_id TEXT,
+--     FOREIGN KEY (render_id) REFERENCES renders(render_id)
+-- );
+
+-- Phase 3 (not yet implemented):
 -- ============================================================
 -- SESSION STATE (for context eviction recovery, Section 8.1)
 -- ============================================================
-CREATE TABLE session_state (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
+-- CREATE TABLE session_state (
+--     key TEXT PRIMARY KEY,
+--     value TEXT NOT NULL,
+--     updated_at TEXT DEFAULT (datetime('now'))
+-- );
 -- Stores: clip_registry, current_task, pinned_manifest
 
 -- ============================================================
@@ -773,9 +844,9 @@ Database size estimate (4-hour video):
 | vec_emotion (14,400 × 1024-dim float32) | 14,400 | ~59 MB |
 | vec_semantic (~2,000 × 768-dim float32) | 2,000 | ~6 MB |
 | vec_speakers (~2,000 × 512-dim float32) | 2,000 | ~4 MB |
-| All metadata tables | ~50,000 rows total | ~20 MB |
+| All metadata tables (23 core + 4 editing/rendering) | ~50,000 rows total | ~20 MB |
 | Provenance records | ~20 | <1 MB |
-| Total analysis.db |  | ~250-350 MB |
+| Total analysis.db (31 tables) |  | ~250-350 MB |
 
 Query performance (sqlite-vec brute-force on 28,800 vectors at 1152-dim): ~5-15ms per KNN query. All metadata queries via standard SQL indexes: <5ms.
 

@@ -6,14 +6,87 @@ Supported canvases: **1080x1920** (9:16), **1920x1080** (16:9), **3840x2160** (4
 
 **Think like a director. Use every tool. Iterate on previews. Match visuals to what the speaker is saying.**
 
-1. Every cut/layout/zoom is a storytelling decision — ask "what must the viewer see NOW?"
-2. Combine auto-trim, color, motion, overlays, audio cleanup, and layouts — not just cuts
+1. Every cut/layout/zoom is a storytelling decision -- ask "what must the viewer see NOW?"
+2. Combine auto-trim, color, motion, overlays, audio cleanup, and layouts -- not just cuts
 3. Always preview before rendering: `preview_layout` (~300ms), `preview_clip` (~1s), `inspect_render` after
-4. Read the transcript — the words drive the visuals. "Look at this dashboard" = dashboard dominant. "I built this" = face dominant.
+4. Read the transcript -- the words drive the visuals. "Look at this dashboard" = dashboard dominant. "I built this" = face dominant.
+5. **Design for silent viewing first** -- 85% of users watch without sound. Bold captions and visual storytelling must carry the message alone.
+6. **Engineer the first 3 seconds obsessively** -- 50% of viewers decide to stay or leave in this window. This is the single highest-leverage edit.
 
 ---
 
-## 1. Platform Safe Zones
+## 1. Viral Video Science
+
+### The Retention Curve
+
+Every video follows the same drop-off pattern. Your editing decisions fight this curve:
+
+```
+100% |X
+     | X
+ 70% |  X.............. <- 3-second gate (50% leave if hook fails)
+     |   \
+ 50% |    \............ <- 8-second commitment point
+     |     \
+ 30% |      \.......... <- Mid-video plateau (keep flat with pattern interrupts)
+     |       \
+ 10% |        \________ <- End drop (satisfied viewers leave early)
+  0% +--+--+--+--+--+--
+     0s  3s  8s  30s 60s end
+```
+
+**Benchmarks:**
+- 70%+ completion rate at 3s = 3x more algorithmic reach (TikTok)
+- 85%+ at 3s = viral potential
+- Below 60% at 3s = minimal promotion
+- Average YouTube video retains only 23.7% of viewers overall
+- Short-form (15-30s) can achieve 80%+ retention with proper editing
+
+### Algorithm Signal Priority (All Platforms)
+
+| Rank | Signal | Why It Matters |
+|---|---|---|
+| 1 | **Watch time / completion %** | 40-50% of algorithm weight on TikTok. THE metric. |
+| 2 | **Shares / DM sends** | Instagram: DM shares are THE strongest signal for new audience reach |
+| 3 | **Saves** | High-intent signal: viewer plans to return |
+| 4 | **Comments** | Active engagement, drives discussion |
+| 5 | **Replays / loops** | YouTube Shorts counts each loop as a new view |
+| 6 | **Likes** | Weakest signal -- passive, low effort |
+
+**Key insight: Every editing decision should maximize watch time.** Cuts, zooms, text overlays, and layout switches exist to prevent the viewer from swiping away.
+
+### Viral Content Structure: Hook-Body-CTA
+
+93% of viral content follows this framework:
+
+```
+HOOK (0-3s)     Stop the scroll. Pattern interrupt. Curiosity gap.
+                "You're doing X wrong" / shocking stat / bold visual
+
+SETUP (3-8s)    Establish tension or context. Validate the hook.
+                Show WHY viewer should care.
+
+BODY (8s-end-5s) Deliver on the promise. Pattern interrupts every 5-8s.
+                 Dynamic layout changes. Zoom to emphasize.
+
+CTA (last 3-5s) Specific action. "Send this to..." outperforms "like and subscribe"
+```
+
+**Looping structure** (advanced): Design the ending to visually or narratively lead back into the first frame. Looping Shorts push past 100% retention.
+
+### What Makes Content Go Viral
+
+| Theme | Why It Works | ClipCannon Approach |
+|---|---|---|
+| Educational/How-to | Drives shares ("send to someone who needs this") | Screen-dominant layouts (A/C), zoom to readable text, clear captions |
+| Before/After | Visual payoff drives completion | Split layout progression, color grade shift between before/after |
+| Bold contrarian take | Creates curiosity gap + comment debate | Face-dominant hook (D), data overlays, strong caption emphasis |
+| Step-by-step demo | High save rate, high completion | Dynamic switching (E), number overlays, scene-per-step |
+| Storytelling/narrative | Tension holds viewers through mid-section | Face hook, progressive reveals, music builds |
+
+---
+
+## 2. Platform Safe Zones
 
 | Platform | Safe Zone (x1,y1)→(x2,y2) | Right Danger | Bottom Danger | Top Danger |
 |---|---|---|---|---|
@@ -27,7 +100,7 @@ Supported canvases: **1080x1920** (9:16), **1920x1080** (16:9), **3840x2160** (4
 
 ---
 
-## 2. Layouts
+## 3. Layouts
 
 ### A: 30/70 Split (tutorials)
 Face: (0,0,1080,576). Screen: (0,576,1080,1344). Eye line y=192.
@@ -56,7 +129,7 @@ Transitions: hard cuts only. Min layout: 3s. Max before change: 8s.
 
 ---
 
-## 3. Dead Space Elimination
+## 4. Dead Space Elimination
 
 | Priority | Technique | Notes |
 |---|---|---|
@@ -67,7 +140,7 @@ Transitions: hard cuts only. Min layout: 3s. Max before change: 8s.
 
 ---
 
-## 4. Face Framing
+## 5. Face Framing
 
 ### Headroom
 All layouts: 30-60px (Layout B up to 80px). PIP circle: 10-20px. PIP rect: 15-25px.
@@ -101,7 +174,7 @@ Full-width: 648-864px. PIP circle: 144-192px. PIP rect: 168-224px.
 **Capture the ENTIRE webcam image. Do NOT zoom into face.**
 
 1. Detect exact webcam overlay boundary (x,y,w,h) via face detection
-2. Use those EXACT dimensions as source crop — do NOT subcrop
+2. Use those EXACT dimensions as source crop -- do NOT subcrop
 3. Output region height should match source webcam height (~500-600px)
 4. Crop the webcam overlay OUT of the screen content region to prevent duplicates
 
@@ -109,7 +182,7 @@ Wrong: `source_width=350, source_height=400` (zoomed). Correct: `source_width=56
 
 ---
 
-## 5. Visual-Speech Alignment
+## 6. Visual-Speech Alignment
 
 **The viewer must SEE what the speaker is TALKING ABOUT.**
 
@@ -131,7 +204,7 @@ Rules:
 
 ---
 
-## 6. Screen Content Rules
+## 7. Screen Content Rules
 
 ### Mandatory Crops (always remove from source)
 Browser tab bar (top 40-80px), bookmarks bar (30-40px), address bar (50-60px), OS taskbar (bottom 48px), OS dock (60-80px), OS menu bar (top 25-30px), desktop wallpaper.
@@ -155,19 +228,267 @@ Multiple small readable regions > one tiny full-screen view.
 
 ---
 
-## 7. Platform Strategy
+## 8. Using OCR & Visual Intelligence for Better Edits
 
-| Platform | Duration | Hook | Pacing | Music | Notes |
-|---|---|---|---|---|---|
-| TikTok | 15-60s | 1-3s | 3-5s changes | Energetic 120+ BPM | Text overlays for sound-off. Bold hook. |
-| Instagram | 15-90s | 2-3s | 4-6s changes | Trending audio | More polished than TikTok. Cover frame matters. |
-| YouTube | 30-60s | 2s | 4-7s changes | Optional | Educational. Title critical. Subscribe CTA valuable. |
-| Facebook | 15-60s | 2-3s | 4-6s changes | Optional | **Captions essential** (muted autoplay). Older demo (30-55). |
-| LinkedIn | 30-120s | 3-5s | 6-10s changes | None/subtle | Professional tone. Lead with value. Data resonates. Soft CTA. |
+ClipCannon's OCR pipeline, screen layout detection, and scene analysis give you data-driven intelligence about every frame. Use these to make edits that feel professionally produced.
+
+### What the OCR Pipeline Detects
+
+After `ingest`, the OCR stage (EasyOCR at 1fps) populates two tables:
+
+- **`on_screen_text`**: Every detected text region with timestamp, text content, region position (center_top / center_middle / bottom_third / full_screen), font size (small / medium / large), and confidence score
+- **`text_change_events`**: Slide transitions detected when >50% of on-screen text changes between frames. Includes timestamp and new title text.
+
+### How to Use OCR Data for Viral Edits
+
+**1. Auto-detect chapter/section boundaries from slide transitions**
+
+Use `get_segment_detail` or query `text_change_events` to find where on-screen content changes. These are natural cut points:
+
+```
+get_segment_detail(project_id, start_ms=0, end_ms=300000)
+→ on_screen_text[].change_from_previous = true  ← these are your scene breaks
+```
+
+Each `text_change_event` with `type: "slide_transition"` marks where the presenter moved to a new topic/slide. Use these timestamps as segment boundaries in `create_edit` for edits that respect content structure.
+
+**2. Smart zoom targets from OCR regions**
+
+OCR tells you WHERE text appears and HOW BIG it is. Use this to decide zoom:
+
+| OCR Font Size | OCR Region | Action |
+|---|---|---|
+| small | center_middle | Zoom 2.0-3.0x to that region -- text won't be readable otherwise |
+| medium | center_middle | Zoom 1.5x for emphasis, or leave if full-screen layout |
+| large | center_top | Title text -- use as overlay text or chapter marker |
+| any | bottom_third | Likely UI element or subtitle -- may need to crop out |
+
+**3. Use OCR text as caption/overlay content**
+
+When OCR detects large title text at a slide transition, that text can be used as a `title_card` overlay:
+
+```
+add_overlay(overlay_type="title_card", text="{OCR detected title}", start_ms=..., end_ms=..., animation="fade_in")
+```
+
+This creates professional chapter markers that match the original content.
+
+**4. Detect when to switch layouts using OCR density**
+
+- Many text regions detected → screen-dominant layout (A, C) with zoom
+- Few/no text regions → face-dominant layout (D, B)
+- Slide transition → hard cut to new layout
+
+**5. Use `analyze_frame` for per-frame intelligence**
+
+`analyze_frame(project_id, timestamp_ms)` returns:
+- `content_regions[]`: bounding boxes of text, UI panels, images, empty areas
+- `pip_overlay`: detected webcam PIP position (x, y, width, height, corner, confidence)
+- `frame_width`, `frame_height`
+
+Use this to:
+- Find the exact webcam overlay coordinates for extraction
+- Identify the main content area coordinates for screen crops
+- Detect whether a frame has text-heavy or image-heavy content
+
+**6. Use `get_scene_map` for pre-computed edit intelligence**
+
+`get_scene_map(project_id)` returns per-scene:
+- Face position, webcam region, content area coordinates
+- Pre-computed `canvas_regions` for layouts A/B/C/D (zero manual measurement)
+- `visible_text[]` from OCR -- what's on screen during each scene
+- `layout_recommendation` -- which layout best fits each scene's content
+- `transcript_text` -- what the speaker is saying during each scene
+
+**The scene map is your primary editing intelligence source.** It answers: "What layout should I use, what coordinates, and why?" for every scene.
+
+### OCR-Driven Viral Editing Workflow
+
+```
+1. ingest (runs OCR + scene_analysis automatically)
+2. get_scene_map → for each scene:
+   - visible_text tells you what's on screen
+   - layout_recommendation tells you best layout
+   - canvas_regions gives ready-to-use coordinates
+3. get_editing_context → highlights + silence gaps for cut decisions
+4. For each scene with visible_text:
+   - If text is small → add zoom_in motion effect on that segment
+   - If slide_transition → start new segment, consider title_card overlay
+   - If text references a key point → add bold_centered caption emphasis
+5. create_edit using scene_map canvas_regions directly
+6. preview_layout at OCR-identified key frames → verify text readability
+```
 
 ---
 
-## 8. Captions
+## 9. Pacing & Pattern Interrupts
+
+### Cuts Per Minute by Content Type
+
+| Content Type | Cuts/Min | Cut Interval | Platform |
+|---|---|---|---|
+| High-energy short-form | 15-30 | 2-4s | TikTok |
+| Tutorial with screen | 8-12 | 5-8s | YouTube Shorts, Instagram |
+| Talking head | 4-6 | 10-15s | YouTube, LinkedIn |
+| Educational burst sequence | 15-20 burst | 3-5s burst every 2-3 min | YouTube standard |
+
+### Pattern Interrupts (Retention Weapons)
+
+Pattern interrupts increase watch time by up to 85% and boost conversion rates by 32%. They break the viewer's passive state and force re-engagement.
+
+**Visual pattern interrupts to apply in ClipCannon:**
+
+| Interrupt Type | ClipCannon Implementation | When to Use |
+|---|---|---|
+| Layout switch | Change from A→C→D→B between segments | Every 5-8s in short-form |
+| Zoom punch-in | `add_motion(effect="zoom_in", start_scale=1.0, end_scale=1.5)` | On key words/stats |
+| Text pop | `add_overlay(type="title_card", animation="slide_up")` | Reinforce spoken numbers/stats |
+| Color shift | `color_adjust(saturation=1.3)` on highlight segment | Emotional peak moments |
+| Speed change | `speed: 1.5` for boring sections, `speed: 0.8` for dramatic | Keep pacing tight |
+| B-roll zoom | Screen-only segment with zoom into detail | When speaker references screen |
+
+**Build-and-Release pacing:**
+- Alternate fast-paced segments (2-4s cuts, zoom effects, text pops) with slower informative sections (6-10s, stable layout)
+- This mirrors the attention cycle: stimulate → calm → re-engage
+- Every 2-3 minutes in longer content, insert a "burst sequence" of 5-10 quick cuts
+
+---
+
+## 10. Platform Strategy (Data-Driven)
+
+### TikTok
+
+| Metric | Value |
+|---|---|
+| Optimal length | 15-35s (sweet spot for completion rate) |
+| Hook window | 1-3s (84% of viral TikToks use psychological triggers in first 3s) |
+| Completion threshold | 70%+ for viral promotion, 85%+ for explosive reach |
+| Visual change cadence | Every 3-5s |
+| Music | Energetic 120+ BPM; trending audio gets 3x more reach |
+| Avg daily watch time | 95 min globally, 52 min US |
+| Engagement rate | 3.70% (up 49% YoY) |
+| Algorithm weight | Watch time (~50%), shares (6/10), saves, comments, likes (weakest) |
+
+**Strategy:** Bold hook (Layout D, face close-up), aggressive pacing (3-5s layout changes), trending audio, bold captions for sound-off, CTA in last 3s. A 15-second video watched fully beats a 60-second video watched halfway.
+
+**Auto-trim tuning:** Aggressive -- `pause_threshold_ms=500, merge_gap_ms=200, min_segment_ms=300`
+
+**Color:** `contrast=1.2, saturation=1.15` -- saturated, punchy colors perform best
+
+### Instagram Reels
+
+| Metric | Value |
+|---|---|
+| Optimal length | 60-90s for max engagement and views |
+| Hook window | 2-3s (up to 50% drop in first 3s) |
+| 3s hold rate | 60%+ = 5-10x more total reach |
+| Visual change cadence | Every 4-6s |
+| Music | Trending audio preferred |
+| Engagement rate | 1.23% (Reels specifically) |
+| #1 algorithm signal | Watch time; DM sends/reach is strongest for NEW audience |
+
+**Strategy:** More polished than TikTok. Cover frame matters. 10-second Reel with 80% retention beats a 60-second Reel at 30%. Design for DM shareability ("send this to your [friend who...]").
+
+**Color:** `contrast=1.1, saturation=1.1` -- slightly elevated, polished look
+
+### YouTube Shorts
+
+| Metric | Value |
+|---|---|
+| Optimal length | 30-60s (highest view counts) |
+| Hook window | 2s |
+| Top performer retention | 80-90% completion |
+| "Skippable" threshold | Below 50% completion |
+| Visual change cadence | Every 4-7s |
+| Music | Optional; educational content often better without |
+| Key metric | Every loop counts as a new view |
+
+**Strategy:** Educational content dominates. Title card critical. Subscribe CTA valuable. Design for loops: seamless ending that leads back to start. Median views tripled YoY (86 in 2024 to 268 in 2025).
+
+**Color:** `contrast=1.05, brightness=0.05` -- clean, professional
+
+### YouTube Standard (Long-Form)
+
+| Metric | Value |
+|---|---|
+| Optimal length | 7-15 minutes |
+| Hook window | 8 seconds (viewer decision point) |
+| Average retention | 23.7% (strong intros at 65%+ at 30s = 58% higher avg view duration) |
+| 55% of viewers | Drop off within first 60 seconds regardless of length |
+| Thumbnail CTR avg | 4-6% (7%+ good, 10%+ excellent) |
+
+**Strategy:** Strong intro within 8s. Custom thumbnails with expressive faces (20-30% higher CTR). Pattern interrupts every 2-3 minutes. Chapters aligned to topic changes.
+
+### Facebook
+
+| Metric | Value |
+|---|---|
+| Optimal length | 15-60s Reels, completion rate matters most |
+| Hook window | 2-3s |
+| Key behavior | Muted autoplay -- captions are mandatory |
+| Engagement rate | 0.15% (declining, but saves/shares are powerful) |
+| Algorithm | Every uploaded video auto-classified as Reel since mid-2025 |
+| Audience | Older demo (30-55) |
+| First 1-2 hours | Critical for initial engagement that drives distribution |
+
+**Strategy:** Captions essential (muted autoplay). 80% value-driven content. Lead with the takeaway, not build-up. Saves and shares > reactions.
+
+**Color:** Standard -- `contrast=1.0, saturation=1.0`
+
+### LinkedIn
+
+| Metric | Value |
+|---|---|
+| Optimal length | Under 30s = 200% higher completion; under 2 min for engagement |
+| Hook window | 3-5s (professional, lead with value) |
+| Native video boost | +69% performance, 5x engagement vs other media, 3x vs text |
+| Sound-off viewing | 85% -- captions absolutely mandatory |
+| Engagement rate | 6.5% median (highest of any platform) |
+| Posting sweet spot | 3-8 PM weekdays, peaks Wed-Fri |
+
+**Strategy:** Professional tone. Lead with value/data. Soft CTA. No music or very subtle. Brand/logo visible in first 4s. Short and dense beats long and rambling. Data resonates.
+
+**Auto-trim tuning:** Gentle -- `pause_threshold_ms=1200, merge_gap_ms=200, min_segment_ms=1000`
+
+**Color:** `contrast=1.0, saturation=0.95` -- desaturated, controlled, professional
+
+---
+
+## 11. Hook Engineering (First 3 Seconds)
+
+The hook is the highest-leverage edit. 65% longer watch times and 41% higher completion rates when the 3-second hook lands.
+
+### Hook Types That Work
+
+| Hook Type | Example | Layout | Caption Style |
+|---|---|---|---|
+| Bold statement | "This one feature saved me 40 hours" | D (face close-up) | Large bold text overlay |
+| Question | "Why do 90% of developers get this wrong?" | D | Question as title_card |
+| Pattern interrupt | Unexpected visual, fast zoom, camera shake | D → rapid cut | Bold centered, word highlight |
+| Shocking stat | "Only 3% of videos get this right" | D with stat overlay | Number as overlay, face behind |
+| "You're doing X wrong" | "You're reading docs wrong -- here's why" | D (face, slight lean in) | Bold centered |
+| Before/After tease | Show the end result first | Screen dominant | "Here's how" overlay |
+
+### Hook Implementation in ClipCannon
+
+```
+1. First segment: 0-3000ms, Layout D (full-face), speed=1.0
+2. add_motion(segment_id=0, effect="zoom_in", start_scale=1.0, end_scale=1.15, easing="ease_out")
+3. add_overlay(type="title_card", text="Hook text here", start_ms=200, end_ms=2800,
+   font_size=52, animation="slide_up", animation_duration_ms=300)
+4. Bold caption with word_highlight style for TikTok
+```
+
+### Anti-Patterns (Kill Retention)
+
+- Logos/intros before the hook (viewers leave immediately)
+- "Hey guys, so today I wanted to talk about..." (filler opening)
+- Starting with context instead of payoff (save setup for 3-8s)
+- Slow fade-in (use hard cut into action)
+
+---
+
+## 12. Captions
 
 | Platform | Style | Size | Y Pos | Weight | Stroke | Background |
 |---|---|---|---|---|---|---|
@@ -181,42 +502,49 @@ Multiple small readable regions > one tiny full-screen view.
 
 **Subtitle bar:** font=Inter/Roboto, color=#FFF, bg padded 8-10px v / 16-20px h, radius=6px, max_width=960px, max 2 lines.
 
+**Viral caption strategies:**
+- Kinetic typography (moving text) improves comprehension and stops scrolling
+- Bold text overlays at the start are a cornerstone of 2025-2026 engagement
+- "Send this to..." text prompts drive shares (the #2 algorithm signal)
+- Keep 12-24 characters per line for mobile readability
+- Sans-serif fonts only (Arial, Helvetica, Roboto, Montserrat)
+
 ---
 
-## 9. Video Structure Templates
+## 13. Video Structure Templates
 
 ### TikTok / Instagram (15-60s)
 ```
-0-3s    D   HOOK (face, bold opening)
-3-8s    A/B CONTEXT (split, speaker+screen)
-8-15s   C/A DEMO (screen-dominant, zoom-ins)
-15-25s  E   DETAILS (dynamic, change every 3-5s)
-25-30s  D   CTA (face, call to action)
+0-3s    D   HOOK (face, bold opening, pattern interrupt)
+3-8s    A/B CONTEXT (split, speaker+screen, validate hook)
+8-15s   C/A DEMO (screen-dominant, zoom-ins to OCR text regions)
+15-25s  E   DETAILS (dynamic 3-5s changes, use OCR slide transitions as cut points)
+25-30s  D   CTA (face, "send this to someone who...", specific action)
 ```
 
 ### YouTube Shorts (30-60s)
 ```
-0-2s    D   HOOK
-2-10s   A/B SETUP (credibility)
-10-40s  E   WALKTHROUGH (dynamic, PIP, every 5-7s)
-40-55s  A/B KEY TAKEAWAY
-55-60s  D   CTA (subscribe)
+0-2s    D   HOOK (bold statement or question)
+2-10s   A/B SETUP (credibility, why should viewer care)
+10-40s  E   WALKTHROUGH (dynamic, PIP, every 5-7s, zoom on OCR text)
+40-55s  A/B KEY TAKEAWAY (face+screen, data emphasis)
+55-60s  D   CTA (subscribe, loop back to hook frame for replay)
 ```
 
 ### LinkedIn (30-120s)
 ```
-0-5s    A/B PROFESSIONAL HOOK (lead with value)
-5-30s   C/A DEMO (screen-dominant, every 6-10s)
-30-60s  B/D VALUE EXPLANATION
-60-90s  C   RESULTS/PROOF (metrics)
-90-120s D/B CLOSING (soft CTA)
+0-5s    A/B PROFESSIONAL HOOK (lead with value/data, brand visible)
+5-30s   C/A DEMO (screen-dominant, every 6-10s, zoom on metrics)
+30-60s  B/D VALUE EXPLANATION (face dominant, data overlays)
+60-90s  C   RESULTS/PROOF (metrics, screenshots, zoom to numbers)
+90-120s D/B CLOSING (soft CTA, professional tone)
 ```
 
 Hook and CTA are non-negotiable on all platforms.
 
 ---
 
-## 10. Auto-Trim
+## 14. Auto-Trim
 
 Removes 20 filler words (um, uh, like, basically, literally, actually, you know, i mean, right, okay, so, well, yeah, etc.) and silence gaps.
 
@@ -226,13 +554,20 @@ Removes 20 filler words (um, uh, like, basically, literally, actually, you know,
 | `merge_gap_ms` | 200 | Segments closer → merged |
 | `min_segment_ms` | 500 | Segments shorter → dropped |
 
-Tuning: **Aggressive** (TikTok): 500/200/300. **Gentle** (LinkedIn): 1200/200/1000.
+| Platform | Style | Settings |
+|---|---|---|
+| TikTok | Aggressive | 500/200/300 |
+| Instagram | Moderate | 700/200/400 |
+| YouTube Shorts | Moderate | 800/200/500 |
+| YouTube Standard | Gentle | 1000/200/800 |
+| Facebook | Moderate | 700/200/400 |
+| LinkedIn | Gentle | 1200/200/1000 |
 
 Flow: `auto_trim` → segments[] → `create_edit(segments=segments)`
 
 ---
 
-## 11. Color Grading
+## 15. Color Grading
 
 | Param | Range | Default |
 |---|---|---|
@@ -244,50 +579,59 @@ Flow: `auto_trim` → segments[] → `create_edit(segments=segments)`
 
 Omit `segment_id` for global. Include for per-segment override.
 
-| Platform | Grade |
-|---|---|
-| TikTok | contrast=1.2, saturation=1.15 |
-| Instagram | contrast=1.1, saturation=1.1 |
-| YouTube | contrast=1.05, brightness=0.05 |
-| LinkedIn | contrast=1.0, saturation=0.95 |
+| Platform | Grade | Reasoning |
+|---|---|---|
+| TikTok | contrast=1.2, saturation=1.15 | Punchy, saturated = more stops |
+| Instagram | contrast=1.1, saturation=1.1 | Polished, slightly elevated |
+| YouTube | contrast=1.05, brightness=0.05 | Clean, professional |
+| Facebook | contrast=1.0, saturation=1.0 | Standard, broad audience |
+| LinkedIn | contrast=1.0, saturation=0.95 | Desaturated = professional trust |
+
+**Color pacing tip:** Vary color temperature/saturation across scenes to create visual progression. Static color throughout causes viewer fatigue.
 
 ---
 
-## 12. Motion Effects
+## 16. Motion Effects
 
-| Effect | Use |
-|---|---|
-| `zoom_in` | Emphasis, attention |
-| `zoom_out` | Reveals, establishing |
-| `pan_left/right` | Following content |
-| `pan_up/down` | Scrolling content |
-| `ken_burns` | Cinematic, still images |
+| Effect | Use | Viral Application |
+|---|---|---|
+| `zoom_in` | Emphasis, attention | Punch-in on key words/stats -- #1 viral technique |
+| `zoom_out` | Reveals, establishing | Opening shots, before/after reveals |
+| `pan_left/right` | Following content | Scrolling UI, lists, code |
+| `pan_up/down` | Scrolling content | Long pages, feeds |
+| `ken_burns` | Cinematic, still images | Screenshots, data slides |
 
 Params: `start_scale` (0.5-3.0, default 1.0), `end_scale` (0.5-3.0, default 1.3), `easing` (linear/ease_in/ease_out/ease_in_out).
 
 Guidelines: Subtle=1.0→1.1. Moderate=1.0→1.3. Strong=1.0→2.0 (sparingly). Ken Burns best for stills/screenshots.
 
+**Rule: Every effect must serve a purpose.** Minimalist, purposeful editing outperforms flashy effects. Over-the-top transitions hurt retention.
+
 Pipeline order: motion → color → captions → overlays.
 
 ---
 
-## 13. Overlays
+## 17. Overlays
 
-| Type | Use |
-|---|---|
-| `lower_third` | Speaker ID (name+subtitle) |
-| `title_card` | Chapter titles, intro |
-| `logo` | Brand identity |
-| `watermark` | Attribution (opacity ~0.3) |
-| `cta` | "Subscribe", "Learn More" |
+| Type | Use | Viral Application |
+|---|---|---|
+| `lower_third` | Speaker ID (name+subtitle) | Credibility signal, first 5s |
+| `title_card` | Chapter titles, intro | From OCR slide transitions, section markers |
+| `logo` | Brand identity | First 4s (LinkedIn: +69% performance) |
+| `watermark` | Attribution (opacity ~0.3) | Consistent brand |
+| `cta` | "Subscribe", "Send to a friend" | Last 3-5s, specific action |
 
 Key params: `text`, `position` (bottom_left/center/right, top_left/center/right, center), `start_ms`, `end_ms`, `font_size` (8-200, default 36), `text_color` (#FFF), `bg_color` (#000), `bg_opacity` (0.7), `animation` (none/fade_in/fade_out/slide_up/slide_down), `animation_duration_ms` (500).
 
 Lower thirds: 3-5s duration, fade in 500ms, keep within platform safe zone.
 
+**Stat overlay strategy:** When the speaker mentions a number or percentage, add it as a large title_card overlay (font_size=72, 1-2s duration, slide_up animation). Numbers as visual text are the most shared content element.
+
 ---
 
-## 14. Audio Cleanup
+## 18. Audio Strategy
+
+### Audio Cleanup
 
 | Operation | Filter | Use |
 |---|---|---|
@@ -307,9 +651,34 @@ Audio source priority: vocals.wav > audio_original.wav > audio_16k.wav > any .wa
 | Good mic, quiet room | normalize_loudness |
 | Noisy environment | noise_reduction, normalize_loudness |
 
+### Sound Effects for Retention
+
+Sound design elements that boost retention:
+
+| SFX Type | When to Use | Viral Application |
+|---|---|---|
+| `whoosh` | Scene transitions, layout switches | Signals visual change, prevents passive watching |
+| `impact` | Text pop-ins, stat reveals | Punctuates key moments |
+| `riser` | Building to reveal or key point | Creates anticipation before payoff |
+| `chime` | Notifications, list items | Marks steps in tutorials |
+| `shimmer` | Reveals, before/after transitions | Adds polish to transformation content |
+
+**Rule:** Sync SFX to visual transitions. A whoosh on a layout switch + text pop with impact sound = professional feel that holds attention.
+
+### Music Strategy by Platform
+
+| Platform | Music Approach |
+|---|---|
+| TikTok | Trending audio (3x reach). Energetic 120+ BPM. Act fast -- trends last 1-3 weeks. |
+| Instagram | Trending audio preferred. Match energy to content mood. |
+| YouTube Shorts | Optional. Educational often better without. |
+| YouTube Standard | Background music at -18dB with speech ducking. |
+| Facebook | Optional. Captions matter more than audio. |
+| LinkedIn | None or very subtle ambient. Professional tone. |
+
 ---
 
-## 15. Preview & Inspection
+## 19. Preview & Inspection
 
 **preview_layout**: Single composited frame, ~300ms. Use to validate crop/layout before render.
 
@@ -321,24 +690,32 @@ Workflow: decide coords → preview_layout → adjust → repeat → render → 
 
 ---
 
-## 16. Complete Workflow
+## 20. Complete Workflow
 
 ```
 1. project_create → ingest → wait "ready"
-2. get_editing_context + get_vud_summary + analyze_frame
-3. auto_trim → clean segments
-4. create_edit (segments from auto_trim or manual)
-5. color_adjust + add_motion + add_overlay
-6. audio_cleanup
-7. preview_clip + preview_layout at key points
-8. generate_metadata
-9. render
-10. inspect_render → if issues → modify_edit → re-render
+2. get_scene_map (primary intelligence) + get_editing_context + get_vud_summary
+3. Analyze OCR data: identify slide transitions, text-heavy scenes, zoom targets
+4. auto_trim → clean segments (platform-specific aggressiveness)
+5. create_edit:
+   - Use scene_map canvas_regions for coordinates
+   - Use OCR slide transitions as segment boundaries
+   - Hook = first 3s, Layout D, face close-up
+   - CTA = last 3-5s, Layout D
+   - Dynamic layout switching every 5-8s
+6. color_adjust (platform-specific grade)
+7. add_motion (zoom on key moments, OCR text regions)
+8. add_overlay (title cards from OCR titles, stat overlays, lower third, CTA)
+9. audio_cleanup + generate_sfx (whoosh on transitions, impact on text pops)
+10. preview_clip + preview_layout at hook, CTA, and key transitions
+11. generate_metadata
+12. render
+13. inspect_render → if issues → modify_edit → re-render
 ```
 
 ---
 
-## 17. Quality Checklist
+## 21. Quality Checklist
 
 - No stretching (cover or contain, NEVER stretch)
 - Face centered horizontally (±20px of center)
@@ -346,12 +723,16 @@ Workflow: decide coords → preview_layout → adjust → repeat → render → 
 - Headroom 30-60px, face width 60-80%
 - No duplicate webcam in output
 - No browser chrome / OS taskbar visible
-- All text ≥40px rendered height
+- All text ≥40px rendered height (use OCR font_size data to verify)
 - Captions above platform danger zone, within safe zone
 - No unintentional black bars; dark fill = #0D0D0D
 - Hook in first 3s (Layout D), CTA in last 3-5s (Layout D)
 - Visual change every 3-8s (platform dependent)
 - Captions on all spoken content, accurate within 100ms, max 2 lines
+- **Pattern interrupt every 5-8s in short-form** (layout switch, zoom, text pop, or color shift)
+- **OCR text regions readable** at ≥40px after scaling (zoom if not)
+- **Sound effects synced** to visual transitions
+- **Silent viewing test**: Does the video make sense with captions only, no audio?
 
 ---
 
@@ -377,7 +758,7 @@ Workflow: decide coords → preview_layout → adjust → repeat → render → 
 |---|---|---|---|
 | `cover` | Fill, crop overflow | No | Yes (edges) |
 | `contain` | Fit, letterbox | Yes (fill needed) | No |
-| `stretch` | **NEVER USE** | — | Distorted |
+| `stretch` | **NEVER USE** | -- | Distorted |
 
 | Color Use | Value |
 |---|---|
@@ -388,3 +769,14 @@ Workflow: decide coords → preview_layout → adjust → repeat → render → 
 | Subtitle bg (LinkedIn) | #1A1A1A @80% |
 | Word highlight | #FFD700 or #00E5FF |
 | PIP border | #FFFFFF 3px |
+
+### Platform Quick Stats
+
+| Platform | Optimal Length | Hook Window | Completion Target | Engagement Rate |
+|---|---|---|---|---|
+| TikTok | 15-35s | 1-3s | 70%+ | 3.70% |
+| Instagram | 60-90s | 2-3s | 60%+ at 3s | 1.23% |
+| YouTube Shorts | 30-60s | 2s | 80-90% | -- |
+| YouTube Standard | 7-15min | 8s | 65%+ at 30s | -- |
+| Facebook | 15-60s | 2-3s | completion rate | 0.15% |
+| LinkedIn | <30s or <2min | 3-5s | 200% better <30s | 6.5% |

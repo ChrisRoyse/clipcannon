@@ -1,7 +1,7 @@
 # ClipCannon Implementation Plan
 
-**Version:** 1.1
-**Date:** 2026-03-21
+**Version:** 1.2
+**Date:** 2026-03-22
 **Based on:** ClipCannon PRD v5.0 (PRD1-PRD6)
 
 ---
@@ -14,12 +14,12 @@
 | Metric | Phase 1 | Phase 2 (cumulative) |
 |:-------|:--------|:---------------------|
 | FSV Checks | 750/750 passed | 750/750 passed |
-| Pytest Tests | 181 passed | 296 passed |
+| Pytest Tests | 181 passed | 278 passed |
 | Lint Errors | 0 (ruff) | 0 (ruff) |
-| MCP Tools | 27 | 37 |
-| Pipeline Stages | 20 | 20 |
-| DB Tables | 23 core + 4 vector | 26 core + 4 vector |
-| Source Lines | ~12,000 | ~20,000 |
+| MCP Tools | 25 | 51 |
+| Pipeline Stages | 20 | 21 |
+| DB Tables | 23 core + 4 vector | 23 core + 4 vector + 4 editing/rendering = 31 |
+| Source Lines | ~12,000 | ~25,000 |
 | Encoding Profiles | -- | 7 |
 | Target Platforms | -- | 7 |
 
@@ -107,7 +107,7 @@ clipcannon/
 │   │   ├── config.py                   # Configuration management (JSON config, Pydantic validation, dot-notation access)
 │   │   ├── exceptions.py               # Exception hierarchy: ClipCannonError + 6 subclasses
 │   │   │
-│   │   ├── tools/                      # MCP tool definitions (37 tools across 14 modules)
+│   │   ├── tools/                      # MCP tool definitions (51 tools across 15 modules)
 │   │   │   ├── __init__.py             # Tool registry: ALL_TOOL_DEFINITIONS, TOOL_DISPATCHERS
 │   │   │   ├── project.py              # 5 project tools: create, open, list, status, delete
 │   │   │   ├── understanding.py        # 4 understanding tools: ingest, vud_summary, analytics, transcript
@@ -118,18 +118,19 @@ clipcannon/
 │   │   │   ├── config_tools.py         # 3 config tools: get, set, list
 │   │   │   ├── billing_tools.py        # 4 billing tools: balance, history, estimate, spending_limit
 │   │   │   ├── video_probe.py          # FFprobe wrapper: run_ffprobe, extract_video_metadata, detect_vfr
-│   │   │   ├── editing.py              # Phase 2: 4 editing tools: create_edit, modify_edit, list_edits, generate_metadata
+│   │   │   ├── storyboard.py           # Phase 2: storyboard generation logic
+│   │   │   ├── editing.py              # Phase 2: 11 editing tools
 │   │   │   ├── editing_defs.py         # Phase 2: JSON schema definitions for editing MCP tools
 │   │   │   ├── editing_helpers.py      # Phase 2: Builder functions for EDL construction, DB storage
-│   │   │   ├── rendering.py            # Phase 2: 3 rendering tools: render, render_status, render_batch
+│   │   │   ├── rendering.py            # Phase 2: 11 rendering tools
 │   │   │   ├── rendering_defs.py       # Phase 2: JSON schema definitions for rendering MCP tools
-│   │   │   └── audio.py               # Phase 2: 3 audio tools: generate_music, compose_midi, generate_sfx
+│   │   │   └── audio.py               # Phase 2: 4 audio tools
 │   │   │
-│   │   ├── pipeline/                   # Processing pipeline (20 stages)
+│   │   ├── pipeline/                   # Processing pipeline (21 stages)
 │   │   │   ├── __init__.py             # Re-exports orchestrator, stages, run functions
 │   │   │   ├── orchestrator.py         # DAG-based pipeline runner, StageResult, PipelineResult models
 │   │   │   ├── dag.py                  # Topological sort (Kahn's algorithm), update_stream_status
-│   │   │   ├── registry.py             # Builds pipeline DAG with all 20 stages, build_pipeline function
+│   │   │   ├── registry.py             # Builds pipeline DAG with all 21 stages, build_pipeline function
 │   │   │   ├── source_resolution.py    # Helpers: resolve_source_path, resolve_audio_input
 │   │   │   ├── probe.py                # Stage: FFprobe metadata + VFR detection
 │   │   │   ├── vfr_normalize.py        # Stage: VFR -> CFR normalization via FFmpeg
@@ -150,6 +151,7 @@ clipcannon/
 │   │   │   ├── profanity.py            # Stage: Profanity detection + content safety rating
 │   │   │   ├── highlights.py           # Stage: Multi-signal highlight scoring
 │   │   │   ├── storyboard.py           # Stage: Storyboard grid generation
+│   │   │   ├── scene_analysis.py       # Stage: Scene analysis with face detection and layout recommendations
 │   │   │   └── finalize.py             # Stage: Final status update, marks project ready
 │   │   │
 │   │   ├── billing/                    # Credit billing system
@@ -164,10 +166,43 @@ clipcannon/
 │   │   │   ├── chain.py                # Chain hash computation + verification, GENESIS_HASH
 │   │   │   └── recorder.py             # Provenance record CRUD, Pydantic models
 │   │   │
+│   │   ├── editing/                   # Edit decision engine (Phase 2)
+│   │   │   ├── __init__.py
+│   │   │   ├── edl.py               # EDL models, validation, platform constraints
+│   │   │   ├── captions.py          # Word-level caption chunking, timestamp remapping
+│   │   │   ├── caption_render.py    # ASS subtitle generation, drawtext fallback
+│   │   │   ├── smart_crop.py        # Face-aware cropping, split-screen, PIP
+│   │   │   ├── metadata_gen.py      # Platform-specific metadata generation
+│   │   │   ├── auto_trim.py         # Filler word and silence detection
+│   │   │   ├── motion.py            # Motion effects (zoom, pan, ken_burns)
+│   │   │   ├── overlays.py          # Visual overlay specifications
+│   │   │   ├── subject_extraction.py # AI background removal via rembg
+│   │   │   └── measure_layout.py    # Face detection + canvas region computation
+│   │   │
+│   │   ├── rendering/                 # Video rendering pipeline (Phase 2)
+│   │   │   ├── __init__.py
+│   │   │   ├── renderer.py          # RenderEngine: async render pipeline
+│   │   │   ├── ffmpeg_cmd.py        # FFmpeg command builder (4 layout modes)
+│   │   │   ├── profiles.py          # 7 platform encoding profiles
+│   │   │   ├── batch.py             # Batch rendering (max 3 concurrent)
+│   │   │   ├── thumbnail.py         # JPEG thumbnail generation
+│   │   │   ├── inspector.py         # Render quality inspection
+│   │   │   └── preview.py           # Preview clip and layout generation
+│   │   │
+│   │   ├── audio/                     # Audio generation engine (Phase 2)
+│   │   │   ├── __init__.py
+│   │   │   ├── music_gen.py         # ACE-Step v1.5 AI music generation
+│   │   │   ├── midi_compose.py      # MIDI composition (6 presets)
+│   │   │   ├── midi_render.py       # FluidSynth MIDI -> WAV rendering
+│   │   │   ├── sfx.py              # DSP sound effects (9 types)
+│   │   │   ├── mixer.py            # Audio mixing with speech-aware ducking
+│   │   │   ├── effects.py          # Pedalboard audio effects (5 chains)
+│   │   │   └── cleanup.py          # Audio cleanup operations
+│   │   │
 │   │   ├── db/                         # Database layer
 │   │   │   ├── __init__.py             # Re-exports connection, query, and schema functions
 │   │   │   ├── connection.py           # SQLite connection factory (WAL mode, pragmas, sqlite-vec)
-│   │   │   ├── schema.py               # DDL for 26 core tables + 4 vector tables + indexes (Phase 2: edits, edit_segments, renders, audio_assets)
+│   │   │   ├── schema.py               # DDL for 23 core + 4 vector + 4 editing/rendering tables + indexes (Phase 2: edits, edit_segments, renders, audio_assets)
 │   │   │   └── queries.py              # Parameterized query helpers, transaction context manager
 │   │   │
 │   │   ├── gpu/                        # GPU management
@@ -205,6 +240,15 @@ clipcannon/
 │   ├── dashboard/
 │   │   ├── __init__.py
 │   │   └── test_dashboard.py           # Dashboard tests (pytest)
+│   ├── test_edl.py                    # EDL models validation (pytest)
+│   ├── test_captions.py               # Caption chunking, ASS generation (pytest)
+│   ├── test_smart_crop.py             # Crop regions, face tracking (pytest)
+│   ├── test_editing_tools.py          # Create/modify/list edits (pytest)
+│   ├── test_rendering.py              # Encoding profiles, codec fallback (pytest)
+│   ├── test_audio_generation.py       # SFX types, MIDI presets (pytest)
+│   ├── test_dashboard_phase2.py       # Timeline, editing, review endpoints (pytest)
+│   ├── manual_fsv_full.py             # Comprehensive system-wide FSV
+│   ├── manual_fsv_phase3.py           # Editing, rendering, audio FSV
 │   ├── integration/
 │   │   ├── __init__.py
 │   │   ├── test_full_pipeline.py       # Full pipeline integration tests (pytest)
@@ -429,9 +473,9 @@ Schema version: 1. Connection pragmas: WAL journal mode, NORMAL synchronous, 64M
 
 ### 4.4 Phase 1 Architecture Notes
 
-**MCP Server:** Uses the `mcp` Python library (Server class), NOT FastMCP. The server registers 27 tools via `list_tools()` and `call_tool()` handlers, runs on stdio transport by default (the `clipcannon` console script). Logging uses structured JSON to stderr.
+**MCP Server:** Uses the `mcp` Python library (Server class), NOT FastMCP. The server registers 25 tools (Phase 1) via `list_tools()` and `call_tool()` handlers, runs on stdio transport by default (the `clipcannon` console script). Logging uses structured JSON to stderr. Phase 2 expanded the tool count to 51.
 
-**Pipeline stages:** 20 stages registered in `registry.py` (6 required, 14 optional). The 16 named analysis streams tracked in `stream_status` are: source_separation, visual, ocr, quality, shot_type, transcription, semantic, emotion, speaker, reactions, acoustic, beats, chronemic, storyboards, profanity, highlights. Additional orchestration stages (probe, vfr_normalize, audio_extract, frame_extract, finalize) are part of the DAG but not tracked as named streams.
+**Pipeline stages:** 20 stages registered in `registry.py` in Phase 1 (6 required, 14 optional). Phase 2 added `scene_analysis` for a total of 21 stages. The 16 named analysis streams tracked in `stream_status` are: source_separation, visual, ocr, quality, shot_type, transcription, semantic, emotion, speaker, reactions, acoustic, beats, chronemic, storyboards, profanity, highlights. Additional orchestration stages (probe, vfr_normalize, audio_extract, frame_extract, finalize) are part of the DAG but not tracked as named streams.
 
 **D1 sync:** Phase 1 is local-only. The `d1_sync.py` module provides stub functions that log "D1 sync skipped (local-only mode)". Interface designed for future D1 integration via `CLIPCANNON_D1_API_URL` and `CLIPCANNON_D1_API_TOKEN` environment variables.
 
@@ -452,7 +496,7 @@ ClipCannonError (base)
 
 **Goal:** EDL format, rendering pipeline, caption generation, smart cropping, AI audio generation, full dashboard with review workflow.
 
-**Verified:** 2026-03-21 -- 296 pytest tests (Phase 1: 181 + Phase 2: 102 + integration: 13), all passing. 37 MCP tools, 26 core + 4 vector tables, ~20,000 source lines.
+**Verified:** 2026-03-22 -- 278 pytest tests, all passing. 51 MCP tools, 23 core + 4 vector + 4 editing/rendering = 31 tables, ~25,000 source lines.
 
 ### 5.1 Task Breakdown
 
@@ -542,6 +586,80 @@ ClipCannonError (base)
 | 2.8.1 | Add multi-layer hallucination defense to transcription pipeline | `src/clipcannon/pipeline/transcribe.py` | Done |
 
 **Details:** VAD tuning, confidence thresholds, compression ratio checks, 35 known hallucination phrase rejection, word/segment confidence filtering.
+
+#### 5.1.9 Auto Trim
+
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.9.1 | Implement filler word and silence gap detection | `src/clipcannon/editing/auto_trim.py` | Done |
+| 2.9.2 | Implement clipcannon_auto_trim MCP tool | `src/clipcannon/tools/editing.py` | Done |
+
+#### 5.1.10 Color Grading
+
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.10.1 | Implement per-segment and global color adjustment | `src/clipcannon/editing/edl.py` (ColorSpec) | Done |
+| 2.10.2 | Implement clipcannon_color_adjust MCP tool | `src/clipcannon/tools/editing.py` | Done |
+
+#### 5.1.11 Motion Effects
+
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.11.1 | Implement motion effects (zoom, pan, ken_burns) | `src/clipcannon/editing/motion.py` | Done |
+| 2.11.2 | Implement clipcannon_add_motion MCP tool | `src/clipcannon/tools/editing.py` | Done |
+
+#### 5.1.12 Visual Overlays
+
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.12.1 | Implement overlay specifications (lower_third, title_card, logo, watermark, cta) | `src/clipcannon/editing/overlays.py` | Done |
+| 2.12.2 | Implement clipcannon_add_overlay MCP tool | `src/clipcannon/tools/editing.py` | Done |
+
+#### 5.1.13 Subject Extraction & Background Replacement
+
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.13.1 | Implement AI background removal via rembg | `src/clipcannon/editing/subject_extraction.py` | Done |
+| 2.13.2 | Implement clipcannon_extract_subject MCP tool | `src/clipcannon/tools/editing.py` | Done |
+| 2.13.3 | Implement clipcannon_replace_background MCP tool | `src/clipcannon/tools/editing.py` | Done |
+
+#### 5.1.14 Region Removal
+
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.14.1 | Implement clipcannon_remove_region MCP tool (FFmpeg delogo) | `src/clipcannon/tools/editing.py` | Done |
+
+#### 5.1.15 Audio Cleanup
+
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.15.1 | Implement audio cleanup operations (noise reduction, normalize, silence trim, EQ) | `src/clipcannon/audio/cleanup.py` | Done |
+| 2.15.2 | Implement clipcannon_audio_cleanup MCP tool | `src/clipcannon/tools/audio.py` | Done |
+
+#### 5.1.16 Audio Effects
+
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.16.1 | Implement pedalboard effects pipeline (reverb, compression, EQ, limiter) | `src/clipcannon/audio/effects.py` | Done |
+
+#### 5.1.17 Advanced Rendering Tools
+
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.17.1 | Implement clipcannon_get_editing_context (all editing data in one call) | `src/clipcannon/tools/rendering.py` | Done |
+| 2.17.2 | Implement clipcannon_analyze_frame (content region + webcam detection) | `src/clipcannon/tools/rendering.py` | Done |
+| 2.17.3 | Implement clipcannon_preview_clip (2-5s 540p preview) | `src/clipcannon/rendering/preview.py`, `tools/rendering.py` | Done |
+| 2.17.4 | Implement clipcannon_inspect_render (5-frame quality check) | `src/clipcannon/rendering/inspector.py`, `tools/rendering.py` | Done |
+| 2.17.5 | Implement clipcannon_preview_layout (single JPEG canvas preview) | `src/clipcannon/rendering/preview.py`, `tools/rendering.py` | Done |
+| 2.17.6 | Implement clipcannon_measure_layout (face detection + layout A-D) | `src/clipcannon/editing/measure_layout.py`, `tools/rendering.py` | Done |
+| 2.17.7 | Implement clipcannon_get_storyboard (contact sheet with transcript) | `src/clipcannon/tools/storyboard.py`, `tools/rendering.py` | Done |
+| 2.17.8 | Implement clipcannon_get_scene_map (complete scene analysis) | `src/clipcannon/tools/rendering.py` | Done |
+
+#### 5.1.18 Scene Analysis Pipeline Stage
+
+| Task | Description | Files | Status |
+|:-----|:-----------|:------|:-------|
+| 2.18.1 | Implement scene analysis pipeline stage (face detection, layout recommendations) | `src/clipcannon/pipeline/scene_analysis.py` | Done |
 
 ### 5.2 Phase 2 Success Criteria
 
@@ -741,15 +859,25 @@ Phase 4 is iterative and driven by user feedback from Phase 3 deployment.
 
 ### Phase 1 Testing (Complete)
 
-**Pytest suite** -- 181 tests across 8 files in a flat `tests/` directory:
-- `test_pipeline_stages.py` -- Pipeline stage isolation with synthetic data
-- `test_visual_pipeline.py` -- Visual stream stages
-- `test_derived_stages.py` -- Derived stages (profanity, chronemic, highlights, storyboard, finalize)
-- `test_understanding_tools.py` -- All 9 understanding MCP tools
-- `test_billing.py` -- Credit charge, refund, HMAC, spending limits
-- `test_provenance_integration.py` -- Hash chain computation, verification, tamper detection
-- `dashboard/test_dashboard.py` -- Dashboard endpoint tests
-- `integration/test_full_pipeline.py` -- Full pipeline integration
+**Pytest suite** -- 15 test files, 278 tests:
+
+| File | Tests | Domain |
+|:-----|:------|:-------|
+| test_pipeline_stages.py | 12 | Probe, audio/frame extract, DAG, orchestrator |
+| test_billing.py | 40 | HMAC, credits, license server, D1, Stripe |
+| test_understanding_tools.py | 20 | VUD, analytics, transcript, search |
+| test_provenance_integration.py | 19 | Hash chain, tamper detection |
+| test_visual_pipeline.py | 34 | Storyboard, quality, visual embed, OCR, shot type |
+| test_derived_stages.py | 14 | Profanity, chronemic, highlights, finalize |
+| test_edl.py | 19 | EDL models, validation, platform constraints |
+| test_captions.py | 14 | Caption chunking, ASS generation |
+| test_smart_crop.py | 15 | Crop regions, face tracking, aspect ratios |
+| test_editing_tools.py | 10 | Create/modify/list edits, metadata (async) |
+| test_rendering.py | 14 | Encoding profiles, codec fallback |
+| test_audio_generation.py | 15 | 9 SFX types, 6 MIDI presets |
+| dashboard/test_dashboard.py | 18 | Dashboard endpoints |
+| test_dashboard_phase2.py | 12 | Timeline, editing, review endpoints |
+| integration/test_full_pipeline.py | 22 | Full pipeline with real video |
 
 **FSV scripts** -- 750 checks across 4 standalone scripts:
 - `fsv_core_infrastructure.py` -- 154 checks (exceptions, db, config, gpu, provenance)
@@ -790,8 +918,8 @@ Phase 4 is iterative and driven by user feedback from Phase 3 deployment.
 |  | ClipCannon   |  | License       |  | Dashboard    |   |
 |  | MCP Server   |  | Server        |  | Web UI       |   |
 |  | stdio/SSE    |  | port 3100     |  | port 3200    |   |
-|  | 27 tools     |  | (HTTP)        |  | (HTTP)       |   |
-|  | (Phase 1)    |  | Billing/Auth  |  | Review/      |   |
+|  | 51 tools     |  | (HTTP)        |  | (HTTP)       |   |
+|  | (Phase 1+2)  |  | Billing/Auth  |  | Review/      |   |
 |  |              |  | Credits       |  | Approve      |   |
 |  +------+-------+  +---------------+  +--------------+   |
 |         |                                                |
@@ -836,7 +964,7 @@ Phase 1 only uses the `analyze` operation (10 credits). Other operations are def
 
 ## 12. MCP Tool Inventory
 
-### Phase 1 -- Implemented (27 tools)
+### Phase 1 -- Implemented (25 tools)
 
 | Category | Count | Tools |
 |:---------|:------|:------|
@@ -849,13 +977,20 @@ Phase 1 only uses the `analyze` operation (10 credits). Other operations are def
 | Configuration | 3 | clipcannon_config_get, clipcannon_config_set, clipcannon_config_list |
 | Billing | 4 | clipcannon_credits_balance, clipcannon_credits_history, clipcannon_credits_estimate, clipcannon_spending_limit |
 
-### Phase 2+ -- Planned (not yet implemented)
+### Phase 2 -- Implemented (26 new tools, 51 total)
+
+Note: get_storyboard moved from Understanding to Rendering in Phase 2. get_frame_strip consolidated.
 
 | Category | Count | Tools |
 |:---------|:------|:------|
-| Editing | 6 | clipcannon_create_edit, clipcannon_modify_edit, clipcannon_list_edits, clipcannon_get_edit, clipcannon_delete_edit, clipcannon_generate_metadata |
-| Rendering | 5 | clipcannon_render, clipcannon_render_status, clipcannon_render_batch, clipcannon_render_preview, clipcannon_get_profiles |
-| Audio | 5 | clipcannon_generate_music, clipcannon_compose_midi, clipcannon_generate_sfx, clipcannon_audio_status, clipcannon_list_soundfonts |
+| Editing | 11 | clipcannon_create_edit, clipcannon_modify_edit, clipcannon_list_edits, clipcannon_generate_metadata, clipcannon_auto_trim, clipcannon_color_adjust, clipcannon_add_motion, clipcannon_add_overlay, clipcannon_extract_subject, clipcannon_replace_background, clipcannon_remove_region |
+| Rendering | 11 | clipcannon_render, clipcannon_render_status, clipcannon_render_batch, clipcannon_get_editing_context, clipcannon_analyze_frame, clipcannon_preview_clip, clipcannon_inspect_render, clipcannon_preview_layout, clipcannon_measure_layout, clipcannon_get_storyboard, clipcannon_get_scene_map |
+| Audio | 4 | clipcannon_generate_music, clipcannon_compose_midi, clipcannon_generate_sfx, clipcannon_audio_cleanup |
+
+### Phase 3+ -- Planned (not yet implemented)
+
+| Category | Count | Tools |
+|:---------|:------|:------|
 | Animation | 6 | clipcannon_add_lower_third, clipcannon_add_title_card, clipcannon_add_animation, clipcannon_add_transition, clipcannon_list_animations, clipcannon_list_transitions |
 | Publishing | 8 | clipcannon_publish_review, clipcannon_publish_approve, clipcannon_publish_reject, clipcannon_publish_execute, clipcannon_publish_status, clipcannon_publish_schedule, clipcannon_accounts_connect, clipcannon_accounts_disconnect |
 

@@ -2,11 +2,11 @@
 # PRD: AI-Native Video Editor MCP Server
 
 Product Requirements Document
-**Version: 5.1 Date: 2026-03-21 Product: ClipCannon (clipcannon.com) Author: Product Team**
+**Version: 5.2 Date: 2026-03-22 Product: ClipCannon (clipcannon.com) Author: Product Team**
 
-> **Phase 1 Status**: COMPLETED and VERIFIED on 2026-03-21. 750/750 FSV checks passed. 181 pytest tests pass. 0 lint errors. 27 MCP tools implemented. See [Verification Report](../docs/codestate/12_verification_report.md) for details.
+> **Phase 1 Status**: COMPLETED and VERIFIED on 2026-03-21. 750/750 FSV checks passed. 181 pytest tests pass. 0 lint errors. 25 MCP tools implemented. See [Verification Report](../docs/codestate/12_verification_report.md) for details.
 >
-> **Phase 2 Status**: COMPLETED on 2026-03-21. 296 total pytest tests pass. 37 MCP tools (27 Phase 1 + 10 Phase 2). Editing engine (EDL, captions, smart crop, metadata), rendering engine (7 profiles, NVENC, batch), audio engine (ACE-Step, MIDI, DSP SFX, mixing), anti-hallucination transcription, dashboard expansion (timeline, editing, review APIs).
+> **Phase 2 Status**: COMPLETED on 2026-03-21. 278 total pytest tests pass across 15 files. 51 MCP tools (25 Phase 1 + 26 Phase 2). 21 pipeline stages. 31 database tables. Editing engine (EDL, captions, smart crop, metadata), rendering engine (7 profiles, NVENC, batch), audio engine (ACE-Step, MIDI, DSP SFX, mixing), anti-hallucination transcription, dashboard expansion (timeline, editing, review APIs).
 
 
 
@@ -68,7 +68,7 @@ MCP-integrated: Plugs into any AI model (Claude, GPT, Llama, etc.) via Model Con
                          |                           |
                          |  +---------------------+  |
                          |  |   Tool Registry      |  |
-                         |  | (27 Phase 1, 60+ planned)|  |
+                         |  | (51 implemented, 65+ planned)|  |
                          |  +---------------------+  |
                          |            |               |
                          |  +---------------------+  |
@@ -234,8 +234,8 @@ EXECUTE — The AI writes EDLs and triggers renders
 VERIFY — Check output integrity
 ```
    ├─ Call clipcannon_render_status to confirm success
-   ├─ Call clipcannon_provenance_verify to confirm hash chain integrity
-   └─ Call clipcannon_publish_queue to submit for human review
+   ├─ Call clipcannon_list_edits to review all edits
+   └─ Call clipcannon_provenance_verify to confirm hash chain integrity
 The AI can produce unlimited edits from one video. After Stages 1-3, the full video understanding persists in the AI's context. Every subsequent edit draws from the same understanding — the AI does not need to re-analyze the video. A single 4-hour source video session can produce dozens of clips for multiple platforms.
 ```
 

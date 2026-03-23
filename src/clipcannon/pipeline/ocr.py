@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -135,6 +137,48 @@ def _texts_differ_significantly(
     return len(overlap) / len(total) < 0.5
 
 
+def _readtext_with_timeout(
+    reader: object,
+    ocr_path: str,
+    timeout_s: float = 10.0,
+) -> list[tuple[list[list[float]], str, float]]:
+    """Run EasyOCR readtext with a timeout. Returns empty list on timeout.
+
+    Args:
+        reader: EasyOCR Reader instance.
+        ocr_path: Path to the image file to OCR.
+        timeout_s: Maximum seconds to wait for OCR on a single frame.
+
+    Returns:
+        List of (bbox, text, confidence) tuples, or empty list on timeout.
+    """
+    result_container: list[object] = [None]
+    error_container: list[Exception | None] = [None]
+
+    def _run() -> None:
+        try:
+            result_container[0] = reader.readtext(ocr_path)  # type: ignore[union-attr]
+        except Exception as exc:
+            error_container[0] = exc
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_s)
+
+    if thread.is_alive():
+        logger.warning(
+            "OCR timed out on frame %s after %.0fs, skipping",
+            Path(ocr_path).name,
+            timeout_s,
+        )
+        return []
+
+    if error_container[0] is not None:
+        raise error_container[0]
+
+    return result_container[0] or []  # type: ignore[return-value]
+
+
 def _run_ocr_on_frames(
     frame_paths: list[Path],
     extraction_fps: int,
@@ -160,13 +204,20 @@ def _run_ocr_on_frames(
 
     from PIL import Image
 
+    ocr_start = time.monotonic()
     reader = easyocr.Reader(["en"], gpu=True, verbose=False)
 
     text_records: list[dict[str, object]] = []
     change_events: list[dict[str, object]] = []
     prev_texts: list[str] = []
+    total_frames = len(frame_paths)
 
-    for fp in frame_paths:
+    for idx, fp in enumerate(frame_paths):
+        if idx == 0 or (idx + 1) % 50 == 0:
+            logger.info(
+                "OCR progress: %d/%d frames processed", idx + 1, total_frames,
+            )
+
         ts_ms = _frame_timestamp_ms(fp, extraction_fps)
 
         try:
@@ -180,25 +231,26 @@ def _run_ocr_on_frames(
         # OCR quality is the same at 1280px width as at 4K
         max_ocr_width = 1280
         ocr_path = str(fp)
-        if img_width > max_ocr_width:
-            scale = max_ocr_width / img_width
-            new_w = max_ocr_width
-            new_h = int(img_height * scale)
-            resized = img.resize((new_w, new_h), Image.LANCZOS)
-            import tempfile
-            with tempfile.NamedTemporaryFile(
-                suffix=".jpg", delete=False,
-            ) as tmp:
-                resized.save(tmp.name, "JPEG", quality=85)
-                ocr_path = tmp.name
+        temp_path: str | None = None
+        try:
+            if img_width > max_ocr_width:
+                scale = max_ocr_width / img_width
+                new_w = max_ocr_width
+                new_h = int(img_height * scale)
+                resized = img.resize((new_w, new_h), Image.LANCZOS)
+                with tempfile.NamedTemporaryFile(
+                    suffix=".jpg", delete=False,
+                ) as tmp:
+                    resized.save(tmp.name, "JPEG", quality=85)
+                    temp_path = tmp.name
+                    ocr_path = temp_path
 
-        # EasyOCR returns list of (bbox, text, confidence)
-        # bbox is [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
-        result = reader.readtext(ocr_path)
-
-        # Clean up temp file
-        if ocr_path != str(fp):
-            Path(ocr_path).unlink(missing_ok=True)
+            # EasyOCR returns list of (bbox, text, confidence)
+            # bbox is [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+            result = _readtext_with_timeout(reader, ocr_path, timeout_s=10.0)
+        finally:
+            if temp_path is not None:
+                Path(temp_path).unlink(missing_ok=True)
 
         curr_texts: list[str] = []
         frame_text_entries: list[dict[str, str]] = []
@@ -249,6 +301,17 @@ def _run_ocr_on_frames(
             )
 
         prev_texts = curr_texts
+
+    ocr_elapsed = time.monotonic() - ocr_start
+    logger.info(
+        "OCR frame processing complete: %d/%d frames yielded %d text records, "
+        "%d change events in %.1fs",
+        total_frames,
+        total_frames,
+        len(text_records),
+        len(change_events),
+        ocr_elapsed,
+    )
 
     return text_records, change_events
 

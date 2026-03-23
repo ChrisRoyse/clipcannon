@@ -249,7 +249,25 @@ async def run_frame_extract(
         # Total size of all frames
         total_size = sum(f.stat().st_size for f in frame_files)
 
-        source_sha256 = await asyncio.to_thread(sha256_file, source_path)
+        # Read source SHA-256 from database (already computed by probe stage)
+        sha_conn = get_connection(db_path, enable_vec=False, dict_rows=True)
+        try:
+            sha_row = fetch_one(
+                sha_conn,
+                "SELECT source_sha256 FROM project WHERE project_id = ?",
+                (project_id,),
+            )
+        finally:
+            sha_conn.close()
+
+        source_sha256 = (
+            str(sha_row["source_sha256"])
+            if sha_row and sha_row.get("source_sha256")
+            else ""
+        )
+        if not source_sha256:
+            logger.warning("Source SHA-256 not found in database, computing from file")
+            source_sha256 = await asyncio.to_thread(sha256_file, source_path)
 
         # Write provenance record
         record_id = record_provenance(

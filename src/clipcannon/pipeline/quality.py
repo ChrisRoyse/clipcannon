@@ -146,14 +146,22 @@ def _run_pyiqa_scoring(
 
     quality_scores: list[float] = []
     batch_size = 16
+    total_frames = len(frame_paths)
+    max_quality_dim = 512
 
-    for batch_start in range(0, len(frame_paths), batch_size):
+    for batch_start in range(0, total_frames, batch_size):
         batch_paths = frame_paths[batch_start : batch_start + batch_size]
         batch_tensors: list[object] = []
 
         for fp in batch_paths:
             try:
                 img = Image.open(fp).convert("RGB")
+                # Downsample large frames for quality scoring
+                # BRISQUE works fine at 512px - no need for 4K
+                if max(img.size) > max_quality_dim:
+                    ratio = max_quality_dim / max(img.size)
+                    new_size = (int(img.width * ratio), int(img.height * ratio))
+                    img = img.resize(new_size, Image.LANCZOS)
                 tensor = transform(img).unsqueeze(0).to(device)
                 batch_tensors.append(tensor)
             except Exception as exc:
@@ -173,6 +181,16 @@ def _run_pyiqa_scoring(
                 logger.warning("BRISQUE scoring failed: %s", exc)
                 quality_scores.append(50.0)
 
+        # Progress logging every 100 frames
+        scored_so_far = len(quality_scores)
+        if scored_so_far % 100 < batch_size or scored_so_far == total_frames:
+            logger.info(
+                "Quality scoring progress: %d/%d frames (%.0f%%)",
+                scored_so_far,
+                total_frames,
+                scored_so_far / total_frames * 100,
+            )
+
     return quality_scores
 
 
@@ -191,10 +209,17 @@ def _run_laplacian_fallback(frame_paths: list[Path]) -> list[float]:
     logger.info("Using Laplacian variance fallback for quality assessment")
 
     quality_scores: list[float] = []
+    total_frames = len(frame_paths)
+    max_quality_dim = 512
 
-    for fp in frame_paths:
+    for idx, fp in enumerate(frame_paths):
         try:
             img = Image.open(fp).convert("L")
+            # Downsample large frames - Laplacian works fine at 512px
+            if max(img.size) > max_quality_dim:
+                ratio = max_quality_dim / max(img.size)
+                new_size = (int(img.width * ratio), int(img.height * ratio))
+                img = img.resize(new_size, Image.LANCZOS)
             img_array = np.array(img, dtype=np.float64)
 
             # Laplacian kernel
@@ -219,6 +244,16 @@ def _run_laplacian_fallback(frame_paths: list[Path]) -> list[float]:
         except Exception as exc:
             logger.warning("Laplacian scoring failed for %s: %s", fp, exc)
             quality_scores.append(50.0)
+
+        # Progress logging every 100 frames
+        scored_so_far = idx + 1
+        if scored_so_far % 100 == 0 or scored_so_far == total_frames:
+            logger.info(
+                "Laplacian scoring progress: %d/%d frames (%.0f%%)",
+                scored_so_far,
+                total_frames,
+                scored_so_far / total_frames * 100,
+            )
 
     return quality_scores
 

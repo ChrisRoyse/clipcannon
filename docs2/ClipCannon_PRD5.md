@@ -363,7 +363,7 @@ The dashboard is a web application running locally as part of the ClipCannon con
 │  │ ClipCannon MCP │  │License Server│  │  Dashboard   ││
 │  │ Server      │  │  port 3100   │  │  port 3200   ││
 │  │ port 3366   │  │  Billing/Auth│  │  Web UI      ││
-│  │ 60+ tools   │  │  Credits     │  │  Review/     ││
+│  │ 51 tools    │  │  Credits     │  │  Review/     ││
 │  │             │  │  Stripe      │  │  Approve     ││
 │  └──────┬──────┘  └──────────────┘  └──────────────┘│
 │         │                                             │
@@ -569,8 +569,8 @@ Frame embedding via SigLIP
 Scene boundary detection
 Video Understanding Document (VUD) generation with AI-readable translations (scene descriptions, topic labels, energy scores -- not raw embeddings)
 SHA-256 Provenance Hash Chain: provenance.db per project, hash computation at every pipeline stage, chain integrity verification, provenance query MCP tools (clipcannon_provenance_verify, clipcannon_provenance_query, clipcannon_provenance_chain)
-27 MCP tools across 7 categories: project management (5), understanding/pipeline (4), understanding/visual (4), understanding/search (1), provenance (4), disk management (2), configuration (3), billing (4)
-License server with credit-based billing (local SQLite + HMAC integrity + Stripe webhooks; Cloudflare D1 sync stubbed for Phase 2)
+27 MCP tools in Phase 1 across 7 categories: project management (5), understanding/pipeline (4), understanding/visual (4), understanding/search (1), provenance (4), disk management (2), configuration (3), billing (4)
+License server with credit-based billing (local SQLite + HMAC integrity + Stripe webhooks; Cloudflare D1 sync planned)
 Machine ID provisioning + HMAC balance integrity
 Dashboard: balance display, add credits, project list, provenance chain viewer, system health
 Success Criteria:
@@ -584,11 +584,11 @@ Provenance chain has 19 records (one per pipeline stage: probe through finalize)
 clipcannon_provenance_verify passes on every completed project
 Any file modification after provenance recording is detected by hash mismatch
 
-> **Phase 1 COMPLETED and VERIFIED on 2026-03-21.** 750/750 FSV checks passed. 181 pytest tests pass. 0 lint errors. 27 MCP tools, 20 pipeline stages, 16 analysis streams, 23 database tables, 4 vector tables. See [Verification Report](../docs/codestate/12_verification_report.md).
+> **Phase 1 COMPLETED and VERIFIED on 2026-03-22.** 750/750 FSV checks passed. 181 pytest tests pass. 0 lint errors. 27 MCP tools, 20 pipeline stages, 16 analysis streams, 23 database tables, 4 vector tables. See [Verification Report](../docs/codestate/12_verification_report.md).
 
 ### Phase 2: Editing Engine + Audio + Dashboard
 
-> **Phase 2 COMPLETED and VERIFIED on 2026-03-21.** 296 pytest tests pass (Phase 1: 181 + Phase 2: 102 + integration: 13). 37 MCP tools (Phase 1: 27 + Phase 2: 10), 26 core + 4 vector database tables, ~20,000 source lines. Anti-hallucination transcription pipeline added. See [Verification Report](../docs/codestate/12_verification_report.md).
+> **Phase 2 COMPLETED and VERIFIED on 2026-03-22.** 278 pytest tests across 15 files. 51 MCP tools total (Phase 1: 27 + Phase 2: 24), 27 core + 4 vector database tables (31 total), ~20,000 source lines. Anti-hallucination transcription pipeline added. See [Verification Report](../docs/codestate/12_verification_report.md).
 
 Deliverables:
 
@@ -597,14 +597,14 @@ Caption generation (adaptive chunking, 4 styles, ASS/drawtext) and rendering -- 
 Face-aware smart cropping (MediaPipe, split-screen, PIP, 7 platform aspects) -- DONE
 Platform encoding profiles (7 profiles) -- DONE
 FFmpeg rendering pipeline with NVENC and software fallback -- DONE
-All editing and rendering MCP tools (10 new tools) -- DONE
+All editing and rendering MCP tools (24 new tools, 51 total) -- DONE
 Batch rendering (asyncio.Semaphore, max 3 concurrent) -- DONE
 AI Audio Generation Engine -- DONE:
 ACE-Step v1.5 integration for AI-generated background music -- DONE
 MIDI composition pipeline (MIDIUtil, 6 presets, FluidSynth rendering) -- DONE
 Programmatic DSP sound effects (9 types: whoosh, riser, downer, impact, chime, tick, bass_drop, shimmer, stinger) -- DONE
 Audio mixing pipeline with speech-aware ducking, peak normalization (pydub + pedalboard) -- DONE
-Audio generation MCP tools (clipcannon_generate_music, clipcannon_compose_midi, clipcannon_generate_sfx) -- DONE
+Audio generation MCP tools (clipcannon_generate_music, clipcannon_compose_midi, clipcannon_generate_sfx, clipcannon_audio_cleanup) -- DONE
 Dashboard timeline, editing, and review queue APIs -- DONE
 Anti-hallucination transcription pipeline (35 known phrases, confidence filtering, VAD tuning) -- DONE (bonus)
 Metadata generation from VUD data (platform-specific title/description/hashtags) -- DONE

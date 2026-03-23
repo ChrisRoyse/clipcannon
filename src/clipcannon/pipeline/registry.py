@@ -39,15 +39,17 @@ if TYPE_CHECKING:
 # Level 1: vfr_normalize -> depends on probe
 # Level 2: audio_extract, frame_extract -> depend on vfr_normalize
 # Level 3: source_separation -> audio_extract
-#           visual_embed, ocr, quality, shot_type -> frame_extract
-# Level 4: transcribe -> source_separation
-#           storyboard -> frame_extract (visual stages done)
-# Level 5: semantic_embed, speaker_embed, emotion_embed, reactions,
-#           acoustic -> transcribe / source_separation
-# Level 6: profanity, chronemic -> transcribe, speaker
-# Level 7: highlights -> emotion, reactions, semantic, visual, quality,
+#           visual_embed, ocr, quality, storyboard -> frame_extract
+#           transcribe -> audio_extract
+# Level 4: shot_type -> frame_extract, visual_embed (needs scenes table)
+#           scene_analysis -> frame_extract, transcribe
+#           semantic_embed, speaker_embed -> transcribe
+#           emotion_embed, reactions, acoustic -> audio_extract
+# Level 5: profanity -> transcribe
+#           chronemic -> transcribe, speaker_embed
+# Level 6: highlights -> emotion, reactions, semantic, visual, quality,
 #                         speaker, chronemic
-# Level 8: finalize -> all
+# Level 7: finalize -> all
 
 _STAGE_DEFS: list[dict[str, object]] = [
     {
@@ -56,6 +58,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": True,
         "depends_on": [],
         "run": run_probe,
+        "timeout_s": 120,
     },
     {
         "name": "vfr_normalize",
@@ -63,6 +66,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": True,
         "depends_on": ["probe"],
         "run": run_vfr_normalize,
+        "timeout_s": 1800,
     },
     {
         "name": "audio_extract",
@@ -70,6 +74,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": True,
         "depends_on": ["vfr_normalize"],
         "run": run_audio_extract,
+        "timeout_s": 300,
     },
     {
         "name": "frame_extract",
@@ -77,6 +82,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": True,
         "depends_on": ["vfr_normalize"],
         "run": run_frame_extract,
+        "timeout_s": 600,
     },
     {
         "name": "source_separation",
@@ -84,6 +90,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": False,
         "depends_on": ["audio_extract"],
         "run": run_source_separation,
+        "timeout_s": 600,
     },
     {
         "name": "visual_embed",
@@ -91,6 +98,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": False,
         "depends_on": ["frame_extract"],
         "run": run_visual_embed,
+        "timeout_s": 600,
     },
     {
         "name": "ocr",
@@ -98,6 +106,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": False,
         "depends_on": ["frame_extract"],
         "run": run_ocr,
+        "timeout_s": 600,
     },
     {
         "name": "quality",
@@ -105,13 +114,15 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": False,
         "depends_on": ["frame_extract"],
         "run": run_quality,
+        "timeout_s": 600,
     },
     {
         "name": "shot_type",
         "operation": "shot_type_classification",
         "required": False,
-        "depends_on": ["frame_extract"],
+        "depends_on": ["frame_extract", "visual_embed"],
         "run": run_shot_type,
+        "timeout_s": 300,
     },
     {
         "name": "transcribe",
@@ -119,6 +130,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": True,
         "depends_on": ["audio_extract"],
         "run": run_transcribe,
+        "timeout_s": 600,
     },
     {
         "name": "storyboard",
@@ -126,13 +138,15 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": False,
         "depends_on": ["frame_extract"],
         "run": run_storyboard,
+        "timeout_s": 300,
     },
     {
         "name": "scene_analysis",
         "operation": "scene_analysis",
         "required": False,
-        "depends_on": ["frame_extract"],
+        "depends_on": ["frame_extract", "transcribe"],
         "run": run_scene_analysis,
+        "timeout_s": 300,
     },
     {
         "name": "semantic_embed",
@@ -140,6 +154,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": False,
         "depends_on": ["transcribe"],
         "run": run_semantic_embed,
+        "timeout_s": 300,
     },
     {
         "name": "speaker_embed",
@@ -147,6 +162,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": False,
         "depends_on": ["audio_extract", "transcribe"],
         "run": run_speaker_embed,
+        "timeout_s": 300,
     },
     {
         "name": "emotion_embed",
@@ -154,6 +170,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": False,
         "depends_on": ["audio_extract"],
         "run": run_emotion_embed,
+        "timeout_s": 300,
     },
     {
         "name": "reactions",
@@ -161,6 +178,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": False,
         "depends_on": ["audio_extract"],
         "run": run_reactions,
+        "timeout_s": 300,
     },
     {
         "name": "acoustic",
@@ -168,6 +186,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": False,
         "depends_on": ["audio_extract"],
         "run": run_acoustic,
+        "timeout_s": 300,
     },
     {
         "name": "profanity",
@@ -175,6 +194,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": False,
         "depends_on": ["transcribe"],
         "run": run_profanity,
+        "timeout_s": 120,
     },
     {
         "name": "chronemic",
@@ -182,6 +202,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
         "required": False,
         "depends_on": ["transcribe", "speaker_embed"],
         "run": run_chronemic,
+        "timeout_s": 120,
     },
     {
         "name": "highlights",
@@ -197,6 +218,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
             "chronemic",
         ],
         "run": run_highlights,
+        "timeout_s": 120,
     },
     {
         "name": "finalize",
@@ -219,6 +241,7 @@ _STAGE_DEFS: list[dict[str, object]] = [
             "highlights",
         ],
         "run": run_finalize,
+        "timeout_s": 120,
     },
 ]
 
@@ -244,6 +267,7 @@ def build_pipeline(config: ClipCannonConfig) -> PipelineOrchestrator:
             required=bool(stage_def["required"]),
             depends_on=list(stage_def.get("depends_on", [])),  # type: ignore[arg-type]
             run=stage_def.get("run"),  # type: ignore[arg-type]
+            timeout_s=int(stage_def.get("timeout_s", 600)),  # type: ignore[arg-type]
         )
         orchestrator.register_stage(stage)
 
