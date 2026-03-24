@@ -788,8 +788,6 @@ async def clipcannon_get_scene_map(
             except Exception:
                 _emotion_entries = []
     except Exception as exc:
-        conn.close()
-        # scene_map table may not exist yet
         return _error(
             "SCENE_MAP_NOT_FOUND",
             f"Scene map not available. Run ingest first. Error: {exc}",
@@ -1298,8 +1296,7 @@ async def clipcannon_get_editing_context(
             "scenes": {
                 "visual_scenes": counts["scene_map"],
                 "scene_boundaries": counts["scenes"],
-                "query": "get_scene_map(project_id, start_ms, end_ms, detail, layout) "
-                         "OR get_segment_detail(project_id, timestamp_ms=ms)",
+                "query": "get_scene_map(project_id, start_ms, end_ms, detail, layout)",
             },
             "highlights": {
                 "count": counts["highlights"],

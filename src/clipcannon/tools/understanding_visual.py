@@ -1,7 +1,6 @@
 """Visual understanding MCP tools for ClipCannon.
 
-Provides get_frame and get_segment_detail tools for retrieving
-visual and temporal data.
+Provides get_frame tool for retrieving visual and temporal data.
 """
 
 from __future__ import annotations
@@ -192,6 +191,7 @@ async def clipcannon_get_segment_detail(
     end_ms: int = 0,
     timestamp_ms: int | None = None,
     layout: str | None = None,
+    include_ocr: bool = False,
 ) -> dict[str, object]:
     """Get ALL intelligence for a time range from every pipeline table.
 
@@ -307,9 +307,19 @@ async def clipcannon_get_segment_detail(
         )
 
         # -- On-screen text (OCR detections) --
+        # Only fetch raw OCR when explicitly requested (very large payload).
+        # The cross-stream alignment logic below still needs the rows for
+        # matching, so we always query but only include in the response when
+        # include_ocr is True.
         on_screen = _safe_fetch_all(
             conn,
             "SELECT start_ms, end_ms, texts, type, change_from_previous"
+            f" FROM on_screen_text WHERE {rq}"
+            " ORDER BY start_ms",
+            rp,
+        ) if include_ocr else _safe_fetch_all(
+            conn,
+            "SELECT start_ms, end_ms"
             f" FROM on_screen_text WHERE {rq}"
             " ORDER BY start_ms",
             rp,
@@ -517,7 +527,6 @@ async def clipcannon_get_segment_detail(
         "speakers": speakers,
         "reactions": [dict(r) for r in reactions],
         "beat_sections": [dict(b) for b in beat_sections],
-        "on_screen_text": on_screen_dicts,
         "text_change_events": [dict(tc) for tc in text_changes],
         "pacing": [dict(p) for p in pacing],
         "scenes_quality": [dict(s) for s in scenes],
@@ -536,6 +545,10 @@ async def clipcannon_get_segment_detail(
             else None
         ),
     }
+
+    # Only include raw OCR data when explicitly requested
+    if include_ocr:
+        result["on_screen_text"] = on_screen_dicts
 
     # -- Point-query enrichment: scene_map entry + canvas regions for layout --
     if timestamp_ms is not None:

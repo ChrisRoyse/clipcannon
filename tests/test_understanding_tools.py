@@ -274,9 +274,9 @@ class TestGetTranscript:
     async def test_word_level_timestamps(self, ready_project: dict[str, object]) -> None:
         """Segments include word-level timestamps."""
         pid = str(ready_project["project_id"])
-        result = await clipcannon_get_transcript(pid, start_ms=0, end_ms=6000)
+        result = await clipcannon_get_transcript(pid, start_ms=0, end_ms=6000, detail="words")
 
-        # First segment should have words
+        # First segment should have words when detail="words"
         seg = result["segments"][0]
         assert "words" in seg
         assert len(seg["words"]) == 6
