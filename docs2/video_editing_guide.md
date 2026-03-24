@@ -787,21 +787,29 @@ Workflow: decide coords → preview_layout → adjust → repeat → render → 
    Read the transcript_preview + narrative.story_beats to understand the story.
    If you need the FULL transcript: get_transcript(start_ms=0)
 
-3. DISCOVER (2-3 calls):
-   find_best_moments(purpose="hook") → candidates WITH:
-     - convergence-scored cut_points (start_quality/end_quality + signals)
-     - story_beat context (which narrative beat this moment belongs to)
-     - moment_character (passionate_claim/excited_demo/etc.)
+3. FIND SAFE CUTS (1 call — CRITICAL):
+   find_safe_cuts(project_id) → ALL audio-safe cut points in the video
+     - Each cut shows exact words before/after the gap
+     - Safety score (0-100) from signal convergence
+     - Ready-to-use cut_before_ms / cut_after_ms with padding
+     - Warnings on open promises ("speaker says 'you can see'")
+   READ the words_before/words_after for every cut. These tell you
+   what the audio transition will SOUND like. Only use cuts where
+   the words make sense as a transition point.
+
+4. DISCOVER (2-3 calls):
+   find_best_moments(purpose="hook") → best hook candidates
    find_best_moments(purpose="highlight") → body candidates
    find_best_moments(purpose="cta") → closing candidates
-   Cut points are INCLUDED in each moment — no separate find_cut_points needed.
+   Cross-reference these with safe cuts from step 3.
 
-4. PLAN (use narrative to guide):
+5. PLAN (use narrative + safe cuts to guide):
    - Follow story_beats order: hook → setup → argument → demo → result → cta
    - Use open_loops: ensure the loop opened in the hook is CLOSED by the CTA
    - Layout progression: D → B → A → C → D (smooth, never jump >1 level)
    - Duration: TikTok 60-180s (60s+ required for monetization)
-   - Every segment ends at a thought boundary (check moment.cut_points.end_quality)
+   - ONLY use cut_before_ms / cut_after_ms from find_safe_cuts as boundaries
+   - NEVER pick arbitrary timestamps — always snap to safe cuts
 
 5. VERIFY (1 call per segment):
    For EACH segment: preview_layout(timestamp_ms, regions) → look at frame

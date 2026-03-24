@@ -1,6 +1,6 @@
-# ClipCannon MCP Tools — Complete Reference (39 Tools)
+# ClipCannon MCP Tools — Complete Reference (40 Tools)
 
-**Updated:** 2026-03-23
+**Updated:** 2026-03-24
 **Source:** `src/clipcannon/server.py`, `src/clipcannon/tools/`
 
 ---
@@ -19,8 +19,8 @@ The MCP server registers `list_tools()` → `ALL_TOOL_DEFINITIONS` and `call_too
 | `tools/editing.py` | `dispatch_editing_tool` | 6 |
 | `tools/rendering.py` | `dispatch_rendering_tool` | 7 |
 | `tools/audio.py` | `dispatch_audio_tool` | 4 |
-| `tools/discovery.py` | `dispatch_discovery_tool` | 3 |
-| **Total** | | **39** |
+| `tools/discovery.py` | `dispatch_discovery_tool` | 4 |
+| **Total** | | **40** |
 
 Provenance functions (`provenance_tools.py`) are now internal-only — not exposed via MCP.
 
@@ -584,6 +584,21 @@ Analyze narrative coherence of proposed edit segments BEFORE creating an edit. T
 
 **Returns:** Per-segment boundary text, gap analysis, narrative coherence warnings
 
+### clipcannon_find_safe_cuts
+
+Find audio-safe cut points across the ENTIRE video by cross-referencing ALL 12 analysis streams: silence gaps, word-level transcript boundaries, beat positions (librosa), scene boundaries, text change events (OCR), and emotion energy (Wav2Vec2). Each cut point includes the exact words before and after the gap so you can READ what the audio transition will sound like. Safety scores combine signal convergence with thought-completeness detection and promise-keyword warnings. **ALWAYS use this tool instead of manually picking timestamps.** The returned `cut_before_ms` and `cut_after_ms` values have padding already applied and can be used directly as `source_end_ms` and `source_start_ms` in `create_edit`. No credits charged.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `project_id` | string | Yes | Project ID |
+| `min_silence_ms` | integer | No | Minimum silence gap duration (default 400ms) |
+
+**Returns per cut:** `cut_ms` (gap center), `cut_before_ms` (segment END with padding), `cut_after_ms` (next segment START with padding), `safety_score` (0-100), `silence_gap_ms`, `words_before`, `words_after`, `thought_complete`, `sentence_end`, `beat_aligned`, `scene_boundary`, `text_change`, `energy`, `signals[]`, `warning`
+
+**Safety scoring:** silence_gap(40) + thought_complete(20) + beat_aligned(15) + scene_boundary(10) + text_change(10) + long_pause(5) - low_confidence(20) - promise_open(30)
+
+**Workflow:** Call `find_safe_cuts` first → read the `words_before` / `words_after` for each cut → select cuts that form a coherent story → use `cut_before_ms` / `cut_after_ms` directly in `create_edit` segments → verify with `get_narrative_flow`
+
 ---
 
 ## Credit Costs
@@ -595,7 +610,7 @@ Analyze narrative coherence of proposed edit segments BEFORE creating an edit. T
 | Preview clip | 0 | `clipcannon_preview_clip` |
 | Preview layout | 0 | `clipcannon_preview_layout` |
 | Analyze frame | 0 | `clipcannon_analyze_frame` |
-| Discovery tools | 0 | `find_best_moments`, `find_cut_points`, `get_narrative_flow` |
+| Discovery tools | 0 | `find_best_moments`, `find_cut_points`, `find_safe_cuts`, `get_narrative_flow` |
 | All other tools | 0 | Read-only or configuration |
 
 Failed renders are automatically refunded.
