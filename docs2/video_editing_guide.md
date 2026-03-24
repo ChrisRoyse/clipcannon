@@ -163,6 +163,216 @@ Face: (0,0,1080,1920). Eye line y=640. Hook: face 70-80% width. CTA: slightly wi
 
 Transitions: hard cuts only. Min layout: 3s. Max before change: 8s.
 
+### CRITICAL: Layouts Are NOT Static
+
+**Every segment gets its OWN canvas layout.** A video with 20 segments should have 20 individually configured canvas specs, each matching what the speaker is showing/saying at THAT moment.
+
+**NEVER apply one layout to the entire video.** This is the #1 editing failure. A 60-second segment with static Layout A means the viewer stares at the same composition for a full minute — guaranteed retention drop.
+
+**The rule: break the video into 5-10 second segments, each with its own canvas.** Use `auto_trim` to get the natural segments (filler/pause removal gives you the right granularity), then assign each one a per-segment canvas based on the transcript at that timestamp.
+
+```
+Segment 1 (0-5s):    Layout D — "I built the world's first..." (direct address)
+Segment 2 (5-12s):   Layout B — "...for AI agents..." (face + code visible)
+Segment 3 (12-20s):  Layout A — "it uses 12 embedders..." (screen dominant)
+Segment 4 (20-25s):  Layout C — "the AI has full control..." (zoomed into terminal)
+Segment 5 (25-30s):  Layout D — "let me show you..." (building anticipation)
+Segment 6 (30-38s):  Layout C — screen showing the demo result (zoomed to content)
+Segment 7 (38-42s):  Layout A — "it moved my face..." (face + demo side by side)
+...
+```
+
+---
+
+## 3b. Complete Effects & Capabilities Reference
+
+### Per-Segment Canvas (regions[])
+
+Every segment can have its own canvas with multiple composited regions. Each region specifies a source crop from the original video and an output placement on the 1080x1920 canvas.
+
+```
+"canvas": {
+    "enabled": true,
+    "canvas_width": 1080, "canvas_height": 1920,
+    "background_color": "#0D0D0D",  // or "blur" for gaussian blur fill
+    "regions": [
+        {
+            "region_id": "screen",
+            "source_x": 0, "source_y": 70,
+            "source_width": 1800, "source_height": 1320,
+            "output_x": 0, "output_y": 576,
+            "output_width": 1080, "output_height": 1344,
+            "z_index": 1,
+            "fit_mode": "contain"   // or "cover"
+        },
+        {
+            "region_id": "pip_speaker",
+            "source_x": 1840, "source_y": 959,
+            "source_width": 592, "source_height": 480,
+            "output_x": 24, "output_y": 140,
+            "output_width": 240, "output_height": 240,
+            "z_index": 2,
+            "fit_mode": "cover"
+        }
+    ]
+}
+```
+
+**Fit modes:** `contain` (fit within bounds, may letterbox), `cover` (fill bounds, may crop edges). NEVER `stretch`.
+
+**Background:** `#0D0D0D` (dark), `#FFFFFF` (white), any hex, or `blur` (gaussian blur of source frame — eliminates dead space beautifully).
+
+### Per-Segment Animated Zoom (zoom{})
+
+Animated crop that interpolates from a wide view to a tight view (or vice versa) over the segment duration. Use instead of regions[] when you want a smooth zoom effect within a single segment.
+
+```
+"canvas": {
+    "zoom": {
+        "start_x": 0, "start_y": 0, "start_w": 1920, "start_h": 1080,
+        "end_x": 400, "end_y": 200, "end_w": 800, "end_h": 450,
+        "easing": "ease_in_out"    // linear, ease_in, ease_out, ease_in_out
+    }
+}
+```
+
+| Zoom Effect | start → end | Use Case |
+|---|---|---|
+| Zoom in to UI element | Full frame → tight crop on button/text | Speaker says "look at this" |
+| Zoom out reveal | Tight crop → full frame | Opening reveal, establishing shot |
+| Pan across content | Same size, different x/y | Scrolling through a list or code |
+| Ken Burns on screenshot | Slight zoom + diagonal drift | Static images, data slides |
+
+### Motion Effects (add_motion)
+
+Applied to an entire segment via `add_motion(segment_id, effect)`. These are simpler than zoom{} — predefined effects with start/end scale and easing.
+
+| Effect | What It Does | Best For |
+|---|---|---|
+| `zoom_in` | Scale 1.0 → 1.3 (default) | Emphasis, drawing attention, hooks |
+| `zoom_out` | Scale 1.3 → 1.0 | Reveals, establishing shots, CTAs |
+| `pan_left` | Horizontal pan left | Following content, reading direction |
+| `pan_right` | Horizontal pan right | Reverse reading, reveals |
+| `pan_up` | Vertical pan up | Scrolling content, lists |
+| `pan_down` | Vertical pan down | Scrolling down, reveals |
+| `ken_burns` | Zoom + diagonal pan combined | Cinematic movement on stills, screenshots |
+
+**Parameters:** `start_scale` (0.5-3.0), `end_scale` (0.5-3.0), `easing` (linear/ease_in/ease_out/ease_in_out)
+
+**Intensity guide:** Subtle: 1.0→1.1. Moderate: 1.0→1.3. Strong: 1.0→2.0. Use strong sparingly.
+
+### Speed Control
+
+Per-segment playback speed via `speed` parameter in create_edit segments.
+
+| Speed | Effect | Use Case |
+|---|---|---|
+| `0.5` | Half speed (slow-mo) | Dramatic reveals, emphasis moments |
+| `0.8` | Slightly slow | Building tension, important statements |
+| `1.0` | Normal | Default speech |
+| `1.2` | Slightly fast | Tighten boring sections without cutting |
+| `1.5` | Fast | Skip through setup/context quickly |
+| `2.0` | Double speed | Time-lapse of process, code scrolling |
+| `3.0-4.0` | Very fast | Montage, speed-through long demos |
+
+### Transitions (per-segment)
+
+Applied via `transition_in` / `transition_out` on each segment in create_edit.
+
+| Transition | Effect | Duration | Use Case |
+|---|---|---|---|
+| `cut` | Hard cut (default) | 0ms | Standard, professional |
+| `fade` | Fade to/from black | 200-500ms | Section changes, mood shifts |
+| `crossfade` | Dissolve between segments | 300-800ms | Smooth topic transitions |
+| `wipe_left` | Wipe from right to left | 200-500ms | Progressive reveals |
+| `wipe_right` | Wipe from left to right | 200-500ms | Progressive reveals |
+| `wipe_up` | Wipe upward | 200-500ms | Building/ascending energy |
+| `wipe_down` | Wipe downward | 200-500ms | Descending energy, conclusions |
+| `slide_left` | Slide content left | 200-500ms | Screen content changes |
+| `slide_right` | Slide content right | 200-500ms | Screen content changes |
+| `dissolve` | Soft dissolve | 300-800ms | Dreamlike, atmospheric |
+| `zoom_in` | Zoom transition | 200-400ms | Entering detail, punching in |
+
+```
+{"source_start_ms": 5000, "source_end_ms": 12000,
+ "transition_in": {"type": "fade", "duration_ms": 300},
+ "transition_out": {"type": "crossfade", "duration_ms": 500}}
+```
+
+### Overlays
+
+| Type | Purpose | Typical Timing | Animation |
+|---|---|---|---|
+| `lower_third` | Speaker name + title | First 3-5s | `slide_up` |
+| `title_card` | Chapter title, key stat, bold text | 1-3s at topic changes | `slide_up` or `fade_in` |
+| `logo` | Brand identity | First 4s or persistent | `fade_in` |
+| `watermark` | Attribution (low opacity ~0.3) | Entire video | `none` |
+| `cta` | "Follow", "Send to a friend" | Last 5-10s | `fade_in` |
+
+**Positions:** `bottom_left`, `bottom_center`, `bottom_right`, `top_left`, `top_center`, `top_right`, `center`
+
+**Animations:** `none`, `fade_in`, `fade_out`, `slide_up`, `slide_down` (duration: 300-500ms)
+
+**Font sizes:** 8-200px. Hook title_card: 48-72px. Lower_third: 32-36px. CTA: 38-48px.
+
+**Colors:** `text_color` (hex), `bg_color` (hex), `bg_opacity` (0-1). TikTok CTA: `#FF0050` red.
+
+### Color Grading (global or per-segment)
+
+| Parameter | Range | Default | Effect |
+|---|---|---|---|
+| `brightness` | -1.0 to 1.0 | 0.0 | Lighten/darken |
+| `contrast` | 0.0 to 3.0 | 1.0 | Pop/flatten |
+| `saturation` | 0.0 to 3.0 | 1.0 | Vivid/desaturated |
+| `gamma` | 0.1 to 10.0 | 1.0 | Shadow/highlight balance |
+| `hue_shift` | -180 to 180 | 0.0 | Color temperature shift |
+
+**Per-segment color:** Pass `segment_id` to apply different grades per section. Use this for mood shifts — warm for personal statements, cool for technical demos, high-contrast for reveals.
+
+### AI Music Generation
+
+| Tool | Engine | Output | GPU | Use Case |
+|---|---|---|---|---|
+| `generate_music` | ACE-Step v1 3.5B | 48kHz stereo WAV | Yes | Original background music from text prompt |
+| `compose_midi` | MIDIUtil + FluidSynth | MIDI (+ WAV) | No | Theory-correct presets: ambient_pad, upbeat_pop, corporate, dramatic, minimal_piano, intro_jingle |
+
+**Prompt tips for generate_music:** Include genre, BPM, mood, instruments. Example: "upbeat electronic tech demo, 120 BPM, synth pads, positive energy"
+
+### Sound Effects
+
+| SFX Type | Sound | Use Case |
+|---|---|---|
+| `whoosh` | Sweep 200→8000 Hz | Scene transitions, layout switches |
+| `riser` | Rising pitch + crescendo | Build tension before reveal |
+| `downer` | Falling pitch + decrescendo | Deflation, disappointment |
+| `impact` | Noise burst + fast decay | Text pops, emphasis hits, stat reveals |
+| `chime` | Harmonic ring | Notifications, list items, steps |
+| `tick` | Sharp click | UI transitions, quick cuts |
+| `bass_drop` | Sub sweep 200→40 Hz | Dramatic moments, reveals |
+| `shimmer` | Filtered noise, slow attack | Ethereal transitions, before/after |
+| `stinger` | Impact + riser combined | Hard scene transitions |
+
+**Rule:** Sync SFX to visual changes. A `whoosh` on every layout switch + `impact` on every stat overlay = professional feel.
+
+### Audio Cleanup
+
+| Operation | What It Does | When to Use |
+|---|---|---|
+| `noise_reduction` | Spectral gating, removes background noise | Always for recordings with ambient noise |
+| `de_hum` | Removes 50/60 Hz electrical hum (3 harmonics) | Office recordings, cheap mics |
+| `de_ess` | Reduces harsh sibilance (s/sh sounds) | Close-mic recordings, laptop mics |
+| `normalize_loudness` | EBU R128 normalization to -16 LUFS | Always — ensures consistent volume |
+
+### Post-Render Analysis
+
+All pre-render visual tools work on rendered output via `render_id` parameter:
+
+| Tool | With render_id | Use Case |
+|---|---|---|
+| `get_frame(render_id=X, timestamp_ms=T)` | Extract any frame from rendered video | Verify layout, captions, overlays at specific timestamps |
+| `analyze_frame(render_id=X, timestamp_ms=T)` | Detect regions in rendered output | Verify content is visible, check for dead space |
+| `preview_clip(render_id=X, start_ms=T)` | Preview rendered video at any point | Quick playback check of transitions |
+
 ---
 
 ## 4. Dead Space Elimination
@@ -810,16 +1020,31 @@ Workflow: decide coords → preview_layout → adjust → repeat → render → 
    No transcript segment timestamps. No highlight timestamps.
    ONLY cut_before_ms and cut_after_ms from this tool.
 
-4. PLAN (map safe cuts to story):
-   - Read the words_before/words_after for every safe cut
-   - Map cuts to the story arc from Qwen3's narrative analysis
-   - Select which cuts to USE and which gaps to KEEP
-   - Segments = contiguous source runs BETWEEN safe cuts
-   - Layout progression: D → B → A → C → D
-   - Duration: TikTok 60-180s, YouTube Shorts 30-60s
-   - Every segment must be ≥10 seconds (no 1-second fragments)
-   - Every gap that's skipped must NOT break a promise
-   - Verify with get_narrative_flow before building
+4. SEGMENT PLAN (MANY small segments, not FEW large ones):
+   For FULL-LENGTH videos (keeping most/all content):
+     - Use auto_trim segments as the base (natural 5-15s segments)
+     - Each segment gets its OWN per-segment canvas matching
+       what the speaker is saying/showing at that moment
+     - Read the transcript for each segment → decide layout
+     - Apply motion effects, zoom, speed per segment
+     - Target: 15-30+ segments for a 3-8 minute video
+
+   For SHORT CUTS (condensing to 60-180s):
+     - Use find_safe_cuts to identify audio-safe boundaries
+     - Select which cuts form the story arc
+     - Still break into many small segments (5-10s each)
+     - Each segment gets its own layout
+
+   Layout rules:
+     - NEVER use the same layout for more than 8 seconds
+     - Progression: D → B → A → C → D (smooth, never jump >1 level)
+     - Match layout to what speaker is DOING (see Layout E table)
+     - Apply zoom/motion to EVERY segment (even subtle 1.0→1.05)
+     - Use per-segment color shifts for mood changes
+
+   For ALL videos:
+     - Every gap that's skipped must NOT break a promise
+     - Verify with get_narrative_flow before building
 
 5. VERIFY NARRATIVE (1 call — REQUIRED):
    get_narrative_flow(segments) → check for BROKEN_PROMISE warnings
@@ -1039,6 +1264,41 @@ The key insight: don't cut between words. Cut during silence gaps where there IS
 6. Does the next segment START coherently after the gap?
 
 Only after answering all 6 should you call `create_edit`. Then `get_narrative_flow` to verify. Then fix. Then render.
+
+---
+
+### Mistake 14: Using few large segments with static layouts instead of many small dynamic ones
+
+**What happened**: Created 4 segments for a 3-minute TikTok — each segment was 30-70 seconds long with ONE static canvas layout. The speaker changes topic, references different screen content, shifts between direct address and screen walkthrough — but the layout never changes. The result looks like a cheap screencast, not a professional edit. Dead space everywhere because the single crop can't track moving content.
+
+**Root cause**: Treating segments as "story sections" (hook, demo, CTA) instead of "editing units." A human editor cuts every 3-8 seconds. Each cut is an opportunity to reframe, zoom, switch layout, add emphasis. With 4 segments, there are only 3 cuts in the entire video. With 30 segments, there are 29 opportunities for visual change.
+
+**Rule**: Use `auto_trim` to get natural segments (typically 15-35 segments for a 3-8 minute video). Each segment gets its OWN per-segment canvas matching the speaker's activity at that moment. Apply motion effects, zoom, and speed changes per segment. The result should have a visual change every 5-8 seconds — layout switches, zoom punches, speed changes, overlays appearing/disappearing.
+
+**What to do with each segment:**
+1. Read the transcript for that segment
+2. If speaker addresses camera directly → Layout D (face)
+3. If speaker references screen content → Layout A/C with screen crop matching WHAT they're referencing
+4. Apply zoom_in on emphasis moments, ken_burns on screenshots
+5. Add whoosh SFX on layout transitions, impact SFX on stat reveals
+6. Speed up boring transitions (1.2-1.5x), slow down reveals (0.8x)
+
+### Mistake 15: Not using the full range of video editing effects
+
+**What happened**: Only used canvas regions, color grading, and two motion effects (zoom_in on hook, zoom_out on CTA). Ignored: transitions between segments, per-segment speed control, per-segment color shifts, animated zoom (zoom{}), SFX synced to visual changes, overlays on stat mentions, ken_burns on static screenshots. The system has the equivalent of every video editing tool in existence — and I used 5% of it.
+
+**Rule**: For every segment, consider ALL of these:
+- Canvas regions (per-segment layout)
+- Animated zoom (zoom{} for smooth crop animation within a segment)
+- Motion effects (zoom_in/out, pan, ken_burns)
+- Speed control (0.5x-4.0x per segment)
+- Transitions (fade, crossfade, wipe, slide, dissolve between segments)
+- Color grading (per-segment mood shifts — warm/cool/high-contrast)
+- Overlays (title_card on topic changes, stats on number mentions)
+- SFX (whoosh on transitions, impact on reveals, riser before payoffs)
+- Music (AI-generated background at -18dB with speech ducking)
+
+A professional edit uses ALL of these in combination. A basic edit uses 2-3.
 
 ---
 
