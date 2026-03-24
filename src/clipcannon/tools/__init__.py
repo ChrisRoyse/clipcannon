@@ -54,11 +54,10 @@ from clipcannon.tools.understanding_search import (
 )
 from clipcannon.tools.understanding_visual import (
     clipcannon_get_frame,
-    clipcannon_get_segment_detail,
 )
 
 # ---------------------------------------------------------------
-# Understanding tool definitions (5 tools)
+# Understanding tool definitions (4 tools)
 # ---------------------------------------------------------------
 UNDERSTANDING_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
@@ -82,7 +81,9 @@ UNDERSTANDING_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
         name="clipcannon_get_transcript",
         description=(
-            "Get transcript with word-level timestamps. "
+            "Get transcript segments with pagination. "
+            "Default 'text' mode returns compact segments only. "
+            "Use detail='words' for word-level timestamps. "
             "Paginated in 15-minute windows. Use start_ms/end_ms "
             "to navigate. Returns has_more and next_start_ms."
         ),
@@ -99,55 +100,13 @@ UNDERSTANDING_TOOL_DEFINITIONS: list[Tool] = [
                     "type": "integer",
                     "description": "End time in ms (default: start_ms + 900000)",
                 },
-            },
-            "required": ["project_id"],
-        },
-    ),
-    Tool(
-        name="clipcannon_get_segment_detail",
-        description=(
-            "Master query: get ALL intelligence from every embedder "
-            "for a time range. Returns 17 data streams: transcript "
-            "(segments + words), emotion curve (arousal/valence/energy), "
-            "speakers, reactions, beats, on-screen text (OCR), text "
-            "change events (slide transitions), pacing, scene quality, "
-            "scene map (face/webcam/content/canvas regions), silence "
-            "gaps, highlights (scored), topics, profanity, music sections. "
-            "Use get_editing_context first to see what data exists, "
-            "then call this tool for specific time ranges. "
-            "Alternatively, pass timestamp_ms for a 10-second point query "
-            "centred on that timestamp (replaces get_scene_at). "
-            "Optionally pass layout to get canvas regions for that layout."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {"type": "string", "description": "Project identifier"},
-                "start_ms": {
-                    "type": "integer",
-                    "description": "Start time in ms (not needed when using timestamp_ms)",
-                    "default": 0,
-                },
-                "end_ms": {
-                    "type": "integer",
-                    "description": "End time in ms (not needed when using timestamp_ms)",
-                    "default": 0,
-                },
-                "timestamp_ms": {
-                    "type": "integer",
-                    "description": (
-                        "Point-query mode: returns a 10s window "
-                        "(timestamp - 5000 to timestamp + 5000) "
-                        "with scene_map entry and canvas regions. "
-                        "Overrides start_ms/end_ms."
-                    ),
-                },
-                "layout": {
+                "detail": {
                     "type": "string",
+                    "enum": ["text", "words"],
+                    "default": "text",
                     "description": (
-                        "Layout name to filter canvas regions "
-                        "(e.g. 'tiktok_vertical', 'youtube_standard'). "
-                        "Only used with timestamp_ms."
+                        "Detail level: 'text' (compact, segments only) "
+                        "or 'words' (includes word-level timestamps)"
                     ),
                 },
             },
@@ -229,16 +188,7 @@ async def dispatch_understanding_tool(
             str(arguments["project_id"]),
             int(arguments.get("start_ms", 0)),  # type: ignore[arg-type]
             int(arguments["end_ms"]) if arguments.get("end_ms") is not None else None,
-        )
-    if name == "clipcannon_get_segment_detail":
-        ts_raw = arguments.get("timestamp_ms")
-        layout_raw = arguments.get("layout")
-        return await clipcannon_get_segment_detail(
-            str(arguments["project_id"]),
-            int(arguments.get("start_ms", 0)),  # type: ignore[arg-type]
-            int(arguments.get("end_ms", 0)),  # type: ignore[arg-type]
-            timestamp_ms=int(ts_raw) if ts_raw is not None else None,  # type: ignore[arg-type]
-            layout=str(layout_raw) if layout_raw is not None else None,
+            detail=str(arguments.get("detail", "text")),
         )
     if name == "clipcannon_get_frame":
         return await clipcannon_get_frame(

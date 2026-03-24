@@ -150,9 +150,29 @@ async def clipcannon_ingest(
 
 
 async def clipcannon_get_transcript(
-    project_id: str, start_ms: int = 0, end_ms: int | None = None
+    project_id: str,
+    start_ms: int = 0,
+    end_ms: int | None = None,
+    detail: str = "text",
 ) -> dict[str, object]:
-    """Get transcript with word-level timestamps. 15-min pages with pagination."""
+    """Get transcript with optional word-level timestamps. 15-min pages with pagination.
+
+    Args:
+        project_id: Project identifier.
+        start_ms: Start time in milliseconds (default 0).
+        end_ms: End time in ms (default start_ms + 900000).
+        detail: Detail level — ``"text"`` (compact, segments only) or
+            ``"words"`` (includes word-level timestamps). Default ``"text"``.
+
+    Returns:
+        Dict with transcript segments and pagination info.
+    """
+    if detail not in ("text", "words"):
+        return _error(
+            "INVALID_PARAMETER",
+            f"detail must be 'text' or 'words', got '{detail}'",
+        )
+
     err = _validate_project(project_id, required_status="ready")
     if err is not None:
         return err
@@ -176,16 +196,17 @@ async def clipcannon_get_transcript(
         enriched: list[dict[str, object]] = []
         for seg in segments:
             sd = dict(seg)
-            words = fetch_all(
-                conn,
-                "SELECT word, start_ms, end_ms,"
-                " confidence, speaker_id"
-                " FROM transcript_words"
-                " WHERE segment_id = ?"
-                " ORDER BY start_ms",
-                (int(seg["segment_id"]),),
-            )
-            sd["words"] = [dict(w) for w in words]
+            if detail == "words":
+                words = fetch_all(
+                    conn,
+                    "SELECT word, start_ms, end_ms,"
+                    " confidence, speaker_id"
+                    " FROM transcript_words"
+                    " WHERE segment_id = ?"
+                    " ORDER BY start_ms",
+                    (int(seg["segment_id"]),),
+                )
+                sd["words"] = [dict(w) for w in words]
             enriched.append(sd)
 
         hm_row = fetch_one(

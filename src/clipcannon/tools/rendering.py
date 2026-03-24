@@ -756,6 +756,37 @@ async def clipcannon_get_scene_map(
             "WHERE project_id = ? AND start_ms >= ?",
             (project_id, end_ms),
         )
+
+        # Batch-fetch text_change_events and emotion_curve for summary enrichment
+        _text_changes: list[dict[str, object]] = []
+        _emotion_entries: list[dict[str, object]] = []
+        if detail == "summary" and scenes_raw:
+            try:
+                _text_changes = [
+                    dict(r)
+                    for r in fetch_all(
+                        conn,
+                        "SELECT timestamp_ms, new_title FROM text_change_events "
+                        "WHERE project_id = ? AND timestamp_ms >= ? AND timestamp_ms < ? "
+                        "ORDER BY timestamp_ms",
+                        (project_id, start_ms, end_ms),
+                    )
+                ]
+            except Exception:
+                _text_changes = []
+            try:
+                _emotion_entries = [
+                    dict(r)
+                    for r in fetch_all(
+                        conn,
+                        "SELECT start_ms, end_ms, energy FROM emotion_curve "
+                        "WHERE project_id = ? AND start_ms < ? AND end_ms > ? "
+                        "ORDER BY start_ms",
+                        (project_id, end_ms, start_ms),
+                    )
+                ]
+            except Exception:
+                _emotion_entries = []
     except Exception as exc:
         conn.close()
         # scene_map table may not exist yet
@@ -783,19 +814,55 @@ async def clipcannon_get_scene_map(
         rec_layout = str(row.get("layout_recommendation", "A"))
 
         if detail == "summary":
-            # ~40 tokens per scene: compact
+            # ~120 tokens per scene: compact with storyboard context
             transcript_raw = str(row.get("transcript_text", ""))
             preview = transcript_raw[:80]
             if len(transcript_raw) > 80:
                 preview += "..."
 
+            scene_start = int(row["start_ms"])
+            scene_end = int(row["end_ms"])
+            scene_mid = (scene_start + scene_end) // 2
+
+            # screen_content: most recent text_change_event at or before scene start
+            screen_content = ""
+            for tc in reversed(_text_changes):
+                if int(tc.get("timestamp_ms", 0)) <= scene_start:
+                    raw_title = str(tc.get("new_title", "") or "")
+                    screen_content = raw_title[:60]
+                    break
+
+            # speaker_activity: classify from transcript text
+            text_lower = transcript_raw.lower()
+            screen_ref_phrases = ("you can see", "look at", "this shows", "here")
+            direct_addr_words = (" i ", " you ", " we ", "let me", " i'")
+            if any(p in text_lower for p in screen_ref_phrases):
+                speaker_activity = "screen_reference"
+            elif any(w in f" {text_lower} " for w in direct_addr_words):
+                speaker_activity = "direct_address"
+            else:
+                speaker_activity = "narrating"
+
+            # energy: nearest emotion_curve entry to scene midpoint
+            energy: float | None = None
+            best_dist = float("inf")
+            for em in _emotion_entries:
+                em_mid = (int(em.get("start_ms", 0)) + int(em.get("end_ms", 0))) // 2
+                dist = abs(em_mid - scene_mid)
+                if dist < best_dist:
+                    best_dist = dist
+                    energy = round(float(em.get("energy", 0)), 4)
+
             scene: dict[str, object] = {
                 "id": int(row["scene_id"]),
-                "start_ms": int(row["start_ms"]),
-                "end_ms": int(row["end_ms"]),
+                "start_ms": scene_start,
+                "end_ms": scene_end,
                 "layout": rec_layout,
                 "has_face": row.get("face_x") is not None,
                 "transcript_preview": preview,
+                "screen_content": screen_content,
+                "speaker_activity": speaker_activity,
+                "energy": energy,
             }
         else:
             # full mode (~120 tokens per scene)
