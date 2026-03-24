@@ -489,12 +489,7 @@ After `ingest`, the OCR stage (PaddleOCR PP-OCRv5 at 1fps) populates two tables:
 
 **1. Auto-detect chapter/section boundaries from slide transitions**
 
-Use `get_segment_detail` or query `text_change_events` to find where on-screen content changes. These are natural cut points:
-
-```
-get_segment_detail(project_id, start_ms=0, end_ms=300000)
-→ on_screen_text[].change_from_previous = true  ← these are your scene breaks
-```
+Use `get_scene_map(detail="summary")` to see `screen_content` changes per scene — these are natural cut points. The `screen_content` field shows when on-screen text changed (from OCR text_change_events).
 
 Each `text_change_event` with `type: "slide_transition"` marks where the presenter moved to a new topic/slide. Use these timestamps as segment boundaries in `create_edit` for edits that respect content structure.
 
@@ -553,7 +548,7 @@ Use this to:
 ```
 1. ingest (runs OCR + scene_analysis + narrative_llm automatically)
 2. get_editing_context → narrative.chapter_boundaries show topic shifts
-3. get_segment_detail(start_ms, end_ms) → on_screen_text + text_change_events for any range
+3. get_scene_map(detail="summary") → screen_content + speaker_activity per scene
 4. find_best_moments(purpose="tutorial_step") → prefers segments near slide transitions
 5. For scenes with OCR text:
    - Small text → add zoom_in motion effect
@@ -970,100 +965,101 @@ Workflow: decide coords → preview_layout → adjust → repeat → render → 
 
 ---
 
-## 20. Complete Workflow (40 MCP Tools)
+## 20. Complete Workflow (39 MCP Tools)
 
 ### Available Tools
 
-| Category | Tools |
-|---|---|
-| **Understand** | `get_editing_context` (manifest+speakers+narrative+transcript), `get_transcript`, `get_segment_detail` (17 streams + point query), `get_scene_map`, `search_content`, `analyze_frame`, `get_frame` |
-| **Discover** | `find_safe_cuts` (audio-safe boundaries from ALL streams), `find_best_moments` (convergence cuts+story beat+character), `find_cut_points`, `get_narrative_flow` |
-| **Edit** | `create_edit` (auto-validates narrative), `modify_edit`, `auto_trim`, `color_adjust`, `add_motion`, `add_overlay` |
-| **Preview** | `preview_layout`, `preview_clip` |
-| **Render** | `render`, `inspect_render` |
-| **Audio** | `audio_cleanup`, `generate_music`, `compose_midi`, `generate_sfx` |
-| **Project** | `project_create/open/list/status/delete`, `ingest` |
-| **System** | `config_get/set/list`, `disk_status/cleanup`, `credits_balance/history/estimate/spending_limit` |
+| Category | Tools | Token Cost |
+|---|---|---|
+| **Understand** | `get_editing_context`, `get_transcript`, `get_scene_map`, `search_content`, `analyze_frame`, `get_frame` | 2K-10K |
+| **Discover** | `find_safe_cuts`, `find_best_moments`, `find_cut_points`, `get_narrative_flow` | 1K-5K |
+| **Edit** | `create_edit`, `modify_edit`, `auto_trim`, `color_adjust`, `add_motion`, `add_overlay` | <100 each |
+| **Preview** | `preview_layout`, `preview_clip` | 2K-3K (images) |
+| **Render** | `render`, `inspect_render` | <300 |
+| **Audio** | `audio_cleanup`, `generate_music`, `compose_midi`, `generate_sfx` | <100 each |
+| **Project** | `project_create/open/list/status/delete`, `ingest` | <300 |
+| **System** | `config_get/set/list`, `disk_status/cleanup`, `credits_balance/history/estimate/spending_limit` | <50 each |
+
+**Token budget for full workflow on 8-minute video: ~20K tokens.**
 
 ### Workflow
 
 ```
-1. project_create → ingest → wait "ready"
+1. CREATE + INGEST
+   project_create → ingest → wait "ready"
 
-2. UNDERSTAND (2 calls):
-   get_editing_context → manifest, speakers, Qwen3-8B narrative
-     (story_beats, open_loops, chapters), transcript preview
-   get_transcript(start_ms=0) → read the FULL transcript
-   You MUST read the full transcript. Understand the story arc.
-   Identify: what is the PROMISE? Where is the PAYOFF?
+2. UNDERSTAND THE VIDEO (3 calls, ~15K tokens total):
+   a) get_editing_context → Qwen3-8B narrative analysis
+      (story_beats, open_loops, chapters, speakers, transcript preview)
+      Read the story_beats. Identify: PROMISE and PAYOFF.
 
-3. FIND SAFE CUTS (1 call — MOST IMPORTANT STEP):
-   find_safe_cuts(project_id) → ALL audio-safe cut points
+   b) get_transcript → full transcript TEXT
+      Default mode returns text only (no word timestamps). ~700 tokens/min.
+      READ THIS. Understand what the speaker says, in what order.
 
-   This tool cross-references 7 analysis streams (silence gaps,
-   word-level transcript, beats, scene boundaries, text changes,
-   emotion) and returns ONLY cuts where the audio will be clean.
+   c) get_scene_map(detail="summary") → L-Storyboard for every scene
+      Each scene includes: transcript_preview, screen_content (from OCR),
+      speaker_activity (direct_address/screen_reference/narrating),
+      energy, layout recommendation, face detection.
+      This is the PRIMARY editing intelligence. ~80 tokens/scene.
+      For a 2-hour video: ~40K tokens for ALL scenes.
 
-   Each cut includes:
-     - words_before / words_after: READ THESE. They tell you what
-       the transition will SOUND like when played back.
-     - safety_score: 85+ = excellent, 70+ = good, <60 = risky
-     - thought_complete: true = sentence ends naturally
-     - cut_before_ms / cut_after_ms: USE THESE DIRECTLY as
-       source_end_ms / source_start_ms in create_edit.
-       Padding is already applied. Do NOT adjust them.
-     - warning: if set, the speaker was mid-demonstration —
-       DO NOT cut here unless you include the continuation.
+   After these 3 calls you know:
+   - The full story arc (narrative)
+   - Every word spoken (transcript)
+   - What's on screen at every moment (scene_map)
+   - Where the speaker is looking/doing (speaker_activity)
+   - The emotional energy curve (energy per scene)
 
-   RULE: NEVER use any timestamp as a segment boundary unless
-   it came from find_safe_cuts. No manually picked timestamps.
-   No transcript segment timestamps. No highlight timestamps.
-   ONLY cut_before_ms and cut_after_ms from this tool.
+3. FIND SAFE CUTS (1 call, ~1K-5K tokens):
+   find_safe_cuts(project_id) → audio-safe cut points
 
-4. SEGMENT PLAN (MANY small segments, not FEW large ones):
-   For FULL-LENGTH videos (keeping most/all content):
-     - Use auto_trim segments as the base (natural 5-15s segments)
-     - Each segment gets its OWN per-segment canvas matching
-       what the speaker is saying/showing at that moment
-     - Read the transcript for each segment → decide layout
+   Each cut shows exact words before/after the gap.
+   READ the words — they tell you what the transition sounds like.
+
+   RULE: ONLY use cut_before_ms / cut_after_ms as segment boundaries.
+   No manually picked timestamps. No transcript timestamps.
+
+4. PLAN SEGMENTS (use scene_map + transcript + safe cuts):
+
+   For FULL-LENGTH (keeping most content):
+     - auto_trim → natural 5-15s segments with fillers removed
+     - For EACH segment: read its scene_map entry
+     - speaker_activity tells you the layout:
+         "direct_address" → Layout D or B (face dominant)
+         "screen_reference" → Layout A or C (screen dominant)
+         "narrating" → Layout B (balanced)
+     - screen_content tells you what to crop to
      - Apply motion effects, zoom, speed per segment
-     - Target: 15-30+ segments for a 3-8 minute video
+     - Target: 15-30+ segments for 3-8 min video
 
    For SHORT CUTS (condensing to 60-180s):
-     - Use find_safe_cuts to identify audio-safe boundaries
-     - Select which cuts form the story arc
-     - Still break into many small segments (5-10s each)
-     - Each segment gets its own layout
+     - Use safe cuts to select audio-safe boundaries
+     - Map to story_beats: hook → setup → demo → result → cta
+     - Break into 5-10s segments, each with own canvas
+     - Verify with get_narrative_flow (no BROKEN_PROMISE warnings)
 
    Layout rules:
-     - NEVER use the same layout for more than 8 seconds
-     - Progression: D → B → A → C → D (smooth, never jump >1 level)
-     - Match layout to what speaker is DOING (see Layout E table)
-     - Apply zoom/motion to EVERY segment (even subtle 1.0→1.05)
-     - Use per-segment color shifts for mood changes
+     - NEVER same layout for >8 seconds
+     - Progression: D → B → A → C → D
+     - Use ALL effects: zoom, speed, transitions, overlays, SFX
+     - Every segment gets motion (even subtle 1.0→1.05)
 
-   For ALL videos:
-     - Every gap that's skipped must NOT break a promise
-     - Verify with get_narrative_flow before building
+5. VERIFY NARRATIVE (required for non-contiguous edits):
+   get_narrative_flow(segments) → fix all BROKEN_PROMISE warnings
 
-5. VERIFY NARRATIVE (1 call — REQUIRED):
-   get_narrative_flow(segments) → check for BROKEN_PROMISE warnings
-   If ANY BROKEN_PROMISE warning: fix segments and re-verify.
-   LARGE_GAP warnings: review skipped text, acceptable if topic shift.
+6. VERIFY VISUALS (1 call per key segment):
+   preview_layout(timestamp_ms, regions) → look at frame
+   Use webcam region (not face bbox) for speaker crops.
 
-6. VERIFY VISUALS (1 call per segment):
-   preview_layout(timestamp_ms, regions) → look at each frame
-   Use webcam region (not face bbox) for speaker source crop.
+7. BUILD:
+   create_edit with per-segment canvas for each segment
+   Then: color_adjust + add_motion + add_overlay per segment
+   Add SFX on transitions, overlays on stat mentions
 
-7. BUILD (1 call + polish):
-   create_edit → auto-validates narrative, returns warnings if:
-     - gaps >1s skip >20 words of content
-     - segments cut mid-thought (no .!? at end)
-   If warnings appear: fix segments before proceeding.
-   Then: color_adjust + add_motion + add_overlay
-
-8. RENDER (1 call):
-   render → inspect_render → verify frames match previews
+8. RENDER + INSPECT:
+   render → get_frame(render_id, timestamps) → verify output
+   If wrong → fix → re-render
 ```
 
 ### How find_safe_cuts Works
@@ -1084,10 +1080,8 @@ The `cut_before_ms` and `cut_after_ms` values include 50ms audio padding to avoi
 
 ### Point Queries
 
-Use `get_segment_detail(project_id, timestamp_ms=X, layout="D")` for:
-- 10-second window of ALL 17 data streams around that timestamp
-- Canvas regions for the requested layout
-- Emphasis words, speech-screen alignment, emotion peaks
+Use `get_scene_map(detail="full", layout="D")` for canvas regions per scene.
+Use `get_frame(timestamp_ms=X)` to visually inspect any specific moment.
 
 ---
 
@@ -1120,7 +1114,7 @@ CTA (last 5s):  Face close-up. Specific call to action.
 
 ### Mistake 3: Skipping the preview loop
 
-**What happened**: Went straight from `get_segment_detail(timestamp_ms=X)` coordinates to `create_edit` to `render` without previewing. The hook frame had terminal JSON text bleeding into the face close-up. This was only discovered after a full render that took 2 minutes and crashed WSL.
+**What happened**: Went straight from `get_scene_map(timestamp_ms=X)` coordinates to `create_edit` to `render` without previewing. The hook frame had terminal JSON text bleeding into the face close-up. This was only discovered after a full render that took 2 minutes and crashed WSL.
 
 **Rule**: ALWAYS preview EVERY segment before creating the edit.
 ```
@@ -1146,7 +1140,7 @@ Each layout transition should feel like a gentle "zoom out" (D→B→A→C) or "
 
 ### Mistake 5: Using generic scene_map regions instead of per-timestamp analysis
 
-**What happened**: Used pre-computed canvas_regions from `get_segment_detail(timestamp_ms=X)` which represent the general scene (8-second average). But at the specific timestamp, the webcam overlay overlapped with terminal text, making the face crop include code artifacts.
+**What happened**: Used pre-computed canvas_regions from `get_scene_map(timestamp_ms=X)` which represent the general scene (8-second average). But at the specific timestamp, the webcam overlay overlapped with terminal text, making the face crop include code artifacts.
 
 **Rule**: For face-dominant layouts (D, B, A speaker region), ALWAYS verify the source crop coordinates with `preview_layout` at the EXACT start timestamp of the segment. The webcam overlay position shifts slightly between frames, and surrounding content changes constantly in screen recordings.
 
@@ -1169,7 +1163,7 @@ WRONG:  source_x=2925, source_y=1563, source_width=482, source_height=482  (face
 RIGHT:  source_x=2718, source_y=1474, source_width=831, source_height=686  (webcam overlay — full)
 ```
 
-In `get_segment_detail(timestamp_ms=X)` point query response:
+In `get_scene_map(timestamp_ms=X)` point query response:
 - `scene.face` = detection data (where the face IS). Use for knowing IF a face exists.
 - `scene.webcam` = crop data (what to SHOW). Use for canvas region source coordinates.
 

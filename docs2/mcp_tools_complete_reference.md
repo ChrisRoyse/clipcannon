@@ -1,4 +1,4 @@
-# ClipCannon MCP Tools — Complete Reference (40 Tools)
+# ClipCannon MCP Tools — Complete Reference (39 Tools)
 
 **Updated:** 2026-03-24
 **Source:** `src/clipcannon/server.py`, `src/clipcannon/tools/`
@@ -12,7 +12,7 @@ The MCP server registers `list_tools()` → `ALL_TOOL_DEFINITIONS` and `call_too
 | Module | Dispatch Function | Count |
 |---|---|---|
 | `tools/project.py` | `dispatch_project_tool` | 5 |
-| `tools/__init__.py` | `dispatch_understanding_tool` | 5 |
+| `tools/__init__.py` | `dispatch_understanding_tool` | 4 |
 | `tools/disk.py` | `dispatch_disk_tool` | 2 |
 | `tools/config_tools.py` | `dispatch_config_tool` | 3 |
 | `tools/billing_tools.py` | `dispatch_billing_tool` | 4 |
@@ -20,7 +20,7 @@ The MCP server registers `list_tools()` → `ALL_TOOL_DEFINITIONS` and `call_too
 | `tools/rendering.py` | `dispatch_rendering_tool` | 7 |
 | `tools/audio.py` | `dispatch_audio_tool` | 4 |
 | `tools/discovery.py` | `dispatch_discovery_tool` | 4 |
-| **Total** | | **40** |
+| **Total** | | **39** |
 
 Provenance functions (`provenance_tools.py`) are now internal-only — not exposed via MCP.
 
@@ -103,21 +103,7 @@ Returns paginated word-level transcript in 15-minute windows. Includes segment t
 | `start_ms` | integer | No | Start time filter (default 0) |
 | `end_ms` | integer | No | End time filter (default start + 900000) |
 
-**Returns:** Transcript segments with word-level timestamps for the requested window
-
-### clipcannon_get_segment_detail
-
-Master query: returns ALL intelligence from every embedder for a time range. 17 data streams: transcript (segments + words), emotion curve (arousal/valence/energy), speakers, reactions, beats, on-screen text (OCR), text change events (slide transitions), pacing, scene quality, scene map (face/webcam/content/canvas regions), silence gaps, highlights (scored), topics, profanity, music sections. Supports point-query mode via `timestamp_ms` (returns 10s window centered on that timestamp with scene_map entry and canvas regions). Optionally pass `layout` to filter canvas regions.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project_id` | string | Yes | Project ID |
-| `start_ms` | integer | No | Start time in ms (not needed with timestamp_ms) |
-| `end_ms` | integer | No | End time in ms (not needed with timestamp_ms) |
-| `timestamp_ms` | integer | No | Point-query: returns 10s window (ts-5000 to ts+5000) with scene_map and canvas regions |
-| `layout` | string | No | Layout name to filter canvas regions (only with timestamp_ms) |
-
-**Returns:** Full-resolution multi-stream data for fine-grained editing decisions
+**Returns:** Transcript segments (text mode: ~700 tokens/min, words mode: ~4500 tokens/min)
 
 ### clipcannon_get_frame
 
@@ -624,7 +610,8 @@ The following tools were removed from MCP registration during the Phase 2 consol
 | Former Tool | Reason | Replacement |
 |---|---|---|
 | `clipcannon_get_vud_summary` | Subsumed | `get_editing_context` returns superset |
-| `clipcannon_get_analytics` | Subsumed | `get_segment_detail` returns all streams |
+| `clipcannon_get_analytics` | Subsumed | `get_scene_map` + `get_editing_context` cover all needs |
+| `clipcannon_get_segment_detail` | Removed | 425K tokens for 3.5min video (89% OCR bloat). Use `get_scene_map` (enhanced with L-Storyboard fields) + `get_frame` for drill-down |
 | `clipcannon_list_edits` | Internal | Used by rendering pipeline internally |
 | `clipcannon_generate_metadata` | Internal | Used by rendering pipeline internally |
 | `clipcannon_render_status` | Internal | Used by render pipeline internally |
