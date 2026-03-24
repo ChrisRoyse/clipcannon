@@ -941,6 +941,66 @@ Read the transcript for each segment. If the speaker says "I", "you", "we", "let
 
 **Verification**: For each segment, read the last sentence AND the first sentence of the NEXT segment in your source. If the next sentence completes an idea from the last sentence, extend the segment to include it.
 
+### Mistake 10: Ignoring Qwen3 BROKEN_PROMISE warnings from get_narrative_flow
+
+**What happened**: Called `get_narrative_flow` to validate proposed segments. Qwen3 returned BROKEN_PROMISE warnings like "speaker says 'you can see' but the continuation is in this gap" and LARGE_GAP warnings. Ignored all of them and created the edit anyway. The resulting video had jarring jumps where the speaker promises to show something, then the video cuts to a completely different topic. The viewer feels cheated.
+
+**Root cause**: Treated `get_narrative_flow` as a checkbox tool ("I called it") instead of reading and acting on the response. The BROKEN_PROMISE warnings are the LLM telling you the edit will confuse viewers. They are NOT informational — they are errors that must be fixed before proceeding.
+
+**Rule**: When `get_narrative_flow` returns warnings:
+- **BROKEN_PROMISE**: MUST fix. Extend the segment to include the continuation, or remove the segment entirely. A broken promise is worse than a missing segment.
+- **LARGE_GAP**: Review the skipped content. If it contains setup/context needed by the next segment, include it. If it's genuinely skippable (technical details, tangents), acceptable.
+- **thought_complete: false**: Check the last sentence. If it ends mid-idea, extend to the next natural pause.
+
+**Workflow**: Call `get_narrative_flow` → read ALL warnings → fix segments → call `get_narrative_flow` again → repeat until no BROKEN_PROMISE warnings remain.
+
+### Mistake 11: Using same layout (PIP) for every segment
+
+**What happened**: Applied Layout C (PIP with small speaker overlay) to ALL segments. The hook was a tiny face in a corner instead of a full-face close-up. The CTA was the same tiny face. There was no visual variety — the viewer's eye had nothing new to track, causing the "monotonous pacing" dropout trigger.
+
+**Rule**: Every TikTok/Short needs layout progression. Follow the template:
+```
+D (hook) → B (setup) → A (demo) → C (screen-heavy) → A (features) → B (transition) → D (CTA)
+```
+The layout should match the speaker's ACTIVITY at that moment (see Mistake 8). Visual change every 5-8 seconds is the #1 retention weapon.
+
+### Mistake 12: Audio clipping at word boundaries — cutting at transcript segment timestamps
+
+**What happened**: Used transcript segment timestamps (e.g., segment ends at 8330ms) as cut points. But transcript timestamps mark when the speech content ends, not when the audio waveform ends. Consonants like "m" in "system." have a tail that extends 50-100ms past the transcript timestamp. Cutting exactly at 8330ms clips the final consonant, making it sound like "syste-".
+
+Similarly, starting the next segment at the transcript start time (8390ms) clips the intake breath before "This". The viewer hears "-is is full document..." instead of "This is full document...".
+
+**Rule**: Add audio padding at every cut point:
+- **Segment start**: Subtract 50-100ms from the first word's start_ms. This captures the intake breath.
+- **Segment end**: Add 100-150ms after the last word's end_ms. This captures consonant tails and natural room tone.
+- **Contiguous segments**: When two segments are from adjacent source material (gap < 200ms), merge them into one segment. The concat will introduce a micro-gap; keeping them as one segment avoids it.
+
+**Word-level verification**: Use `get_transcript` with word-level timestamps. For every segment boundary, find the exact word that should start/end there. The segment's source_start_ms should be the word's start_ms minus 50ms. The segment's source_end_ms should be the word's end_ms plus 100ms.
+
+```
+WRONG:  source_end_ms = 8330   (transcript segment end — clips "system." tail)
+RIGHT:  source_end_ms = 8400   (word end 8330 + 70ms padding — clean cut)
+
+WRONG:  source_start_ms = 8390  (transcript segment start — clips breath)
+RIGHT:  source_start_ms = 8350  (word start 8390 - 40ms padding — captures breath)
+```
+
+### Mistake 13: Treating tool calls as a checklist instead of thinking like an editor
+
+**What happened**: Used all 39 tools in sequence, checked them off, and declared victory. But the resulting video was incoherent because no creative judgment was applied. The tools were used to PROVE they work, not to MAKE a good video. find_best_moments returned scored candidates — used them. get_narrative_flow returned warnings — ignored them. The edit was optimized for tool coverage, not viewer experience.
+
+**Root cause**: An AI video editor must think like a human editor: (1) watch/read the full content, (2) understand the story arc, (3) choose segments that tell THAT story, (4) verify the narrative makes sense, (5) iterate until it's right. The tools exist to support this creative process, not to replace it.
+
+**Rule**: Before touching any editing tool, answer these questions:
+1. What is the PROMISE of this video? (What will the viewer learn/see?)
+2. What is the PAYOFF? (Where in the source is the promise fulfilled?)
+3. What is the STORY ARC? (Hook → Setup → Demo → Result → CTA)
+4. Which segments from the transcript tell this specific story?
+5. Does each segment END at a complete thought?
+6. Does the next segment START coherently after the gap?
+
+Only after answering all 6 should you call `create_edit`. Then `get_narrative_flow` to verify. Then fix. Then render.
+
 ---
 
 ## 22. Quality Checklist
