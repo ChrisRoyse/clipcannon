@@ -132,4 +132,38 @@ DISCOVERY_TOOL_DEFINITIONS: list[Tool] = [
             "required": ["project_id", "segments"],
         },
     ),
+    Tool(
+        name="clipcannon_find_safe_cuts",
+        description=(
+            "Find audio-safe cut points across the ENTIRE video by "
+            "cross-referencing ALL analysis streams: silence gaps, "
+            "sentence endings (word-level), beat positions, scene "
+            "boundaries, text change events, and emotion energy. "
+            "Each cut point includes the exact words before and after "
+            "the gap, whether the thought is complete, recommended "
+            "padding in ms, and a safety rating. Returns cuts sorted "
+            "by safety score (safest first). Use these timestamps "
+            "directly as segment boundaries in create_edit — the "
+            "padding is already calculated. ALWAYS use this tool "
+            "instead of manually picking timestamps. No credits charged."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+                "min_silence_ms": {
+                    "type": "integer",
+                    "description": (
+                        "Minimum silence gap duration to consider (default 400ms). "
+                        "Lower values find more cuts but may clip audio."
+                    ),
+                    "default": 400,
+                },
+            },
+            "required": ["project_id"],
+        },
+    ),
 ]
