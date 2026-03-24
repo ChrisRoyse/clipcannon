@@ -263,15 +263,15 @@ Applied to an entire segment via `add_motion(segment_id, effect)`. These are sim
 
 ### Speed Control
 
-Per-segment playback speed via `speed` parameter in create_edit segments.
+Per-segment playback speed via `speed` parameter in create_edit segments. Video uses combined `setpts=(PTS-STARTPTS)/speed` (single PTS expression), audio uses `atempo=speed`. Post-concat `aresample=async=1` corrects any audio/video duration mismatch from the WSOLA algorithm.
 
 | Speed | Effect | Use Case |
 |---|---|---|
 | `0.5` | Half speed (slow-mo) | Dramatic reveals, emphasis moments |
-| `0.8` | Slightly slow | Building tension, important statements |
+| `0.8-0.85` | Slightly slow | Building tension, important statements |
 | `1.0` | Normal | Default speech |
 | `1.2` | Slightly fast | Tighten boring sections without cutting |
-| `1.5` | Fast | Skip through setup/context quickly |
+| `1.3-1.5` | Fast | Skip through setup/navigation quickly |
 | `2.0` | Double speed | Time-lapse of process, code scrolling |
 | `3.0-4.0` | Very fast | Montage, speed-through long demos |
 
@@ -372,6 +372,8 @@ All pre-render visual tools work on rendered output via `render_id` parameter:
 | `get_frame(render_id=X, timestamp_ms=T)` | Extract any frame from rendered video | Verify layout, captions, overlays at specific timestamps |
 | `analyze_frame(render_id=X, timestamp_ms=T)` | Detect regions in rendered output | Verify content is visible, check for dead space |
 | `preview_clip(render_id=X, start_ms=T)` | Preview rendered video at any point | Quick playback check of transitions |
+
+**Caption verification workflow:** Render with `captions=true` (default). Check `get_frame` at 3 timestamps: early (10s), middle (50%), and late (90%). If captions match speech at all 3 points, sync is confirmed. The two-pass system auto-corrects drift, so manual sync fixes are rarely needed.
 
 ---
 
@@ -765,6 +767,19 @@ The hook is the highest-leverage edit. 65% longer watch times and 41% higher com
 
 ## 12. Captions
 
+### Render Parameter
+
+`render(project_id, edit_id, captions=true)` — default `true`. Set `false` to render without captions. When `true`, captions are burned via **two-pass auto-alignment**:
+
+1. Video renders and concatenates WITHOUT captions (stream copy)
+2. System probes actual rendered duration via ffprobe
+3. If drift >50ms detected (common with multi-segment edits due to AAC frame padding), all ASS timestamps are scaled proportionally to match actual output
+4. Captions burned in a final FFmpeg pass against the real rendered output
+
+This eliminates caption-audio desync that compounds across many segments. Drift correction is automatic and logged.
+
+### Platform Styles
+
 | Platform | Style | Size | Y Pos | Weight | Stroke | Background |
 |---|---|---|---|---|---|---|
 | TikTok | bold_centered | 48-52px | 1440 | 800 | 3px black | None |
@@ -975,7 +990,7 @@ Workflow: decide coords → preview_layout → adjust → repeat → render → 
 | **Discover** | `find_safe_cuts`, `find_best_moments`, `find_cut_points`, `get_narrative_flow` | 1K-5K |
 | **Edit** | `create_edit`, `modify_edit`, `auto_trim`, `color_adjust`, `add_motion`, `add_overlay` | <100 each |
 | **Preview** | `preview_layout`, `preview_clip` | 2K-3K (images) |
-| **Render** | `render`, `inspect_render` | <300 |
+| **Render** | `render(captions=true/false)`, `inspect_render` | <300 |
 | **Audio** | `audio_cleanup`, `generate_music`, `compose_midi`, `generate_sfx` | <100 each |
 | **Project** | `project_create/open/list/status/delete`, `ingest` | <300 |
 | **System** | `config_get/set/list`, `disk_status/cleanup`, `credits_balance/history/estimate/spending_limit` | <50 each |
@@ -1058,8 +1073,10 @@ Workflow: decide coords → preview_layout → adjust → repeat → render → 
    Add SFX on transitions, overlays on stat mentions
 
 8. RENDER + INSPECT:
-   render → get_frame(render_id, timestamps) → verify output
+   render(captions=true) → two-pass caption sync (automatic)
+   get_frame(render_id, timestamps) → verify output
    If wrong → fix → re-render
+   Use render(captions=false) for quick layout-only previews
 ```
 
 ### How find_safe_cuts Works
@@ -1309,7 +1326,7 @@ A professional edit uses ALL of these in combination. A basic edit uses 2-3.
 - No unintentional black bars; dark fill = #0D0D0D
 - Hook in first 3s (Layout D), CTA in last 3-5s (Layout D)
 - Visual change every 3-8s (platform dependent)
-- Captions on all spoken content, accurate within 100ms, max 2 lines
+- Captions on all spoken content, max 2 lines (two-pass alignment keeps sync <50ms)
 - **Pattern interrupt every 5-8s in short-form** (layout switch, zoom, text pop, or color shift)
 - **OCR text regions readable** at ≥40px after scaling (zoom if not)
 - **Sound effects synced** to visual transitions

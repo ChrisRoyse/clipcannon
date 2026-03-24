@@ -21,6 +21,16 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
             "properties": {
                 "project_id": {"type": "string", "description": "Project identifier"},
                 "edit_id": {"type": "string", "description": "Edit identifier to render"},
+                "captions": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": (
+                        "Burn captions into the video (default true). "
+                        "Captions are burned in a post-render second "
+                        "pass with automatic timestamp alignment to "
+                        "the actual rendered output duration."
+                    ),
+                },
             },
             "required": ["project_id", "edit_id"],
         },

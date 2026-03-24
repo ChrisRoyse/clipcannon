@@ -319,23 +319,38 @@ def _remap_single_chunk(
             chunk.start_ms >= seg.source_start_ms
             and chunk.start_ms < seg.source_end_ms
         ):
-            # Compute the offset within the segment
+            # Compute the offset within the segment.
+            # Use round() instead of int() to avoid cumulative
+            # truncation drift — int() always rounds toward zero,
+            # losing 0.1-0.7 ms per division by non-integer speeds
+            # (e.g. 1.3, 0.85).  Over hundreds of words this
+            # compounds to 200-400 ms of caption drift.
             offset_in_source = chunk.start_ms - seg.source_start_ms
-            offset_in_output = int(offset_in_source / seg.speed)
+            offset_in_output = round(offset_in_source / seg.speed)
 
             output_start = seg.output_start_ms + offset_in_output
 
             chunk_source_dur = chunk.end_ms - chunk.start_ms
-            output_dur = int(chunk_source_dur / seg.speed)
+            output_dur = round(chunk_source_dur / seg.speed)
             output_end = output_start + output_dur
 
-            # Remap individual words
+            # Clamp output times to segment boundary — prevents
+            # captions from spilling into the next segment when
+            # a chunk spans the cut point in non-contiguous edits.
+            seg_output_end = seg.output_start_ms + seg.output_duration_ms
+            output_end = min(output_end, seg_output_end)
+
+            # Remap individual words, clamping each to segment boundary
             remapped_words: list[CaptionWord] = []
             for w in chunk.words:
                 w_offset = w.start_ms - seg.source_start_ms
-                w_out_start = seg.output_start_ms + int(w_offset / seg.speed)
+                w_out_start = seg.output_start_ms + round(w_offset / seg.speed)
+                # Drop words that start at or past the segment boundary
+                if w_out_start >= seg_output_end:
+                    continue
                 w_dur = w.end_ms - w.start_ms
-                w_out_end = w_out_start + int(w_dur / seg.speed)
+                w_out_end = w_out_start + round(w_dur / seg.speed)
+                w_out_end = min(w_out_end, seg_output_end)
                 remapped_words.append(
                     CaptionWord(
                         word=w.word,
@@ -344,9 +359,16 @@ def _remap_single_chunk(
                     )
                 )
 
+            # All words fell outside the segment — drop the chunk
+            if not remapped_words:
+                return None
+
+            # Rebuild text from surviving words only
+            text = " ".join(w.word for w in remapped_words)
+
             return CaptionChunk(
                 chunk_id=chunk.chunk_id,
-                text=chunk.text,
+                text=text,
                 start_ms=output_start,
                 end_ms=output_end,
                 words=remapped_words,

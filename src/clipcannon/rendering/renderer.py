@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
-from clipcannon.db.queries import execute, fetch_one
+from clipcannon.db.queries import execute, fetch_all, fetch_one
 from clipcannon.editing.caption_render import generate_ass_file
 from clipcannon.editing.edl import (
     EditDecisionList,
@@ -34,7 +34,11 @@ from clipcannon.provenance.recorder import (
     OutputInfo,
     record_provenance,
 )
-from clipcannon.rendering.ffmpeg_cmd import build_encoding_args, build_ffmpeg_cmd
+from clipcannon.rendering.ffmpeg_cmd import (
+    _escape_subtitle_path,
+    build_encoding_args,
+    build_ffmpeg_cmd,
+)
 from clipcannon.rendering.profiles import (
     EncodingProfile,
     get_profile,
@@ -43,6 +47,119 @@ from clipcannon.rendering.profiles import (
 from clipcannon.rendering.thumbnail import generate_thumbnail
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# CAPTION SYNC HELPERS
+# ============================================================
+def _probe_duration_ms(video_path: Path) -> int:
+    """Probe the actual duration of a video file via ffprobe.
+
+    Returns the container-reported duration in milliseconds.
+    Used to detect concat demuxer timestamp drift.
+
+    Args:
+        video_path: Path to the video file to probe.
+
+    Returns:
+        Duration in milliseconds.
+
+    Raises:
+        PipelineError: If ffprobe fails or returns unexpected output.
+    """
+    import json
+    import subprocess
+
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "quiet",
+            "-print_format", "json",
+            "-show_format",
+            str(video_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    if result.returncode != 0:
+        raise PipelineError(
+            f"ffprobe failed (exit {result.returncode}) for {video_path}",
+            stage_name="rendering",
+            operation="probe_duration",
+            details={"stderr": result.stderr[:500]},
+        )
+
+    try:
+        data = json.loads(result.stdout)
+        duration = float(data["format"]["duration"])
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
+        raise PipelineError(
+            f"ffprobe returned unexpected output for {video_path}: {exc}",
+            stage_name="rendering",
+            operation="probe_duration",
+            details={"stdout": result.stdout[:500]},
+        ) from exc
+
+    return round(duration * 1000)
+
+
+def _scale_ass_file(
+    ass_path: Path,
+    scale: float,
+    output_path: Path,
+) -> Path:
+    """Scale all timestamps in an ASS file by a factor.
+
+    Adjusts Dialogue start/end times (H:MM:SS.cc format) and
+    karaoke tag durations (\\kf centiseconds) proportionally.
+    Used to align pre-computed caption timestamps with the actual
+    rendered output duration when concat demuxer drift is detected.
+
+    Args:
+        ass_path: Path to the original ASS file.
+        scale: Multiplicative factor (e.g., 1.018 = 1.8% stretch).
+        output_path: Where to write the scaled ASS file.
+
+    Returns:
+        Path to the scaled ASS file.
+    """
+    import re
+
+    time_re = re.compile(r"(\d+):(\d{2}):(\d{2})\.(\d{2})")
+    kf_re = re.compile(r"\\kf(\d+)")
+
+    def scale_time(match: re.Match[str]) -> str:
+        h = int(match.group(1))
+        m = int(match.group(2))
+        s = int(match.group(3))
+        cs = int(match.group(4))
+        total_cs = h * 360000 + m * 6000 + s * 100 + cs
+        scaled_cs = round(total_cs * scale)
+        nh = scaled_cs // 360000
+        nm = (scaled_cs % 360000) // 6000
+        ns = (scaled_cs % 6000) // 100
+        ncs = scaled_cs % 100
+        return f"{nh}:{nm:02d}:{ns:02d}.{ncs:02d}"
+
+    def scale_kf(match: re.Match[str]) -> str:
+        cs = int(match.group(1))
+        return f"\\kf{max(1, round(cs * scale))}"
+
+    lines = ass_path.read_text().splitlines()
+    scaled_lines: list[str] = []
+    for line in lines:
+        if line.startswith("Dialogue:"):
+            line = time_re.sub(scale_time, line)
+            line = kf_re.sub(scale_kf, line)
+        scaled_lines.append(line)
+
+    output_path.write_text("\n".join(scaled_lines) + "\n")
+    logger.info(
+        "Scaled ASS timestamps by %.5f: %s -> %s",
+        scale, ass_path.name, output_path.name,
+    )
+    return output_path
 
 
 @dataclass
@@ -151,6 +268,7 @@ class RenderEngine:
                 encoding_args=encoding_args,
                 render_id=render_id,
                 render_dir=render_dir,
+                db_path=db_path,
             )
 
             if not output_path.exists():
@@ -415,6 +533,7 @@ class RenderEngine:
         encoding_args: list[str],
         render_id: str,
         render_dir: Path,
+        db_path: Path | None = None,
     ) -> None:
         """Render each segment independently then concatenate.
 
@@ -433,6 +552,7 @@ class RenderEngine:
             encoding_args: Encoding arguments for FFmpeg.
             render_id: Unique render identifier.
             render_dir: Directory for render artifacts.
+            db_path: Path to the project database (for audio assets).
         """
         segments = edl.segments
         canvas_spec = edl.canvas if edl.canvas.enabled else None
@@ -485,13 +605,10 @@ class RenderEngine:
                 # Overlays: only include overlays that fall within this
                 # segment's output time range, remapped to local times
                 seg_start_output_ms = sum(
-                    int(
-                        (s.source_end_ms - s.source_start_ms) / s.speed
-                    )
-                    for s in segments[:i]
+                    s.output_duration_ms for s in segments[:i]
                 )
-                seg_end_output_ms = seg_start_output_ms + int(
-                    (seg.source_end_ms - seg.source_start_ms) / seg.speed
+                seg_end_output_ms = (
+                    seg_start_output_ms + seg.output_duration_ms
                 )
                 seg_overlays = None
                 if edl.overlays:
@@ -559,52 +676,104 @@ class RenderEngine:
                 for sf in segment_files:
                     f.write(f"file '{sf}'\n")
 
-            # Build concat command
-            concat_cmd: list[str] = [
-                "ffmpeg",
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                str(concat_list),
-            ]
-
-            # Add captions to the concat pass if we have them
-            if ass_path is not None:
-                escaped_ass = (
-                    str(ass_path)
-                    .replace("\\", "/")
-                    .replace(":", "\\:")
-                )
-                concat_cmd.extend(
-                    ["-vf", f"subtitles='{escaped_ass}'"]
-                )
-                # Re-encode video for subtitle burn-in
-                concat_cmd.extend(
-                    [
-                        "-c:v",
-                        profile.video_codec,
-                        "-b:v",
-                        str(profile.video_bitrate),
-                    ]
-                )
-            else:
-                # No subtitles: just copy streams (near-zero memory)
-                concat_cmd.extend(["-c", "copy"])
-
-            concat_cmd.extend(["-c:a", "copy"])
-            concat_cmd.append(str(output_path))
-
             logger.info(
                 "Render %s: concatenating %d segments",
                 render_id,
                 len(segment_files),
             )
+
+            # Always concat to temp file first — both the caption
+            # and audio-mixing paths need the intermediate output.
+            concat_raw = temp_dir / "concat_raw.mp4"
+            concat_cmd: list[str] = [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", str(concat_list),
+                "-c", "copy",
+                str(concat_raw),
+            ]
             await self._execute_ffmpeg(
                 concat_cmd, f"{render_id}_concat"
             )
+
+            # Mix audio assets (music, SFX) into the output if any
+            mixed_audio = await self._prepare_mixed_audio(
+                edl, db_path, concat_raw, temp_dir, render_id,
+            )
+
+            if ass_path is not None:
+                # Two-pass caption approach:
+                # 1. Concat with stream copy (done above)
+                # 2. Probe actual duration for drift correction
+                # 3. Scale ASS timestamps if needed
+                # 4. Burn captions (+ mixed audio) in second pass
+                actual_ms = _probe_duration_ms(concat_raw)
+                expected_ms = compute_total_duration(edl.segments)
+                drift_ms = actual_ms - expected_ms
+
+                caption_ass = ass_path
+                if abs(drift_ms) > 50:
+                    scale = actual_ms / expected_ms
+                    logger.info(
+                        "Render %s: caption drift %+dms detected, "
+                        "scaling ASS by %.5f",
+                        render_id, drift_ms, scale,
+                    )
+                    caption_ass = _scale_ass_file(
+                        ass_path,
+                        scale,
+                        render_dir / "captions_scaled.ass",
+                    )
+
+                escaped_ass = _escape_subtitle_path(caption_ass)
+
+                if mixed_audio is not None:
+                    # Burn captions + replace audio with mix
+                    caption_cmd: list[str] = [
+                        "ffmpeg", "-y",
+                        "-i", str(concat_raw),
+                        "-i", str(mixed_audio),
+                        "-vf", f"subtitles='{escaped_ass}'",
+                        "-map", "0:v", "-map", "1:a",
+                        "-c:v", profile.video_codec,
+                        "-b:v", str(profile.video_bitrate),
+                        "-c:a", "aac", "-b:a", "192k",
+                        str(output_path),
+                    ]
+                else:
+                    # Burn captions, copy audio as-is
+                    caption_cmd = [
+                        "ffmpeg", "-y",
+                        "-i", str(concat_raw),
+                        "-vf", f"subtitles='{escaped_ass}'",
+                        "-c:v", profile.video_codec,
+                        "-b:v", str(profile.video_bitrate),
+                        "-c:a", "copy",
+                        str(output_path),
+                    ]
+                await self._execute_ffmpeg(
+                    caption_cmd, f"{render_id}_captions"
+                )
+            else:
+                if mixed_audio is not None:
+                    # No captions but mix audio in (copy video stream)
+                    audio_cmd: list[str] = [
+                        "ffmpeg", "-y",
+                        "-i", str(concat_raw),
+                        "-i", str(mixed_audio),
+                        "-map", "0:v", "-map", "1:a",
+                        "-c:v", "copy",
+                        "-c:a", "aac", "-b:a", "192k",
+                        str(output_path),
+                    ]
+                    await self._execute_ffmpeg(
+                        audio_cmd, f"{render_id}_audio_mix"
+                    )
+                else:
+                    # No captions, no audio mix: move concat to output
+                    shutil.move(str(concat_raw), str(output_path))
+
+            concat_raw.unlink(missing_ok=True)
 
         finally:
             # Clean up temp segment files
@@ -613,6 +782,118 @@ class RenderEngine:
                 logger.debug(
                     "Cleaned up temp segments: %s", temp_dir
                 )
+
+    # ----------------------------------------------------------------
+    # Audio mixing
+    # ----------------------------------------------------------------
+    async def _prepare_mixed_audio(
+        self,
+        edl: EditDecisionList,
+        db_path: Path,
+        concat_path: Path,
+        temp_dir: Path,
+        render_id: str,
+    ) -> Path | None:
+        """Mix audio assets (music, SFX) into the concatenated audio.
+
+        Queries audio_assets for the edit, extracts source audio from
+        the concat video, calls the mixer, and returns the mixed WAV.
+
+        Args:
+            edl: EDL with edit_id for asset lookup.
+            db_path: Path to the project database.
+            concat_path: Path to the concatenated video.
+            temp_dir: Temporary directory for intermediate files.
+            render_id: Render ID for logging.
+
+        Returns:
+            Path to the mixed WAV file, or None if no audio assets.
+        """
+        from clipcannon.audio.mixer import mix_audio
+
+        conn = get_connection(db_path, enable_vec=False, dict_rows=True)
+        try:
+            rows = fetch_all(
+                conn,
+                "SELECT asset_id, type, file_path, volume_db "
+                "FROM audio_assets WHERE edit_id = ? ORDER BY type",
+                (edl.edit_id,),
+            )
+        finally:
+            conn.close()
+
+        if not rows:
+            return None
+
+        music_path: Path | None = None
+        music_volume_db = -18.0
+
+        for row in rows:
+            asset_type = str(row["type"])
+            file_path = Path(str(row["file_path"]))
+            volume_db = float(row["volume_db"] or 0)
+
+            if not file_path.exists():
+                logger.warning(
+                    "Render %s: audio asset missing: %s",
+                    render_id, file_path,
+                )
+                continue
+
+            if asset_type == "music":
+                music_path = file_path
+                music_volume_db = volume_db
+
+        if music_path is None:
+            logger.debug(
+                "Render %s: no music asset found, skipping mix",
+                render_id,
+            )
+            return None
+
+        # Extract audio from concatenated video
+        source_audio = temp_dir / "source_audio.wav"
+        extract_cmd: list[str] = [
+            "ffmpeg", "-y",
+            "-i", str(concat_path),
+            "-vn", "-acodec", "pcm_s16le",
+            "-ar", "44100",
+            str(source_audio),
+        ]
+        await self._execute_ffmpeg(
+            extract_cmd, f"{render_id}_extract_audio"
+        )
+
+        if not source_audio.exists():
+            logger.warning(
+                "Render %s: audio extraction failed", render_id,
+            )
+            return None
+
+        # Mix source speech with background music (speech-aware ducking)
+        mixed_output = temp_dir / "mixed_audio.wav"
+        try:
+            result = await mix_audio(
+                source_audio_path=source_audio,
+                output_path=mixed_output,
+                background_music_path=music_path,
+                music_volume_db=music_volume_db,
+                duck_under_speech=True,
+            )
+            logger.info(
+                "Render %s: audio mixed (%d layers, %dms)",
+                render_id, result.layers_mixed, result.duration_ms,
+            )
+        except Exception:
+            logger.exception(
+                "Render %s: audio mixing failed, continuing without",
+                render_id,
+            )
+            return None
+        finally:
+            source_audio.unlink(missing_ok=True)
+
+        return mixed_output
 
     # ----------------------------------------------------------------
     # FFmpeg execution

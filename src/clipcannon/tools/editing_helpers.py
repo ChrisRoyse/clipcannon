@@ -181,7 +181,10 @@ def build_segments(
         Ordered list of SegmentSpec.
     """
     specs: list[SegmentSpec] = []
-    output_cursor_ms = 0
+    # Use float accumulator to avoid compounding int-truncation drift.
+    # Each segment's output_start_ms is rounded from the precise float
+    # sum, so errors stay < 0.5 ms instead of growing with each segment.
+    output_cursor_f: float = 0.0
 
     for idx, raw in enumerate(raw_segments, start=1):
         source_start = int(raw["source_start_ms"])  # type: ignore[arg-type]
@@ -201,18 +204,29 @@ def build_segments(
         if isinstance(raw_canvas, dict):
             seg_canvas = SegmentCanvasSpec(**raw_canvas)
 
+        # Clamp output_start_ms so it never overlaps with the previous
+        # segment's computed end.  float→int rounding of the accumulator
+        # and of output_duration_ms can differ by ±1ms; clamping keeps
+        # the EDL validation happy while preserving float precision.
+        output_start = round(output_cursor_f)
+        if specs:
+            prev_end = specs[-1].output_start_ms + specs[-1].output_duration_ms
+            if output_start < prev_end:
+                output_start = prev_end
+
         seg = SegmentSpec(
             segment_id=idx,
             source_start_ms=source_start,
             source_end_ms=source_end,
-            output_start_ms=output_cursor_ms,
+            output_start_ms=output_start,
             speed=speed,
             transition_in=transition_in,
             transition_out=transition_out,
             canvas=seg_canvas,
         )
         specs.append(seg)
-        output_cursor_ms += seg.output_duration_ms
+        # Accumulate precise float duration (no truncation per-step)
+        output_cursor_f += (source_end - source_start) / speed
 
     return specs
 

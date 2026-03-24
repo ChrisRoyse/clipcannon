@@ -162,7 +162,7 @@ def _format_ass_time(ms: int) -> str:
     Returns:
         Formatted ASS time string.
     """
-    total_cs = ms // 10
+    total_cs = round(ms / 10)
     cs = total_cs % 100
     total_s = total_cs // 100
     s = total_s % 60

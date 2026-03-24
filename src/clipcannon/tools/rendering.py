@@ -261,6 +261,7 @@ def _load_edl(
 async def clipcannon_render(
     project_id: str,
     edit_id: str,
+    captions: bool = True,
 ) -> dict[str, object]:
     """Render an edit to a video file.
 
@@ -270,6 +271,9 @@ async def clipcannon_render(
     Args:
         project_id: Project identifier.
         edit_id: Edit identifier.
+        captions: Whether to burn captions into the video. When
+            False, disables caption burn-in even if the EDL has
+            captions enabled.
 
     Returns:
         Render result dict or error response.
@@ -331,6 +335,9 @@ async def clipcannon_render(
     try:
         config = ClipCannonConfig.load()
         engine = RenderEngine(config)
+        # When captions=False, disable caption burn-in entirely
+        if not captions:
+            edl.captions.enabled = False
         result = await engine.render(
             edl=edl,
             project_dir=_project_dir(project_id),
@@ -960,6 +967,7 @@ async def dispatch_rendering_tool(
         return await clipcannon_render(
             project_id=str(arguments["project_id"]),
             edit_id=str(arguments["edit_id"]),
+            captions=bool(arguments.get("captions", True)),
         )
     if name == "clipcannon_get_editing_context":
         return await clipcannon_get_editing_context(

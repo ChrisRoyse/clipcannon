@@ -235,6 +235,8 @@ def _build_single_segment_cmd(
     vfilters.append(f"scale={profile.width}:{profile.height}")
 
     if segment.speed != 1.0:
+        # Speed adjustment via PTS rescale (separate pass for single-
+        # segment path where trim/setpts is handled by -ss/-to seeking)
         vfilters.append(f"setpts={1.0 / segment.speed}*PTS")
 
     if ass_path is not None:
@@ -304,9 +306,16 @@ def _build_multi_segment_cmd(
         end_s = seg.source_end_ms / 1000.0
 
         # Video chain for this segment
+        # Combine PTS reset + speed into one expression to avoid
+        # an intermediate PTS rounding step.
+        if seg.speed != 1.0:
+            pts_expr = f"(PTS-STARTPTS)/{seg.speed}"
+        else:
+            pts_expr = "PTS-STARTPTS"
+
         vchain = (
             f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-            f"setpts=PTS-STARTPTS{delogo_chain}"
+            f"setpts={pts_expr}{delogo_chain}"
         )
 
         if crop_region is not None:
@@ -316,9 +325,6 @@ def _build_multi_segment_cmd(
             )
 
         vchain += f",scale={profile.width}:{profile.height}"
-
-        if seg.speed != 1.0:
-            vchain += f",setpts={1.0 / seg.speed}*PTS"
 
         vlabel = f"v{i}"
         vchain += f"[{vlabel}]"
@@ -349,6 +355,17 @@ def _build_multi_segment_cmd(
     final_video, final_audio = _build_concat_filters(
         filter_parts, video_labels, audio_labels,
     )
+
+    # Audio sync correction: force audio to resync with video PTS.
+    # After concat, accumulated AAC codec frame padding (~23ms per
+    # segment) causes progressive audio drift.  aresample=async=1
+    # inserts/removes samples to re-align audio to the video timeline.
+    if len(segments) > 1:
+        sync_filter = (
+            f"[{final_audio}]aresample=async=1:first_pts=0[async_a]"
+        )
+        filter_parts.append(sync_filter)
+        final_audio = "async_a"
 
     # Apply subtitles to final video
     if ass_path is not None:

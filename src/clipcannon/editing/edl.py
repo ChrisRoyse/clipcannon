@@ -196,8 +196,14 @@ class SegmentSpec(BaseModel):
 
     @property
     def output_duration_ms(self) -> int:
-        """Effective duration in the output timeline."""
-        return int(self.source_duration_ms / self.speed)
+        """Effective duration in the output timeline.
+
+        Uses round() to avoid cumulative truncation drift when
+        speed != 1.0.  See: int(1000/1.3)=769 vs round(1000/1.3)=769
+        — the difference is sub-ms per segment but compounds across
+        many segments to produce visible caption desync.
+        """
+        return round(self.source_duration_ms / self.speed)
 
 
 class CaptionWord(BaseModel):
