@@ -447,7 +447,7 @@ The audio engine provides three tiers of music/sound generation plus cleanup:
 | 1: AI Music | `generate_music` | ACE-Step v1 3.5B (Hybrid LM + DiT) | Yes (4+ GB VRAM) | ~7s for 10s audio | 48kHz stereo WAV |
 | 2: MIDI | `compose_midi` | MIDIUtil + FluidSynth | No | <0.1s | MIDI (+ WAV if FluidSynth) |
 | 3: DSP SFX | `generate_sfx` | numpy/scipy math | No | <0.1s | 44.1kHz 16-bit WAV |
-| Cleanup | `audio_cleanup` | noisereduce + pyloudnorm | No | ~10s | WAV |
+| Cleanup | `audio_cleanup` | FFmpeg audio filters | No | ~10s | WAV |
 
 ### clipcannon_generate_music
 
@@ -470,7 +470,7 @@ Outputs 48kHz stereo WAV. Automatically selects `cpu_offload` mode on GPUs with 
 | `seed` | integer | No | Random seed for reproducibility (same seed + same prompt = same output) |
 | `volume_db` | number | No | Volume in dB (default -18) |
 
-**Returns:** `audio_asset_id`, `file_path`, `duration_ms`, `sample_rate` (48000), `seed`, `model_used` ("ACE-Step-v1-3.5B"), `prompt`
+**Returns:** `audio_asset_id`, `file_path`, `duration_ms`, `seed`, `model_used` ("ACE-Step-v1-3.5B"), `elapsed_s`
 
 **Performance:** ~7s for 10s of audio on RTX 5090. Scales roughly linearly with duration. Model loads in ~3s on first call, cached in GPU memory for subsequent calls within the same session.
 

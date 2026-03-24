@@ -177,7 +177,7 @@ async def clipcannon_generate_music(
         generation_params={
             "prompt": prompt,
             "duration_s": duration_s,
-            "guidance_scale": 7.5,
+            "guidance_scale": 15.0,
         },
         seed=result.seed,
         volume_db=volume_db,

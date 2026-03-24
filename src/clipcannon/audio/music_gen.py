@@ -89,9 +89,9 @@ def _validate_output(output_path: Path, requested_duration_s: float) -> int:
             actual_duration_ms = int(actual_duration_s * 1000)
     except Exception:
         # If we cannot read WAV header, estimate from file size
-        # Assume 16-bit stereo 44100 Hz: 4 bytes per sample
+        # ACE-Step outputs 16-bit stereo 48kHz: 4 bytes per sample
         estimated_samples = (file_size - 44) // 4  # 44-byte WAV header
-        actual_duration_ms = int((estimated_samples / 44100) * 1000)
+        actual_duration_ms = int((estimated_samples / 48000) * 1000)
         actual_duration_s = actual_duration_ms / 1000.0
 
     # Check duration is within 10% of requested
@@ -168,7 +168,7 @@ async def generate_music(
     if torch.cuda.is_available():
         try:
             device_idx = int(gpu_device.split(":")[-1]) if ":" in gpu_device else 0
-            total_mem = torch.cuda.get_device_properties(device_idx).total_mem
+            total_mem = torch.cuda.get_device_properties(device_idx).total_memory
             total_gb = total_mem / (1024**3)
             cpu_offload = total_gb < 8.0
         except Exception:
