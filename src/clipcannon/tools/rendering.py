@@ -96,6 +96,60 @@ def _project_dir(project_id: str) -> Path:
     return _projects_dir() / project_id
 
 
+def _resolve_render_path(project_id: str, render_id: str) -> Path | None:
+    """Resolve the output video path for a render.
+
+    Args:
+        project_id: Project identifier.
+        render_id: Render identifier.
+
+    Returns:
+        Path to the rendered video, or None if not found.
+    """
+    db = _db_path(project_id)
+    conn = get_connection(db, enable_vec=False, dict_rows=True)
+    try:
+        row = fetch_one(
+            conn,
+            "SELECT output_path FROM renders "
+            "WHERE render_id = ? AND project_id = ?",
+            (render_id, project_id),
+        )
+    finally:
+        conn.close()
+    if row is None or not row.get("output_path"):
+        return None
+    path = Path(str(row["output_path"]))
+    return path if path.exists() else None
+
+
+async def _extract_render_frame(video_path: Path, timestamp_ms: int) -> Path | None:
+    """Extract a single frame from a video at a given timestamp.
+
+    Uses ffmpeg to seek to the timestamp and extract one JPEG frame.
+
+    Args:
+        video_path: Path to the video file.
+        timestamp_ms: Timestamp in milliseconds to extract.
+
+    Returns:
+        Path to the extracted JPEG frame, or None on failure.
+    """
+    import tempfile
+
+    output = Path(tempfile.mktemp(suffix=".jpg"))
+    cmd = [
+        "ffmpeg", "-y", "-ss", f"{timestamp_ms / 1000:.3f}",
+        "-i", str(video_path),
+        "-vframes", "1", "-q:v", "2", str(output),
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+    )
+    await proc.communicate()
+    return output if output.exists() and output.stat().st_size > 0 else None
+
+
 def _resolve_source(project_id: str) -> Path | None:
     """Resolve the source video path for a project.
 
@@ -474,6 +528,7 @@ async def clipcannon_preview_clip(
     project_id: str,
     start_ms: int,
     duration_ms: int = 3000,
+    render_id: str | None = None,
 ) -> dict[str, object]:
     """Render a short low-quality preview clip."""
     from clipcannon.rendering.preview import render_preview
@@ -485,12 +540,20 @@ async def clipcannon_preview_clip(
             f"Project not found: {project_id}",
         )
 
-    source = _resolve_source(project_id)
-    if source is None:
-        return _error(
-            "SOURCE_NOT_FOUND",
-            "No source video found",
-        )
+    if render_id is not None:
+        source = _resolve_render_path(project_id, render_id)
+        if source is None:
+            return _error(
+                "RENDER_NOT_FOUND",
+                f"Render not found or output missing: {render_id}",
+            )
+    else:
+        source = _resolve_source(project_id)
+        if source is None:
+            return _error(
+                "SOURCE_NOT_FOUND",
+                "No source video found",
+            )
 
     preview_dir = proj_dir / "renders" / "previews"
 
@@ -841,12 +904,14 @@ async def dispatch_rendering_tool(
         return await clipcannon_analyze_frame(
             project_id=str(arguments["project_id"]),
             timestamp_ms=int(arguments["timestamp_ms"]),  # type: ignore[arg-type]
+            render_id=str(arguments["render_id"]) if arguments.get("render_id") else None,
         )
     if name == "clipcannon_preview_clip":
         return await clipcannon_preview_clip(
             str(arguments["project_id"]),
             int(arguments["start_ms"]),
             int(arguments.get("duration_ms", 3000)),
+            render_id=str(arguments["render_id"]) if arguments.get("render_id") else None,
         )
     if name == "clipcannon_inspect_render":
         return await clipcannon_inspect_render(
@@ -881,6 +946,7 @@ async def dispatch_rendering_tool(
 async def clipcannon_analyze_frame(
     project_id: str,
     timestamp_ms: int,
+    render_id: str | None = None,
 ) -> dict[str, object]:
     """Analyze a frame for content regions and PIP overlay.
 
@@ -888,9 +954,13 @@ async def clipcannon_analyze_frame(
     regions, webcam PIP overlay position, and classify region
     types (text, ui_panel, image, empty).
 
+    When ``render_id`` is provided, extracts the frame from the
+    rendered output video instead of looking in the frames directory.
+
     Args:
         project_id: Project identifier.
         timestamp_ms: Source timestamp in milliseconds.
+        render_id: Optional render ID to analyze instead of source.
 
     Returns:
         Dict with frame dimensions, content regions, and PIP info.
@@ -903,28 +973,43 @@ async def clipcannon_analyze_frame(
     if err is not None:
         return err
 
-    # Find the nearest frame
-    project_dir = _project_dir(project_id)
-    frames_dir = project_dir / "frames"
-    if not frames_dir.exists():
-        return _error("NOT_FOUND", "Frames directory not found")
-
-    # Calculate frame number from timestamp (2fps)
-    frame_num = (timestamp_ms // 500) + 1
-    frame_path = frames_dir / f"frame_{frame_num:06d}.jpg"
-
-    # Search nearby if exact frame doesn't exist
-    if not frame_path.exists():
-        for offset in range(-5, 6):
-            candidate = frames_dir / f"frame_{frame_num + offset:06d}.jpg"
-            if candidate.exists():
-                frame_path = candidate
-                break
-        else:
+    if render_id is not None:
+        # Extract frame from rendered video on the fly
+        render_path = _resolve_render_path(project_id, render_id)
+        if render_path is None:
             return _error(
-                "NOT_FOUND",
-                f"No frame found near timestamp {timestamp_ms}ms",
+                "RENDER_NOT_FOUND",
+                f"Render not found or output missing: {render_id}",
             )
+        frame_path = await _extract_render_frame(render_path, timestamp_ms)
+        if frame_path is None:
+            return _error(
+                "FRAME_EXTRACTION_FAILED",
+                f"Could not extract frame at {timestamp_ms}ms from render {render_id}",
+            )
+    else:
+        # Find the nearest frame from pre-extracted frames
+        project_dir = _project_dir(project_id)
+        frames_dir = project_dir / "frames"
+        if not frames_dir.exists():
+            return _error("NOT_FOUND", "Frames directory not found")
+
+        # Calculate frame number from timestamp (2fps)
+        frame_num = (timestamp_ms // 500) + 1
+        frame_path = frames_dir / f"frame_{frame_num:06d}.jpg"
+
+        # Search nearby if exact frame doesn't exist
+        if not frame_path.exists():
+            for offset in range(-5, 6):
+                candidate = frames_dir / f"frame_{frame_num + offset:06d}.jpg"
+                if candidate.exists():
+                    frame_path = candidate
+                    break
+            else:
+                return _error(
+                    "NOT_FOUND",
+                    f"No frame found near timestamp {timestamp_ms}ms",
+                )
 
     result = analyze_frame(frame_path)
     elapsed_ms = int((time.monotonic() - start_time) * 1000)

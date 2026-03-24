@@ -159,13 +159,19 @@ UNDERSTANDING_TOOL_DEFINITIONS: list[Tool] = [
         description=(
             "Get the nearest frame to a timestamp with moment context. "
             "Returns frame path + transcript, speaker, emotion, topic, "
-            "shot type, quality, pacing, on-screen text, profanity."
+            "shot type, quality, pacing, on-screen text, profanity. "
+            "Pass render_id to get a frame from a rendered output instead "
+            "of the source video (moment context will be null)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "project_id": {"type": "string", "description": "Project identifier"},
                 "timestamp_ms": {"type": "integer", "description": "Target timestamp in ms"},
+                "render_id": {
+                    "type": "string",
+                    "description": "Render ID to get frame from (omit to use source video)",
+                },
             },
             "required": ["project_id", "timestamp_ms"],
         },
@@ -238,6 +244,7 @@ async def dispatch_understanding_tool(
         return await clipcannon_get_frame(
             str(arguments["project_id"]),
             int(arguments["timestamp_ms"]),  # type: ignore[arg-type]
+            render_id=str(arguments["render_id"]) if arguments.get("render_id") else None,
         )
     if name == "clipcannon_search_content":
         return await clipcannon_search_content(

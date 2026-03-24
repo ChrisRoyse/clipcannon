@@ -116,20 +116,56 @@ def _get_moment_context(db: Path, project_id: str, ts: int) -> dict[str, object]
     }
 
 
-async def clipcannon_get_frame(project_id: str, timestamp_ms: int) -> dict[str, object]:
-    """Get nearest frame to timestamp with moment context."""
+async def clipcannon_get_frame(
+    project_id: str,
+    timestamp_ms: int,
+    render_id: str | None = None,
+) -> dict[str, object]:
+    """Get nearest frame to timestamp with moment context.
+
+    When ``render_id`` is provided, extracts the frame from the rendered
+    output video instead of looking in the pre-extracted frames directory.
+    Moment context (transcript, emotion, etc.) is not available for renders
+    and will be returned as ``null``.
+
+    Args:
+        project_id: Project identifier.
+        timestamp_ms: Target timestamp in milliseconds.
+        render_id: Optional render ID to get frame from rendered output.
+
+    Returns:
+        Dict with frame image and moment context.
+    """
     err = _validate_project(project_id, required_status="ready")
     if err is not None:
         return err
 
-    frames_dir = _project_dir(project_id) / "frames"
-    frame_path, actual_ms = _find_nearest_frame(frames_dir, timestamp_ms)
-    if frame_path is None:
-        return _error(
-            "FRAME_NOT_FOUND", f"No frame near {timestamp_ms}ms", {"frames_dir": str(frames_dir)}
-        )
+    if render_id is not None:
+        from clipcannon.tools.rendering import _extract_render_frame, _resolve_render_path
 
-    context = _get_moment_context(_db_path(project_id), project_id, actual_ms)
+        render_path = _resolve_render_path(project_id, render_id)
+        if render_path is None:
+            return _error(
+                "RENDER_NOT_FOUND",
+                f"Render not found or output missing: {render_id}",
+            )
+        frame_path = await _extract_render_frame(render_path, timestamp_ms)
+        if frame_path is None:
+            return _error(
+                "FRAME_EXTRACTION_FAILED",
+                f"Could not extract frame at {timestamp_ms}ms from render {render_id}",
+            )
+        actual_ms = timestamp_ms
+        context = None
+    else:
+        frames_dir = _project_dir(project_id) / "frames"
+        frame_path, actual_ms = _find_nearest_frame(frames_dir, timestamp_ms)
+        if frame_path is None:
+            return _error(
+                "FRAME_NOT_FOUND", f"No frame near {timestamp_ms}ms",
+                {"frames_dir": str(frames_dir)},
+            )
+        context = _get_moment_context(_db_path(project_id), project_id, actual_ms)
 
     # Encode frame as base64 for inline image viewing
     try:

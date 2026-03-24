@@ -56,7 +56,9 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
             "overlay. Returns bounding boxes of detected content "
             "regions (text, UI panels, images) and PIP webcam "
             "position. Use before editing to understand frame "
-            "layout. ~125ms per frame. No credits charged."
+            "layout. ~125ms per frame. No credits charged. "
+            "Pass render_id to analyze a rendered output instead "
+            "of the source video."
         ),
         inputSchema={
             "type": "object",
@@ -71,6 +73,12 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
                         "Source video timestamp to analyze (ms)"
                     ),
                 },
+                "render_id": {
+                    "type": "string",
+                    "description": (
+                        "Render ID to analyze (omit to use source video)"
+                    ),
+                },
             },
             "required": ["project_id", "timestamp_ms"],
         },
@@ -79,7 +87,8 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
         name="clipcannon_preview_clip",
         description=(
             "Render a short (2-5 second) low-quality preview of an edit at a specific time range. "
-            "No credits charged. Uses 540p resolution and fast encoding for quick validation."
+            "No credits charged. Uses 540p resolution and fast encoding for quick validation. "
+            "Pass render_id to preview a rendered output instead of the source video."
         ),
         inputSchema={
             "type": "object",
@@ -90,6 +99,10 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
                     "type": "integer",
                     "description": "Preview duration (ms, max 5000)",
                     "default": 3000,
+                },
+                "render_id": {
+                    "type": "string",
+                    "description": "Render ID to preview (omit to use source video)",
                 },
             },
             "required": ["project_id", "start_ms"],
@@ -107,6 +120,12 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
             "properties": {
                 "project_id": {"type": "string", "description": "Project identifier"},
                 "render_id": {"type": "string", "description": "Render identifier to inspect"},
+                "timestamp_ms": {
+                    "type": "integer",
+                    "description": (
+                        "Specific timestamp to inspect (omit for 5 default positions)"
+                    ),
+                },
             },
             "required": ["project_id", "render_id"],
         },
