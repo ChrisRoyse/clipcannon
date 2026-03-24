@@ -760,14 +760,14 @@ Workflow: decide coords → preview_layout → adjust → repeat → render → 
 
 ---
 
-## 20. Complete Workflow (39 MCP Tools)
+## 20. Complete Workflow (40 MCP Tools)
 
 ### Available Tools
 
 | Category | Tools |
 |---|---|
 | **Understand** | `get_editing_context` (manifest+speakers+narrative+transcript), `get_transcript`, `get_segment_detail` (17 streams + point query), `get_scene_map`, `search_content`, `analyze_frame`, `get_frame` |
-| **Discover** | `find_best_moments` (convergence cuts+story beat+character), `find_cut_points`, `get_narrative_flow` |
+| **Discover** | `find_safe_cuts` (audio-safe boundaries from ALL streams), `find_best_moments` (convergence cuts+story beat+character), `find_cut_points`, `get_narrative_flow` |
 | **Edit** | `create_edit` (auto-validates narrative), `modify_edit`, `auto_trim`, `color_adjust`, `add_motion`, `add_overlay` |
 | **Preview** | `preview_layout`, `preview_clip` |
 | **Render** | `render`, `inspect_render` |
@@ -780,51 +780,82 @@ Workflow: decide coords → preview_layout → adjust → repeat → render → 
 ```
 1. project_create → ingest → wait "ready"
 
-2. UNDERSTAND (1 call):
-   get_editing_context → returns EVERYTHING:
-     - speakers, narrative (Qwen3-8B story_beats, open_loops, chapters),
-       transcript_preview (500 words), data manifest, query_tools
-   Read the transcript_preview + narrative.story_beats to understand the story.
-   If you need the FULL transcript: get_transcript(start_ms=0)
+2. UNDERSTAND (2 calls):
+   get_editing_context → manifest, speakers, Qwen3-8B narrative
+     (story_beats, open_loops, chapters), transcript preview
+   get_transcript(start_ms=0) → read the FULL transcript
+   You MUST read the full transcript. Understand the story arc.
+   Identify: what is the PROMISE? Where is the PAYOFF?
 
-3. FIND SAFE CUTS (1 call — CRITICAL):
-   find_safe_cuts(project_id) → ALL audio-safe cut points in the video
-     - Each cut shows exact words before/after the gap
-     - Safety score (0-100) from signal convergence
-     - Ready-to-use cut_before_ms / cut_after_ms with padding
-     - Warnings on open promises ("speaker says 'you can see'")
-   READ the words_before/words_after for every cut. These tell you
-   what the audio transition will SOUND like. Only use cuts where
-   the words make sense as a transition point.
+3. FIND SAFE CUTS (1 call — MOST IMPORTANT STEP):
+   find_safe_cuts(project_id) → ALL audio-safe cut points
 
-4. DISCOVER (2-3 calls):
-   find_best_moments(purpose="hook") → best hook candidates
-   find_best_moments(purpose="highlight") → body candidates
-   find_best_moments(purpose="cta") → closing candidates
-   Cross-reference these with safe cuts from step 3.
+   This tool cross-references 7 analysis streams (silence gaps,
+   word-level transcript, beats, scene boundaries, text changes,
+   emotion) and returns ONLY cuts where the audio will be clean.
 
-5. PLAN (use narrative + safe cuts to guide):
-   - Follow story_beats order: hook → setup → argument → demo → result → cta
-   - Use open_loops: ensure the loop opened in the hook is CLOSED by the CTA
-   - Layout progression: D → B → A → C → D (smooth, never jump >1 level)
-   - Duration: TikTok 60-180s (60s+ required for monetization)
-   - ONLY use cut_before_ms / cut_after_ms from find_safe_cuts as boundaries
-   - NEVER pick arbitrary timestamps — always snap to safe cuts
+   Each cut includes:
+     - words_before / words_after: READ THESE. They tell you what
+       the transition will SOUND like when played back.
+     - safety_score: 85+ = excellent, 70+ = good, <60 = risky
+     - thought_complete: true = sentence ends naturally
+     - cut_before_ms / cut_after_ms: USE THESE DIRECTLY as
+       source_end_ms / source_start_ms in create_edit.
+       Padding is already applied. Do NOT adjust them.
+     - warning: if set, the speaker was mid-demonstration —
+       DO NOT cut here unless you include the continuation.
 
-5. VERIFY (1 call per segment):
-   For EACH segment: preview_layout(timestamp_ms, regions) → look at frame
+   RULE: NEVER use any timestamp as a segment boundary unless
+   it came from find_safe_cuts. No manually picked timestamps.
+   No transcript segment timestamps. No highlight timestamps.
+   ONLY cut_before_ms and cut_after_ms from this tool.
+
+4. PLAN (map safe cuts to story):
+   - Read the words_before/words_after for every safe cut
+   - Map cuts to the story arc from Qwen3's narrative analysis
+   - Select which cuts to USE and which gaps to KEEP
+   - Segments = contiguous source runs BETWEEN safe cuts
+   - Layout progression: D → B → A → C → D
+   - Duration: TikTok 60-180s, YouTube Shorts 30-60s
+   - Every segment must be ≥10 seconds (no 1-second fragments)
+   - Every gap that's skipped must NOT break a promise
+   - Verify with get_narrative_flow before building
+
+5. VERIFY NARRATIVE (1 call — REQUIRED):
+   get_narrative_flow(segments) → check for BROKEN_PROMISE warnings
+   If ANY BROKEN_PROMISE warning: fix segments and re-verify.
+   LARGE_GAP warnings: review skipped text, acceptable if topic shift.
+
+6. VERIFY VISUALS (1 call per segment):
+   preview_layout(timestamp_ms, regions) → look at each frame
    Use webcam region (not face bbox) for speaker source crop.
 
-6. BUILD (1 call + polish):
+7. BUILD (1 call + polish):
    create_edit → auto-validates narrative, returns warnings if:
      - gaps >1s skip >20 words of content
      - segments cut mid-thought (no .!? at end)
    If warnings appear: fix segments before proceeding.
    Then: color_adjust + add_motion + add_overlay
 
-7. RENDER (1 call):
+8. RENDER (1 call):
    render → inspect_render → verify frames match previews
 ```
+
+### How find_safe_cuts Works
+
+The tool queries every silence gap in the video, then for each gap:
+
+1. **Word context**: Finds the exact 3 words before and 3 words after the gap from `transcript_words` (word-level timestamps from WhisperX)
+2. **Thought completeness**: Checks if the transcript segment at the gap ends with `.!?` or the verbal period "right"
+3. **Beat alignment**: Checks if a beat position (from librosa) falls within 500ms — cuts on beats feel professional
+4. **Scene boundary**: Checks if a visual scene change (from scene_map) aligns within 500ms
+5. **Text change**: Checks if an OCR slide transition happened within 1000ms
+6. **Emotion energy**: Reads the Wav2Vec2 emotion curve at that timestamp
+7. **Promise detection**: Scans the last 2 sentences for promise keywords ("you can see", "let me show", etc.) — if found, warns that cutting here breaks a promise
+
+The safety score (0-100) combines all signals. Higher = safer to cut.
+
+The `cut_before_ms` and `cut_after_ms` values include 50ms audio padding to avoid clipping consonant tails and intake breaths. If a beat aligns, the cut snaps to the beat for rhythmic editing.
 
 ### Point Queries
 
@@ -843,9 +874,9 @@ These are real failures from production edits. Each one degraded the output vide
 
 **What happened**: Segments were cut at arbitrary timestamps (6190ms, 14349ms) that fell in the middle of sentences. The speaker says "I built the world's first video editor specifically designed—" and it cuts. The viewer never hears the complete thought.
 
-**Rule**: ALWAYS cut at sentence endings. Use `find_cut_points(around_ms)` to find sentence_end cut points. NEVER set `source_end_ms` at an arbitrary timestamp — always align to a sentence boundary or silence gap. If `find_cut_points` returns a sentence_end at 13410ms with `text_before: "Cloud Code can now edit my videos"`, use 13410ms as your cut point, not 14349ms.
+**Rule**: ALWAYS use `find_safe_cuts` to get audio-safe cut points. NEVER set `source_end_ms` or `source_start_ms` to any timestamp that didn't come from `cut_before_ms` / `cut_after_ms` in the safe cuts response. Each safe cut shows the exact words before and after — read them to verify the audio transition makes sense.
 
-**How to verify**: Read the transcript for every segment. If the last word is not a sentence-ending word (period, question mark, or natural pause), the cut is wrong. Fix it.
+**How to verify**: For every segment boundary, confirm it matches a `cut_before_ms` or `cut_after_ms` from `find_safe_cuts`. If it doesn't, the cut is unsafe and will clip audio.
 
 ### Mistake 2: Video way too short — not using available duration
 
@@ -937,7 +968,7 @@ Read the transcript for each segment. If the speaker says "I", "you", "we", "let
 
 **What happened**: Used `find_cut_points` sentence_end signals to find grammatically correct cut points. But a sentence ending is not always a thought ending. "Let me show you the video." is a complete sentence, but cutting right after it means the viewer never sees the video being shown. The THOUGHT is "let me show you the video [shows video]" — both parts are needed.
 
-**Rule**: After selecting sentence-boundary cut points, read the NEXT 2-3 sentences in the transcript. If the next sentence is a continuation of the same idea (showing what was promised, explaining what was just stated, completing a comparison), the cut point is wrong — extend the segment to include the completion.
+**Rule**: Use `find_safe_cuts` which checks both sentence completeness AND promise keywords. If a cut has `warning: "PROMISE_OPEN: speaker says 'let me show'"`, do NOT use that cut — it will break the viewer's expectation. After selecting cuts, read the `words_before` and `words_after` — if the words after are the continuation of the words before, the cut is in the wrong place.
 
 **Thought-completion patterns to watch for:**
 - "Let me show you..." → MUST include the showing
@@ -983,15 +1014,15 @@ Similarly, starting the next segment at the transcript start time (8390ms) clips
 - **Segment end**: Add 100-150ms after the last word's end_ms. This captures consonant tails and natural room tone.
 - **Contiguous segments**: When two segments are from adjacent source material (gap < 200ms), merge them into one segment. The concat will introduce a micro-gap; keeping them as one segment avoids it.
 
-**Word-level verification**: Use `get_transcript` with word-level timestamps. For every segment boundary, find the exact word that should start/end there. The segment's source_start_ms should be the word's start_ms minus 50ms. The segment's source_end_ms should be the word's end_ms plus 100ms.
+**Solution**: Use `find_safe_cuts` which handles all of this automatically. It finds silence gaps (natural pauses where there IS no audio to clip), adds 50ms padding, and snaps to beat positions. The returned `cut_before_ms` and `cut_after_ms` values are safe to use directly — no manual padding needed.
 
 ```
 WRONG:  source_end_ms = 8330   (transcript segment end — clips "system." tail)
-RIGHT:  source_end_ms = 8400   (word end 8330 + 70ms padding — clean cut)
-
-WRONG:  source_start_ms = 8390  (transcript segment start — clips breath)
-RIGHT:  source_start_ms = 8350  (word start 8390 - 40ms padding — captures breath)
+WRONG:  source_end_ms = 8400   (manual padding — still guessing)
+RIGHT:  source_end_ms = 39406  (from find_safe_cuts.cut_before_ms — silence gap + padding)
 ```
+
+The key insight: don't cut between words. Cut during silence gaps where there IS no audio. `find_safe_cuts` only returns cuts at silence gaps, so every cut is inherently audio-safe.
 
 ### Mistake 13: Treating tool calls as a checklist instead of thinking like an editor
 
