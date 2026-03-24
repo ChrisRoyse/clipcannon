@@ -55,6 +55,66 @@ def _audio_dir(project_id: str) -> Path:
     return audio_path
 
 
+async def _extract_audio_from_source(
+    proj_dir: Path, project_id: str
+) -> Path | None:
+    """Extract audio from source video when stems are missing.
+
+    This is a self-healing fallback: if disk_cleanup removed stems,
+    we re-extract audio directly from the source video using ffmpeg.
+
+    Args:
+        proj_dir: Project directory path.
+        project_id: Project identifier (for logging).
+
+    Returns:
+        Path to extracted audio WAV, or None if extraction fails.
+    """
+    import asyncio
+
+    source_dir = proj_dir / "source"
+    if not source_dir.exists():
+        return None
+    videos = list(source_dir.glob("*.mp4")) + list(source_dir.glob("*.mkv"))
+    if not videos:
+        return None
+
+    stems_dir = proj_dir / "stems"
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    output = stems_dir / "audio_original.wav"
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(videos[0]),
+        "-vn", "-acodec", "pcm_s16le",
+        str(output),
+    ]
+    logger.info(
+        "Stems missing for %s — extracting audio from source video", project_id
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            logger.error(
+                "Audio extraction failed for %s: %s",
+                project_id, stderr.decode()[-500:],
+            )
+            return None
+    except FileNotFoundError:
+        logger.error("ffmpeg not found — cannot extract audio")
+        return None
+
+    if output.exists() and output.stat().st_size > 0:
+        logger.info("Audio extracted to %s (%d bytes)", output, output.stat().st_size)
+        return output
+    return None
+
+
 def _validate_project(project_id: str) -> dict[str, object] | None:
     """Return error dict if project does not exist, else None."""
     db = _db_path(project_id)
@@ -538,7 +598,14 @@ async def clipcannon_audio_cleanup(
         if wavs:
             source_audio = wavs[0]
         else:
-            return _error("AUDIO_NOT_FOUND", "No audio file found in project")
+            # Self-heal: extract audio from source video on the fly
+            source_audio = await _extract_audio_from_source(proj_dir, project_id)
+            if source_audio is None:
+                return _error(
+                    "AUDIO_NOT_FOUND",
+                    "No audio stems found and source video extraction failed. "
+                    "Run ingest again or check source video has audio.",
+                )
 
     output_path = audio_dir / f"cleaned_{secrets.token_hex(4)}.wav"
 
