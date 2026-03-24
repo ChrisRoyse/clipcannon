@@ -105,9 +105,10 @@ EDITING_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
         name="clipcannon_modify_edit",
         description=(
-            "Modify an existing draft edit. Applies partial updates "
+            "Modify an existing edit. Applies partial updates "
             "to the EDL, re-validates, and updates the database. "
-            "Only draft edits can be modified."
+            "Resets status to draft for re-rendering. Can modify "
+            "edits in any status except 'rendering'."
         ),
         inputSchema={
             "type": "object",
@@ -312,6 +313,139 @@ EDITING_TOOL_DEFINITIONS: list[Tool] = [
                 },
             },
             "required": ["project_id", "edit_id", "overlay_type", "text", "start_ms", "end_ms"],
+        },
+    ),
+    Tool(
+        name="clipcannon_edit_history",
+        description=(
+            "List version history for an edit. Returns all saved versions "
+            "ordered by version number descending, plus the current state "
+            "as version 0. Every modify_edit call auto-saves the previous "
+            "state, so you can always revert to any prior version."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string", "description": "Project identifier"},
+                "edit_id": {"type": "string", "description": "Edit identifier"},
+            },
+            "required": ["project_id", "edit_id"],
+        },
+    ),
+    Tool(
+        name="clipcannon_revert_edit",
+        description=(
+            "Revert an edit to a previous version. Saves the current state "
+            "as a new version (so the revert itself is versioned), then "
+            "restores the target version's EDL. Resets status to draft "
+            "and regenerates captions if segments changed. Use "
+            "clipcannon_edit_history to find available version numbers."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string", "description": "Project identifier"},
+                "edit_id": {"type": "string", "description": "Edit identifier"},
+                "version_number": {
+                    "type": "integer",
+                    "description": "Version number to revert to (from edit_history)",
+                },
+            },
+            "required": ["project_id", "edit_id", "version_number"],
+        },
+    ),
+    Tool(
+        name="clipcannon_apply_feedback",
+        description=(
+            "Apply natural language feedback to an edit. Parses the feedback "
+            "text into structured EDL changes and applies them via modify_edit. "
+            "Returns the parsed intent and the modification result. "
+            "Supports: transition fixes, speed adjustments, caption resizing, "
+            "audio level changes, color grading, zoom/motion, and more."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+                "edit_id": {
+                    "type": "string",
+                    "description": "Edit identifier",
+                },
+                "feedback": {
+                    "type": "string",
+                    "description": "Natural language feedback about the video edit",
+                },
+            },
+            "required": ["project_id", "edit_id", "feedback"],
+        },
+    ),
+    Tool(
+        name="clipcannon_branch_edit",
+        description=(
+            "Fork an edit into a platform-specific variant. Deep-copies "
+            "the source edit's EDL and creates a new edit with a different "
+            "target platform. The branch shares the same base but can "
+            "diverge independently. Use for creating platform variants "
+            "(e.g., Instagram Reels from a TikTok edit)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+                "edit_id": {
+                    "type": "string",
+                    "description": "Source edit identifier to branch from",
+                },
+                "branch_name": {
+                    "type": "string",
+                    "description": (
+                        "Name for this branch (e.g., 'instagram', "
+                        "'youtube_shorts')"
+                    ),
+                },
+                "target_platform": {
+                    "type": "string",
+                    "description": "Target platform for the branched edit",
+                    "enum": [
+                        "tiktok", "instagram_reels", "youtube_shorts",
+                        "youtube_standard", "youtube_4k", "facebook",
+                        "linkedin",
+                    ],
+                },
+            },
+            "required": [
+                "project_id", "edit_id", "branch_name", "target_platform",
+            ],
+        },
+    ),
+    Tool(
+        name="clipcannon_list_branches",
+        description=(
+            "List all branches of an edit. Returns the root edit and all "
+            "edits that were branched from it. Shows edit_id, branch_name, "
+            "target_platform, status, and created_at for each branch."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+                "edit_id": {
+                    "type": "string",
+                    "description": (
+                        "Edit identifier (root or any branch)"
+                    ),
+                },
+            },
+            "required": ["project_id", "edit_id"],
         },
     ),
 ]

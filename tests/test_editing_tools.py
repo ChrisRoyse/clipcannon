@@ -132,6 +132,8 @@ def project_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
             metadata_hashtags TEXT,
             rejection_feedback TEXT,
             render_id TEXT,
+            parent_edit_id TEXT,
+            branch_name TEXT DEFAULT 'main',
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -184,6 +186,20 @@ def project_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
             volume_db REAL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+
+        -- Edit version history
+        CREATE TABLE IF NOT EXISTS edit_versions (
+            version_id TEXT PRIMARY KEY,
+            edit_id TEXT NOT NULL,
+            parent_version_id TEXT,
+            version_number INTEGER NOT NULL,
+            edl_json TEXT NOT NULL,
+            change_description TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (edit_id) REFERENCES edits(edit_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_edit_versions_edit
+            ON edit_versions(edit_id, version_number);
 
         INSERT OR REPLACE INTO schema_version (version) VALUES (2);
     """)
@@ -411,16 +427,54 @@ class TestModifyEdit:
         assert "name" in modify_result["updated_fields"]
 
     @pytest.mark.asyncio()
-    async def test_modify_non_draft_rejected(
+    async def test_modify_rendering_rejected(
         self, project_setup: str, tmp_path: Path
     ) -> None:
-        """Cannot modify edit that is not in 'draft' status."""
+        """Cannot modify edit that is actively rendering."""
         project_id = project_setup
         create_result = await dispatch_editing_tool(
             "clipcannon_create_edit",
             {
                 "project_id": project_id,
                 "name": "To Approve",
+                "target_platform": "tiktok",
+                "segments": [
+                    {"source_start_ms": 0, "source_end_ms": 30000},
+                ],
+            },
+        )
+        edit_id = create_result["edit_id"]
+
+        projects_dir = tmp_path / "projects"
+        db_path = projects_dir / project_id / "analysis.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "UPDATE edits SET status = 'rendering' WHERE edit_id = ?",
+            (edit_id,),
+        )
+        conn.commit()
+        conn.close()
+
+        modify_result = await dispatch_editing_tool(
+            "clipcannon_modify_edit",
+            {
+                "project_id": project_id,
+                "edit_id": edit_id,
+                "changes": {"name": "Should Fail"},
+            },
+        )
+        assert "error" in modify_result
+
+    async def test_modify_rendered_allowed(
+        self, project_setup: str, tmp_path: Path
+    ) -> None:
+        """Can modify a rendered edit — resets to draft."""
+        project_id = project_setup
+        create_result = await dispatch_editing_tool(
+            "clipcannon_create_edit",
+            {
+                "project_id": project_id,
+                "name": "Rendered Edit",
                 "target_platform": "tiktok",
                 "segments": [
                     {"source_start_ms": 0, "source_end_ms": 30000},
@@ -444,7 +498,539 @@ class TestModifyEdit:
             {
                 "project_id": project_id,
                 "edit_id": edit_id,
-                "changes": {"name": "Should Fail"},
+                "changes": {"name": "Modified After Render"},
             },
         )
-        assert "error" in modify_result
+        assert "error" not in modify_result
+
+
+class TestEditVersionHistory:
+    """Tests for edit version history (P0 iterative editing)."""
+
+    @pytest.mark.asyncio()
+    async def test_modify_creates_version(
+        self, project_setup: str, tmp_path: Path
+    ) -> None:
+        """Modifying an edit saves the previous state as a version."""
+        project_id = project_setup
+        create_result = await dispatch_editing_tool(
+            "clipcannon_create_edit",
+            {
+                "project_id": project_id,
+                "name": "Version Test",
+                "target_platform": "tiktok",
+                "segments": [
+                    {"source_start_ms": 0, "source_end_ms": 30000},
+                ],
+            },
+        )
+        assert "error" not in create_result
+        edit_id = str(create_result["edit_id"])
+
+        modify_result = await dispatch_editing_tool(
+            "clipcannon_modify_edit",
+            {
+                "project_id": project_id,
+                "edit_id": edit_id,
+                "changes": {"name": "Version Test Modified"},
+            },
+        )
+        assert "error" not in modify_result
+
+        # Verify version exists in DB
+        projects_dir = tmp_path / "projects"
+        db_file = projects_dir / project_id / "analysis.db"
+        conn = sqlite3.connect(str(db_file))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM edit_versions WHERE edit_id = ?",
+            (edit_id,),
+        ).fetchall()
+        conn.close()
+
+        assert len(rows) == 1
+        assert rows[0]["version_number"] == 1
+        assert rows[0]["edit_id"] == edit_id
+        assert rows[0]["edl_json"] is not None
+
+    @pytest.mark.asyncio()
+    async def test_version_number_increments(
+        self, project_setup: str, tmp_path: Path
+    ) -> None:
+        """Multiple modifications produce incrementing version numbers."""
+        project_id = project_setup
+        create_result = await dispatch_editing_tool(
+            "clipcannon_create_edit",
+            {
+                "project_id": project_id,
+                "name": "Increment Test",
+                "target_platform": "tiktok",
+                "segments": [
+                    {"source_start_ms": 0, "source_end_ms": 30000},
+                ],
+            },
+        )
+        assert "error" not in create_result
+        edit_id = str(create_result["edit_id"])
+
+        for i in range(3):
+            result = await dispatch_editing_tool(
+                "clipcannon_modify_edit",
+                {
+                    "project_id": project_id,
+                    "edit_id": edit_id,
+                    "changes": {"name": f"Version {i + 1}"},
+                },
+            )
+            assert "error" not in result
+
+        projects_dir = tmp_path / "projects"
+        db_file = projects_dir / project_id / "analysis.db"
+        conn = sqlite3.connect(str(db_file))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT version_number FROM edit_versions WHERE edit_id = ? "
+            "ORDER BY version_number",
+            (edit_id,),
+        ).fetchall()
+        conn.close()
+
+        assert len(rows) == 3
+        assert [r["version_number"] for r in rows] == [1, 2, 3]
+
+    @pytest.mark.asyncio()
+    async def test_change_description_generated(
+        self, project_setup: str, tmp_path: Path
+    ) -> None:
+        """Version change description mentions what was modified."""
+        project_id = project_setup
+        create_result = await dispatch_editing_tool(
+            "clipcannon_create_edit",
+            {
+                "project_id": project_id,
+                "name": "Desc Test",
+                "target_platform": "tiktok",
+                "segments": [
+                    {"source_start_ms": 0, "source_end_ms": 30000},
+                ],
+            },
+        )
+        assert "error" not in create_result
+        edit_id = str(create_result["edit_id"])
+
+        # Modify segments
+        await dispatch_editing_tool(
+            "clipcannon_modify_edit",
+            {
+                "project_id": project_id,
+                "edit_id": edit_id,
+                "changes": {
+                    "segments": [
+                        {"source_start_ms": 0, "source_end_ms": 15000},
+                        {"source_start_ms": 20000, "source_end_ms": 30000},
+                    ],
+                },
+            },
+        )
+
+        projects_dir = tmp_path / "projects"
+        db_file = projects_dir / project_id / "analysis.db"
+        conn = sqlite3.connect(str(db_file))
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT change_description FROM edit_versions WHERE edit_id = ? "
+            "ORDER BY version_number DESC LIMIT 1",
+            (edit_id,),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        desc = row["change_description"].lower()
+        assert "segment" in desc
+
+    @pytest.mark.asyncio()
+    async def test_edit_history_returns_versions(
+        self, project_setup: str,
+    ) -> None:
+        """edit_history returns all versions including current."""
+        project_id = project_setup
+        create_result = await dispatch_editing_tool(
+            "clipcannon_create_edit",
+            {
+                "project_id": project_id,
+                "name": "History Test",
+                "target_platform": "tiktok",
+                "segments": [
+                    {"source_start_ms": 0, "source_end_ms": 30000},
+                ],
+            },
+        )
+        assert "error" not in create_result
+        edit_id = str(create_result["edit_id"])
+
+        # Modify twice
+        for i in range(2):
+            await dispatch_editing_tool(
+                "clipcannon_modify_edit",
+                {
+                    "project_id": project_id,
+                    "edit_id": edit_id,
+                    "changes": {"name": f"History v{i + 1}"},
+                },
+            )
+
+        history_result = await dispatch_editing_tool(
+            "clipcannon_edit_history",
+            {"project_id": project_id, "edit_id": edit_id},
+        )
+        assert "error" not in history_result
+        assert history_result["version_count"] == 2
+
+        versions = history_result["versions"]
+        # First entry is current (version 0)
+        assert versions[0]["version_number"] == 0
+        assert versions[0]["change_description"] == "Current state"
+        # Then versions in descending order
+        assert versions[1]["version_number"] == 2
+        assert versions[2]["version_number"] == 1
+
+    @pytest.mark.asyncio()
+    async def test_revert_edit_restores_state(
+        self, project_setup: str, tmp_path: Path
+    ) -> None:
+        """Reverting to version 1 restores the original name."""
+        project_id = project_setup
+        create_result = await dispatch_editing_tool(
+            "clipcannon_create_edit",
+            {
+                "project_id": project_id,
+                "name": "Original Name",
+                "target_platform": "tiktok",
+                "segments": [
+                    {"source_start_ms": 0, "source_end_ms": 30000},
+                ],
+            },
+        )
+        assert "error" not in create_result
+        edit_id = str(create_result["edit_id"])
+
+        # Modify name
+        await dispatch_editing_tool(
+            "clipcannon_modify_edit",
+            {
+                "project_id": project_id,
+                "edit_id": edit_id,
+                "changes": {"name": "Changed Name"},
+            },
+        )
+
+        # Revert to version 1 (the original state)
+        revert_result = await dispatch_editing_tool(
+            "clipcannon_revert_edit",
+            {
+                "project_id": project_id,
+                "edit_id": edit_id,
+                "version_number": 1,
+            },
+        )
+        assert "error" not in revert_result
+        assert revert_result["reverted_to_version"] == 1
+        assert revert_result["name"] == "Original Name"
+
+        # Verify in DB
+        projects_dir = tmp_path / "projects"
+        db_file = projects_dir / project_id / "analysis.db"
+        conn = sqlite3.connect(str(db_file))
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT name, status FROM edits WHERE edit_id = ?",
+            (edit_id,),
+        ).fetchone()
+        conn.close()
+
+        assert row["name"] == "Original Name"
+        assert row["status"] == "draft"
+
+    @pytest.mark.asyncio()
+    async def test_revert_creates_version(
+        self, project_setup: str, tmp_path: Path
+    ) -> None:
+        """Reverting creates a new version preserving the pre-revert state."""
+        project_id = project_setup
+        create_result = await dispatch_editing_tool(
+            "clipcannon_create_edit",
+            {
+                "project_id": project_id,
+                "name": "Revert Version Test",
+                "target_platform": "tiktok",
+                "segments": [
+                    {"source_start_ms": 0, "source_end_ms": 30000},
+                ],
+            },
+        )
+        assert "error" not in create_result
+        edit_id = str(create_result["edit_id"])
+
+        # Modify to create version 1
+        await dispatch_editing_tool(
+            "clipcannon_modify_edit",
+            {
+                "project_id": project_id,
+                "edit_id": edit_id,
+                "changes": {"name": "After Modify"},
+            },
+        )
+
+        # Revert to version 1 -- should create version 2
+        revert_result = await dispatch_editing_tool(
+            "clipcannon_revert_edit",
+            {
+                "project_id": project_id,
+                "edit_id": edit_id,
+                "version_number": 1,
+            },
+        )
+        assert "error" not in revert_result
+        assert revert_result["saved_current_as_version"] == 2
+
+        # Verify version 2 exists and has the pre-revert state
+        projects_dir = tmp_path / "projects"
+        db_file = projects_dir / project_id / "analysis.db"
+        conn = sqlite3.connect(str(db_file))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT version_number, change_description FROM edit_versions "
+            "WHERE edit_id = ? ORDER BY version_number",
+            (edit_id,),
+        ).fetchall()
+        conn.close()
+
+        assert len(rows) == 2
+        assert rows[0]["version_number"] == 1
+        assert rows[1]["version_number"] == 2
+        assert "revert" in rows[1]["change_description"].lower()
+
+
+class TestEditBranching:
+    """Tests for edit branching (P4 iterative editing)."""
+
+    @pytest.mark.asyncio()
+    async def test_branch_creates_new_edit(
+        self, project_setup: str, tmp_path: Path
+    ) -> None:
+        """Branching creates a new edit with parent_edit_id set."""
+        project_id = project_setup
+        create_result = await dispatch_editing_tool(
+            "clipcannon_create_edit",
+            {
+                "project_id": project_id,
+                "name": "Branch Source",
+                "target_platform": "tiktok",
+                "segments": [
+                    {"source_start_ms": 0, "source_end_ms": 30000},
+                ],
+            },
+        )
+        assert "error" not in create_result
+        source_edit_id = str(create_result["edit_id"])
+
+        branch_result = await dispatch_editing_tool(
+            "clipcannon_branch_edit",
+            {
+                "project_id": project_id,
+                "edit_id": source_edit_id,
+                "branch_name": "instagram",
+                "target_platform": "instagram_reels",
+            },
+        )
+        assert "error" not in branch_result, f"Got error: {branch_result}"
+        assert branch_result["parent_edit_id"] == source_edit_id
+        assert branch_result["edit_id"] != source_edit_id
+
+        # Verify in DB
+        projects_dir = tmp_path / "projects"
+        db_file = projects_dir / project_id / "analysis.db"
+        conn = sqlite3.connect(str(db_file))
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT parent_edit_id, branch_name FROM edits WHERE edit_id = ?",
+            (str(branch_result["edit_id"]),),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        assert row["parent_edit_id"] == source_edit_id
+        assert row["branch_name"] == "instagram"
+
+    @pytest.mark.asyncio()
+    async def test_branch_copies_segments(
+        self, project_setup: str, tmp_path: Path
+    ) -> None:
+        """Branched edit copies all segments from the source."""
+        project_id = project_setup
+        create_result = await dispatch_editing_tool(
+            "clipcannon_create_edit",
+            {
+                "project_id": project_id,
+                "name": "Multi-Segment",
+                "target_platform": "tiktok",
+                "segments": [
+                    {"source_start_ms": 0, "source_end_ms": 10000},
+                    {"source_start_ms": 15000, "source_end_ms": 25000},
+                ],
+            },
+        )
+        assert "error" not in create_result
+        source_edit_id = str(create_result["edit_id"])
+
+        branch_result = await dispatch_editing_tool(
+            "clipcannon_branch_edit",
+            {
+                "project_id": project_id,
+                "edit_id": source_edit_id,
+                "branch_name": "youtube",
+                "target_platform": "youtube_shorts",
+            },
+        )
+        assert "error" not in branch_result
+        assert branch_result["segment_count"] == 2
+
+        # Verify segment rows exist in DB
+        projects_dir = tmp_path / "projects"
+        db_file = projects_dir / project_id / "analysis.db"
+        conn = sqlite3.connect(str(db_file))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM edit_segments WHERE edit_id = ? ORDER BY segment_order",
+            (str(branch_result["edit_id"]),),
+        ).fetchall()
+        conn.close()
+
+        assert len(rows) == 2
+        assert rows[0]["source_start_ms"] == 0
+        assert rows[0]["source_end_ms"] == 10000
+        assert rows[1]["source_start_ms"] == 15000
+        assert rows[1]["source_end_ms"] == 25000
+
+    @pytest.mark.asyncio()
+    async def test_branch_has_new_platform(
+        self, project_setup: str
+    ) -> None:
+        """Branched edit has the new target platform."""
+        project_id = project_setup
+        create_result = await dispatch_editing_tool(
+            "clipcannon_create_edit",
+            {
+                "project_id": project_id,
+                "name": "Platform Test",
+                "target_platform": "tiktok",
+                "segments": [
+                    {"source_start_ms": 0, "source_end_ms": 30000},
+                ],
+            },
+        )
+        assert "error" not in create_result
+        source_edit_id = str(create_result["edit_id"])
+
+        branch_result = await dispatch_editing_tool(
+            "clipcannon_branch_edit",
+            {
+                "project_id": project_id,
+                "edit_id": source_edit_id,
+                "branch_name": "reels",
+                "target_platform": "instagram_reels",
+            },
+        )
+        assert "error" not in branch_result
+        assert branch_result["target_platform"] == "instagram_reels"
+        assert branch_result["target_profile"] == "instagram_reels"
+
+    @pytest.mark.asyncio()
+    async def test_list_branches_includes_root_and_branch(
+        self, project_setup: str
+    ) -> None:
+        """list_branches returns both root and branched edits."""
+        project_id = project_setup
+        create_result = await dispatch_editing_tool(
+            "clipcannon_create_edit",
+            {
+                "project_id": project_id,
+                "name": "List Branch Test",
+                "target_platform": "tiktok",
+                "segments": [
+                    {"source_start_ms": 0, "source_end_ms": 30000},
+                ],
+            },
+        )
+        assert "error" not in create_result
+        root_id = str(create_result["edit_id"])
+
+        # Create a branch
+        branch_result = await dispatch_editing_tool(
+            "clipcannon_branch_edit",
+            {
+                "project_id": project_id,
+                "edit_id": root_id,
+                "branch_name": "facebook_variant",
+                "target_platform": "facebook",
+            },
+        )
+        assert "error" not in branch_result
+
+        # List branches
+        list_result = await dispatch_editing_tool(
+            "clipcannon_list_branches",
+            {"project_id": project_id, "edit_id": root_id},
+        )
+        assert "error" not in list_result
+        assert list_result["branch_count"] == 2
+        assert list_result["root_edit_id"] == root_id
+
+        branch_ids = [b["edit_id"] for b in list_result["branches"]]
+        assert root_id in branch_ids
+        assert str(branch_result["edit_id"]) in branch_ids
+
+    @pytest.mark.asyncio()
+    async def test_branch_name_stored(
+        self, project_setup: str, tmp_path: Path
+    ) -> None:
+        """Branch name is correctly stored in the database."""
+        project_id = project_setup
+        create_result = await dispatch_editing_tool(
+            "clipcannon_create_edit",
+            {
+                "project_id": project_id,
+                "name": "Branch Name Test",
+                "target_platform": "tiktok",
+                "segments": [
+                    {"source_start_ms": 0, "source_end_ms": 30000},
+                ],
+            },
+        )
+        assert "error" not in create_result
+        source_edit_id = str(create_result["edit_id"])
+
+        branch_result = await dispatch_editing_tool(
+            "clipcannon_branch_edit",
+            {
+                "project_id": project_id,
+                "edit_id": source_edit_id,
+                "branch_name": "shorts_variant",
+                "target_platform": "youtube_shorts",
+            },
+        )
+        assert "error" not in branch_result
+
+        # Check DB directly
+        projects_dir = tmp_path / "projects"
+        db_file = projects_dir / project_id / "analysis.db"
+        conn = sqlite3.connect(str(db_file))
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT branch_name FROM edits WHERE edit_id = ?",
+            (str(branch_result["edit_id"]),),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        assert row["branch_name"] == "shorts_variant"

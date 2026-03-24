@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import sqlite3
+
     from clipcannon.config import ClipCannonConfig
+    from clipcannon.editing.edl import SegmentSpec
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all, fetch_one
 from clipcannon.editing.caption_render import generate_ass_file
@@ -44,6 +47,7 @@ from clipcannon.rendering.profiles import (
     get_profile,
     get_software_fallback,
 )
+from clipcannon.rendering.segment_hash import compute_segment_hash
 from clipcannon.rendering.thumbnail import generate_thumbnail
 
 logger = logging.getLogger(__name__)
@@ -160,6 +164,44 @@ def _scale_ass_file(
         scale, ass_path.name, output_path.name,
     )
     return output_path
+
+
+# ============================================================
+# SEGMENT RENDER CACHE HELPERS
+# ============================================================
+_SEGMENT_CACHE_DDL = """
+CREATE TABLE IF NOT EXISTS segment_cache (
+    cache_hash TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    segment_spec_json TEXT NOT NULL,
+    file_size_bytes INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_used_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (project_id) REFERENCES project(project_id)
+);
+CREATE INDEX IF NOT EXISTS idx_segment_cache_project
+    ON segment_cache(project_id);
+"""
+
+
+def ensure_segment_cache_table(conn: sqlite3.Connection) -> None:
+    """Ensure the segment_cache table exists, creating it if needed.
+
+    Handles migration for existing databases created before the
+    segment render cache was added.
+
+    Args:
+        conn: SQLite connection.
+    """
+    import sqlite3 as _sqlite3
+
+    try:
+        conn.execute("SELECT 1 FROM segment_cache LIMIT 1")
+    except _sqlite3.OperationalError:
+        conn.executescript(_SEGMENT_CACHE_DDL)
+        logger.info("Created segment_cache table (migration).")
 
 
 @dataclass
@@ -575,7 +617,7 @@ class RenderEngine:
             await self._execute_ffmpeg(cmd, render_id)
             return
 
-        # Multi-segment: render each independently
+        # Multi-segment: render each independently with cache
         import shutil
         from copy import deepcopy
 
@@ -583,24 +625,22 @@ class RenderEngine:
         temp_dir.mkdir(parents=True, exist_ok=True)
         segment_files: list[Path] = []
 
+        # Set up segment cache directory and DB table
+        project_dir = render_dir.parent.parent
+        cache_dir = project_dir / "segment_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        cache_conn = None
+        if db_path is not None:
+            import sqlite3
+            cache_conn = sqlite3.connect(str(db_path))
+            ensure_segment_cache_table(cache_conn)
+
+        source_hash = edl.source_sha256
+
         try:
             for i, seg in enumerate(segments):
                 seg_output = temp_dir / f"seg_{i:03d}.mp4"
-                logger.info(
-                    "Render %s: segment %d/%d (%d-%dms)",
-                    render_id,
-                    i + 1,
-                    len(segments),
-                    seg.source_start_ms,
-                    seg.source_end_ms,
-                )
-
-                # Build command for this single segment
-                single_seg_list = [seg]
-
-                # For segmented rendering, captions are burned in during
-                # the concat pass to maintain correct cross-segment timing
-                seg_ass_path = None
 
                 # Overlays: only include overlays that fall within this
                 # segment's output time range, remapped to local times
@@ -632,34 +672,88 @@ class RenderEngine:
                             remapped.append(ov_copy)
                         seg_overlays = remapped if remapped else None
 
-                cmd = build_ffmpeg_cmd(
-                    source_path=source_path,
-                    output_path=seg_output,
-                    segments=single_seg_list,
-                    profile=profile,
-                    crop_region=crop_region,
-                    ass_path=seg_ass_path,
-                    encoding_args=encoding_args,
+                # Compute content hash for cache lookup
+                seg_hash = compute_segment_hash(
+                    source_sha256=source_hash,
+                    segment=seg,
+                    profile_name=profile.name,
                     canvas=canvas_spec,
                     global_color=edl.color,
                     overlays=seg_overlays,
-                    removals=edl.removals or None,
                 )
-                await self._execute_ffmpeg(cmd, f"{render_id}_seg{i}")
 
-                if (
-                    not seg_output.exists()
-                    or seg_output.stat().st_size == 0
-                ):
-                    raise PipelineError(
-                        f"Segment {i} render produced no output",
-                        stage_name="rendering",
-                        operation="segment_render",
-                        details={
-                            "segment": i,
-                            "path": str(seg_output),
-                        },
+                # Check segment cache
+                cache_hit = False
+                if cache_conn is not None:
+                    cache_hit = self._check_segment_cache(
+                        conn=cache_conn,
+                        cache_hash=seg_hash,
+                        seg_output=seg_output,
+                        render_id=render_id,
+                        seg_index=i,
+                        seg_count=len(segments),
                     )
+
+                if not cache_hit:
+                    logger.info(
+                        "Render %s: segment %d/%d CACHE MISS, "
+                        "rendering (%d-%dms)",
+                        render_id,
+                        i + 1,
+                        len(segments),
+                        seg.source_start_ms,
+                        seg.source_end_ms,
+                    )
+
+                    # Build command for this single segment
+                    single_seg_list = [seg]
+                    seg_ass_path = None
+
+                    cmd = build_ffmpeg_cmd(
+                        source_path=source_path,
+                        output_path=seg_output,
+                        segments=single_seg_list,
+                        profile=profile,
+                        crop_region=crop_region,
+                        ass_path=seg_ass_path,
+                        encoding_args=encoding_args,
+                        canvas=canvas_spec,
+                        global_color=edl.color,
+                        overlays=seg_overlays,
+                        removals=edl.removals or None,
+                    )
+                    await self._execute_ffmpeg(
+                        cmd, f"{render_id}_seg{i}"
+                    )
+
+                    if (
+                        not seg_output.exists()
+                        or seg_output.stat().st_size == 0
+                    ):
+                        raise PipelineError(
+                            f"Segment {i} render produced no output",
+                            stage_name="rendering",
+                            operation="segment_render",
+                            details={
+                                "segment": i,
+                                "path": str(seg_output),
+                            },
+                        )
+
+                    # Store in cache
+                    if cache_conn is not None:
+                        self._store_segment_cache(
+                            conn=cache_conn,
+                            cache_hash=seg_hash,
+                            project_id=edl.project_id,
+                            source_hash=source_hash,
+                            segment=seg,
+                            seg_output=seg_output,
+                            cache_dir=cache_dir,
+                            render_id=render_id,
+                            seg_index=i,
+                            seg_count=len(segments),
+                        )
 
                 segment_files.append(seg_output)
                 logger.info(
@@ -776,12 +870,150 @@ class RenderEngine:
             concat_raw.unlink(missing_ok=True)
 
         finally:
+            # Close cache connection
+            if cache_conn is not None:
+                cache_conn.close()
             # Clean up temp segment files
             if temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
                 logger.debug(
                     "Cleaned up temp segments: %s", temp_dir
                 )
+
+    # ----------------------------------------------------------------
+    # Segment cache methods
+    # ----------------------------------------------------------------
+    def _check_segment_cache(
+        self,
+        conn: sqlite3.Connection,
+        cache_hash: str,
+        seg_output: Path,
+        render_id: str,
+        seg_index: int,
+        seg_count: int,
+    ) -> bool:
+        """Check if a rendered segment exists in the cache.
+
+        Queries the segment_cache table for the hash, verifies the
+        cached file still exists on disk, copies it to the segment
+        output path, and updates last_used_at.
+
+        Args:
+            conn: SQLite connection.
+            cache_hash: Content hash of the segment.
+            seg_output: Path where the segment file should be placed.
+            render_id: Render ID for logging.
+            seg_index: Zero-based segment index.
+            seg_count: Total number of segments.
+
+        Returns:
+            True if cache hit and file was copied, False otherwise.
+        """
+        import shutil
+
+        row = conn.execute(
+            "SELECT file_path FROM segment_cache WHERE cache_hash = ?",
+            (cache_hash,),
+        ).fetchone()
+
+        if row is None:
+            return False
+
+        cached_path = Path(row[0])
+        if not cached_path.exists() or cached_path.stat().st_size == 0:
+            # Cached file is missing or empty; treat as miss
+            conn.execute(
+                "DELETE FROM segment_cache WHERE cache_hash = ?",
+                (cache_hash,),
+            )
+            conn.commit()
+            logger.info(
+                "Render %s: segment %d/%d cache file missing, "
+                "removed stale entry (hash=%s...)",
+                render_id, seg_index + 1, seg_count,
+                cache_hash[:12],
+            )
+            return False
+
+        # Copy cached file to segment output
+        shutil.copy2(str(cached_path), str(seg_output))
+        conn.execute(
+            "UPDATE segment_cache SET last_used_at = datetime('now') "
+            "WHERE cache_hash = ?",
+            (cache_hash,),
+        )
+        conn.commit()
+
+        file_mb = cached_path.stat().st_size / 1024 / 1024
+        logger.info(
+            "Render %s: segment %d/%d CACHE HIT "
+            "(hash=%s..., %.1f MB)",
+            render_id, seg_index + 1, seg_count,
+            cache_hash[:12], file_mb,
+        )
+        return True
+
+    def _store_segment_cache(
+        self,
+        conn: sqlite3.Connection,
+        cache_hash: str,
+        project_id: str,
+        source_hash: str,
+        segment: SegmentSpec,
+        seg_output: Path,
+        cache_dir: Path,
+        render_id: str,
+        seg_index: int,
+        seg_count: int,
+    ) -> None:
+        """Store a rendered segment in the cache.
+
+        Copies the rendered segment file to the cache directory and
+        inserts a record into the segment_cache table.
+
+        Args:
+            conn: SQLite connection.
+            cache_hash: Content hash of the segment.
+            project_id: Project identifier.
+            source_hash: SHA-256 of the source video.
+            segment: The SegmentSpec (for storing spec JSON).
+            seg_output: Path to the rendered segment file.
+            cache_dir: Directory for cached segment files.
+            render_id: Render ID for logging.
+            seg_index: Zero-based segment index.
+            seg_count: Total number of segments.
+        """
+        import shutil
+
+        cached_path = cache_dir / f"{cache_hash}.mp4"
+        shutil.copy2(str(seg_output), str(cached_path))
+
+        file_size = cached_path.stat().st_size
+        spec_json = segment.model_dump_json()
+
+        conn.execute(
+            "INSERT OR REPLACE INTO segment_cache "
+            "(cache_hash, project_id, file_path, source_hash, "
+            "segment_spec_json, file_size_bytes) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                cache_hash,
+                project_id,
+                str(cached_path),
+                source_hash,
+                spec_json,
+                file_size,
+            ),
+        )
+        conn.commit()
+
+        file_mb = file_size / 1024 / 1024
+        logger.info(
+            "Render %s: segment %d/%d cached "
+            "(hash=%s..., %.1f MB)",
+            render_id, seg_index + 1, seg_count,
+            cache_hash[:12], file_mb,
+        )
 
     # ----------------------------------------------------------------
     # Audio mixing

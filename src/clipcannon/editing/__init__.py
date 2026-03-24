@@ -1,7 +1,8 @@
 """Editing package for ClipCannon Phase 2.
 
-Provides EDL format models, caption generation, and smart cropping
-for the video editing and rendering pipeline.
+Provides EDL format models, caption generation, smart cropping,
+and change impact classification for the video editing and
+rendering pipeline.
 """
 
 from clipcannon.editing.captions import (
@@ -10,6 +11,10 @@ from clipcannon.editing.captions import (
     generate_ass_file,
     generate_drawtext_filters,
     remap_timestamps,
+)
+from clipcannon.editing.change_classifier import (
+    RenderHint,
+    classify_changes,
 )
 from clipcannon.editing.edl import (
     AudioSpec,
@@ -40,8 +45,10 @@ __all__ = [
     "MotionSpec",
     "OverlaySpec",
     "PLATFORM_ASPECTS",
+    "RenderHint",
     "SegmentSpec",
     "chunk_transcript_words",
+    "classify_changes",
     "compute_crop_region",
     "compute_total_duration",
     "detect_faces",

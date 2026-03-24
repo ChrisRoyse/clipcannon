@@ -10,10 +10,13 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import sqlite3 as _sqlite3
 import time
+from copy import deepcopy
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all, fetch_one
+from clipcannon.editing.change_classifier import RenderHint, classify_changes
 from clipcannon.editing.edl import (
     CanvasSpec,
     ColorSpec,
@@ -36,8 +39,11 @@ from clipcannon.tools.editing_helpers import (
     build_metadata_spec,
     build_segments,
     db_path,
+    ensure_branch_columns,
+    ensure_edit_versions_table,
     error_response,
     project_dir,
+    save_edit_version,
     store_edit_segments,
     validate_project,
 )
@@ -48,6 +54,27 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# DB MIGRATION HELPERS
+# ============================================================
+def _ensure_render_hint_column(conn: _sqlite3.Connection) -> None:
+    """Ensure the render_hint_json column exists on the edits table.
+
+    Handles migration for existing databases created before the
+    change impact classification feature was added.
+
+    Args:
+        conn: SQLite connection.
+    """
+    try:
+        conn.execute("SELECT render_hint_json FROM edits LIMIT 1")
+    except _sqlite3.OperationalError:
+        conn.execute(
+            "ALTER TABLE edits ADD COLUMN render_hint_json TEXT"
+        )
+        logger.info("Added render_hint_json column to edits table (migration).")
 
 
 # ============================================================
@@ -307,7 +334,7 @@ async def clipcannon_modify_edit(
     """Modify an existing draft edit.
 
     Loads the current EDL, applies changes (deep merge), re-validates,
-    and updates the database. Only draft edits can be modified.
+    and updates the database. Resets status to draft for re-rendering.
 
     Args:
         project_id: Project identifier.
@@ -341,10 +368,13 @@ async def clipcannon_modify_edit(
         )
 
     current_status = str(edit_row.get("status", ""))
-    if current_status != "draft":
+    # Allow modifications on draft and rendered edits — iterative
+    # edit-review-fix workflows require modifying after render.
+    # Only block if the edit is actively rendering.
+    if current_status == "rendering":
         return error_response(
             "INVALID_STATE",
-            f"Cannot modify edit in '{current_status}' status. Only 'draft' edits can be modified.",
+            f"Cannot modify edit while rendering is in progress.",
             {"edit_id": edit_id, "status": current_status},
         )
 
@@ -356,6 +386,18 @@ async def clipcannon_modify_edit(
             "INTERNAL_ERROR", f"Failed to parse existing EDL: {exc}",
             {"edit_id": edit_id},
         )
+
+    # Save the current state as a version before applying changes
+    save_edit_version(
+        db=db,
+        edit_id=edit_id,
+        edl_json=str(edit_row["edl_json"]),
+        changes=changes,
+        current_edl=current_edl,
+    )
+
+    # Snapshot the EDL before mutation for change classification
+    old_edl_snapshot = deepcopy(current_edl)
 
     updated_fields, segments_changed, err = apply_changes(current_edl, changes)
     if err is not None:
@@ -376,11 +418,19 @@ async def clipcannon_modify_edit(
     if segments_changed and current_edl.captions.enabled:
         auto_generate_captions(current_edl, db, project_id, current_edl.segments, edit_id)
 
+    # Classify changes to produce a render hint
+    render_hint = classify_changes(old_edl_snapshot, current_edl)
+
     total_duration_ms = compute_total_duration(current_edl.segments)
+    render_hint_json = render_hint.model_dump_json()
 
     conn = get_connection(db, enable_vec=False, dict_rows=True)
     try:
         edl_json = current_edl.model_dump_json()
+
+        # Ensure render_hint_json column exists (migration for existing DBs)
+        _ensure_render_hint_column(conn)
+
         execute(
             conn,
             """UPDATE edits SET
@@ -388,6 +438,8 @@ async def clipcannon_modify_edit(
                 segment_count = ?, captions_enabled = ?, crop_mode = ?,
                 thumbnail_timestamp_ms = ?, metadata_title = ?,
                 metadata_description = ?, metadata_hashtags = ?,
+                render_hint_json = ?,
+                status = 'draft',
                 updated_at = datetime('now')
             WHERE edit_id = ? AND project_id = ?""",
             (
@@ -396,6 +448,7 @@ async def clipcannon_modify_edit(
                 current_edl.crop.mode, current_edl.metadata.thumbnail_timestamp_ms,
                 current_edl.metadata.title, current_edl.metadata.description,
                 json.dumps(current_edl.metadata.hashtags),
+                render_hint_json,
                 edit_id, project_id,
             ),
         )
@@ -422,6 +475,7 @@ async def clipcannon_modify_edit(
         "captions_enabled": current_edl.captions.enabled,
         "caption_chunks": len(current_edl.captions.chunks),
         "crop_mode": current_edl.crop.mode,
+        "render_hint": render_hint.model_dump(),
     }
 
 
@@ -677,6 +731,599 @@ async def clipcannon_add_overlay(
 
 
 # ============================================================
+# TOOL 7: clipcannon_edit_history
+# ============================================================
+async def clipcannon_edit_history(
+    project_id: str,
+    edit_id: str,
+) -> dict[str, object]:
+    """List version history for an edit.
+
+    Returns all saved versions ordered by version_number descending,
+    plus the current state as version 0.
+
+    Args:
+        project_id: Project identifier.
+        edit_id: Edit identifier.
+
+    Returns:
+        Dict with versions list or error response.
+    """
+    err = validate_project(project_id)
+    if err is not None:
+        return err
+
+    db = db_path(project_id)
+    conn = get_connection(db, enable_vec=False, dict_rows=True)
+    try:
+        edit_row = fetch_one(
+            conn,
+            "SELECT edit_id, name, status, updated_at FROM edits "
+            "WHERE edit_id = ? AND project_id = ?",
+            (edit_id, project_id),
+        )
+        if edit_row is None:
+            return error_response(
+                "EDIT_NOT_FOUND", f"Edit not found: {edit_id}",
+                {"edit_id": edit_id, "project_id": project_id},
+            )
+
+        ensure_edit_versions_table(conn)
+
+        version_rows = fetch_all(
+            conn,
+            "SELECT version_id, version_number, change_description, created_at "
+            "FROM edit_versions WHERE edit_id = ? "
+            "ORDER BY version_number DESC",
+            (edit_id,),
+        )
+    finally:
+        conn.close()
+
+    versions: list[dict[str, object]] = [
+        {
+            "version_id": "current",
+            "version_number": 0,
+            "change_description": "Current state",
+            "created_at": str(edit_row.get("updated_at", "")),
+        },
+    ]
+    for row in version_rows:
+        versions.append({
+            "version_id": str(row["version_id"]),
+            "version_number": int(row["version_number"]),
+            "change_description": str(row["change_description"] or ""),
+            "created_at": str(row["created_at"]),
+        })
+
+    return {
+        "edit_id": edit_id,
+        "name": str(edit_row.get("name", "")),
+        "status": str(edit_row.get("status", "")),
+        "version_count": len(version_rows),
+        "versions": versions,
+    }
+
+
+# ============================================================
+# TOOL 8: clipcannon_revert_edit
+# ============================================================
+async def clipcannon_revert_edit(
+    project_id: str,
+    edit_id: str,
+    version_number: int,
+) -> dict[str, object]:
+    """Revert an edit to a previous version.
+
+    Saves the current state as a new version (so the revert itself
+    is versioned), then replaces the current EDL with the target
+    version's EDL. Resets status to draft and regenerates captions
+    if segments changed.
+
+    Args:
+        project_id: Project identifier.
+        edit_id: Edit identifier.
+        version_number: The version number to revert to.
+
+    Returns:
+        Revert result dict or error response.
+    """
+    err = validate_project(project_id)
+    if err is not None:
+        return err
+
+    db = db_path(project_id)
+    conn = get_connection(db, enable_vec=False, dict_rows=True)
+    try:
+        edit_row = fetch_one(
+            conn,
+            "SELECT * FROM edits WHERE edit_id = ? AND project_id = ?",
+            (edit_id, project_id),
+        )
+        if edit_row is None:
+            return error_response(
+                "EDIT_NOT_FOUND", f"Edit not found: {edit_id}",
+                {"edit_id": edit_id, "project_id": project_id},
+            )
+
+        current_status = str(edit_row.get("status", ""))
+        if current_status == "rendering":
+            return error_response(
+                "INVALID_STATE",
+                "Cannot revert edit while rendering is in progress.",
+                {"edit_id": edit_id, "status": current_status},
+            )
+
+        ensure_edit_versions_table(conn)
+
+        target_row = fetch_one(
+            conn,
+            "SELECT version_id, edl_json FROM edit_versions "
+            "WHERE edit_id = ? AND version_number = ?",
+            (edit_id, version_number),
+        )
+        if target_row is None:
+            return error_response(
+                "VERSION_NOT_FOUND",
+                f"Version {version_number} not found for edit {edit_id}",
+                {"edit_id": edit_id, "version_number": version_number},
+            )
+
+        # Save current state as a new version before reverting
+        current_edl_json = str(edit_row["edl_json"])
+        max_row = fetch_one(
+            conn,
+            "SELECT MAX(version_number) as max_ver FROM edit_versions "
+            "WHERE edit_id = ?",
+            (edit_id,),
+        )
+        next_ver = (int(max_row["max_ver"]) + 1) if max_row and max_row["max_ver"] is not None else 1
+        revert_version_id = f"ver_{secrets.token_hex(6)}"
+
+        execute(
+            conn,
+            """INSERT INTO edit_versions (
+                version_id, edit_id, parent_version_id, version_number,
+                edl_json, change_description
+            ) VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                revert_version_id, edit_id, None, next_ver,
+                current_edl_json,
+                f"State before revert to version {version_number}",
+            ),
+        )
+
+        # Restore the target version's EDL
+        target_edl_json = str(target_row["edl_json"])
+        target_edl = EditDecisionList(**json.loads(target_edl_json))
+
+        # Regenerate captions if segments exist and captions enabled
+        if target_edl.captions.enabled and target_edl.segments:
+            auto_generate_captions(
+                target_edl, db, project_id, target_edl.segments, edit_id,
+            )
+
+        total_duration_ms = compute_total_duration(target_edl.segments)
+        restored_edl_json = target_edl.model_dump_json()
+
+        execute(
+            conn,
+            """UPDATE edits SET
+                name = ?, edl_json = ?, total_duration_ms = ?,
+                segment_count = ?, captions_enabled = ?, crop_mode = ?,
+                thumbnail_timestamp_ms = ?, metadata_title = ?,
+                metadata_description = ?, metadata_hashtags = ?,
+                status = 'draft',
+                updated_at = datetime('now')
+            WHERE edit_id = ? AND project_id = ?""",
+            (
+                target_edl.name, restored_edl_json, total_duration_ms,
+                len(target_edl.segments), target_edl.captions.enabled,
+                target_edl.crop.mode, target_edl.metadata.thumbnail_timestamp_ms,
+                target_edl.metadata.title, target_edl.metadata.description,
+                json.dumps(target_edl.metadata.hashtags),
+                edit_id, project_id,
+            ),
+        )
+
+        # Rebuild edit_segments
+        execute(conn, "DELETE FROM edit_segments WHERE edit_id = ?", (edit_id,))
+        store_edit_segments(conn, edit_id, target_edl.segments)
+        conn.commit()
+    except ClipCannonError:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to revert edit %s to version %d", edit_id, version_number)
+        return error_response("INTERNAL_ERROR", f"Failed to revert edit: {exc}")
+    finally:
+        conn.close()
+
+    logger.info(
+        "Reverted edit %s to version %d (saved current as version %d)",
+        edit_id, version_number, next_ver,
+    )
+
+    return {
+        "edit_id": edit_id,
+        "reverted_to_version": version_number,
+        "saved_current_as_version": next_ver,
+        "status": "draft",
+        "name": target_edl.name,
+        "segment_count": len(target_edl.segments),
+        "total_duration_ms": total_duration_ms,
+    }
+
+
+# ============================================================
+# TOOL 9: clipcannon_apply_feedback
+# ============================================================
+async def clipcannon_apply_feedback(
+    project_id: str,
+    edit_id: str,
+    feedback: str,
+) -> dict[str, object]:
+    """Apply natural language feedback to an edit.
+
+    Parses feedback text into a structured intent, converts to EDL
+    changes, and applies via modify_edit. Returns the parsed intent
+    and modification result.
+
+    Args:
+        project_id: Project identifier.
+        edit_id: Edit identifier.
+        feedback: Natural language feedback about the video edit.
+
+    Returns:
+        Dict with parsed_intent, changes_applied, and modify_result.
+    """
+    from clipcannon.tools.feedback import (
+        intent_to_changes,
+        parse_feedback,
+    )
+
+    err = validate_project(project_id, required_status="ready")
+    if err is not None:
+        return err
+
+    db = db_path(project_id)
+
+    conn = get_connection(db, enable_vec=False, dict_rows=True)
+    try:
+        edit_row = fetch_one(
+            conn,
+            "SELECT edl_json, status FROM edits WHERE edit_id = ? AND project_id = ?",
+            (edit_id, project_id),
+        )
+    finally:
+        conn.close()
+
+    if edit_row is None:
+        return error_response(
+            "EDIT_NOT_FOUND", f"Edit not found: {edit_id}",
+            {"edit_id": edit_id, "project_id": project_id},
+        )
+
+    current_status = str(edit_row.get("status", ""))
+    if current_status == "rendering":
+        return error_response(
+            "INVALID_STATE",
+            "Cannot apply feedback while rendering is in progress.",
+            {"edit_id": edit_id, "status": current_status},
+        )
+
+    try:
+        edl_data = json.loads(str(edit_row["edl_json"]))
+        edl = EditDecisionList(**edl_data)
+    except Exception as exc:
+        return error_response(
+            "INTERNAL_ERROR", f"Failed to parse existing EDL: {exc}",
+            {"edit_id": edit_id},
+        )
+
+    # Parse the feedback into a structured intent
+    intent = parse_feedback(feedback, edl)
+
+    intent_dump = intent.model_dump()
+
+    # Check confidence threshold
+    if intent.confidence < 0.3:
+        return error_response(
+            "LOW_CONFIDENCE",
+            f"Could not confidently parse feedback: {feedback!r}",
+            {
+                "parsed_intent": intent_dump,
+                "confidence": intent.confidence,
+                "hint": "Try being more specific, e.g. 'the cut at 0:15 is too abrupt'",
+            },
+        )
+
+    # Convert intent to changes dict
+    changes = intent_to_changes(intent, edl)
+    if not changes:
+        return error_response(
+            "NO_CHANGES",
+            "Feedback was parsed but produced no applicable changes.",
+            {"parsed_intent": intent_dump},
+        )
+
+    # Filter out internal-only keys (prefixed with _) for modify_edit
+    modify_changes = {k: v for k, v in changes.items() if not k.startswith("_")}
+
+    # Apply changes via modify_edit if there are standard changes
+    modify_result: dict[str, object] = {}
+    if modify_changes:
+        modify_result = await clipcannon_modify_edit(
+            project_id=project_id,
+            edit_id=edit_id,
+            changes=modify_changes,
+        )
+
+    # Collect any special actions that need separate tool calls
+    special_actions: list[dict[str, object]] = []
+    if "_color" in changes:
+        special_actions.append({
+            "action": "color_adjust",
+            "parameters": changes["_color"],
+        })
+    if "_overlay" in changes:
+        special_actions.append({
+            "action": "add_overlay",
+            "parameters": changes["_overlay"],
+        })
+    if "_motion_targets" in changes:
+        special_actions.append({
+            "action": "add_motion",
+            "parameters": changes["_motion_targets"],
+        })
+
+    return {
+        "parsed_intent": intent_dump,
+        "changes_applied": changes,
+        "modify_result": modify_result,
+        "special_actions": special_actions if special_actions else None,
+    }
+
+
+# ============================================================
+# TOOL 10: clipcannon_branch_edit
+# ============================================================
+async def clipcannon_branch_edit(
+    project_id: str,
+    edit_id: str,
+    branch_name: str,
+    target_platform: str,
+) -> dict[str, object]:
+    """Fork an edit into a platform-specific variant.
+
+    Deep-copies the source edit's EDL, creates a new edit with
+    a different target platform, and links it via parent_edit_id.
+    All segments, captions, effects, overlays are copied.
+
+    Args:
+        project_id: Project identifier.
+        edit_id: Source edit identifier to branch from.
+        branch_name: Name for this branch (e.g., 'instagram').
+        target_platform: Target platform for the branched edit.
+
+    Returns:
+        Branch result dict with new edit_id and branch_name, or error.
+    """
+    err = validate_project(project_id, required_status="ready")
+    if err is not None:
+        return err
+
+    valid_platforms = {
+        "tiktok", "instagram_reels", "youtube_shorts",
+        "youtube_standard", "youtube_4k", "facebook", "linkedin",
+    }
+    if target_platform not in valid_platforms:
+        return error_response(
+            "INVALID_PARAMETER",
+            f"Invalid target_platform: {target_platform}. "
+            f"Valid: {', '.join(sorted(valid_platforms))}",
+            {"target_platform": target_platform},
+        )
+
+    db = db_path(project_id)
+    conn = get_connection(db, enable_vec=False, dict_rows=True)
+    try:
+        edit_row = fetch_one(
+            conn,
+            "SELECT * FROM edits WHERE edit_id = ? AND project_id = ?",
+            (edit_id, project_id),
+        )
+    finally:
+        conn.close()
+
+    if edit_row is None:
+        return error_response(
+            "EDIT_NOT_FOUND",
+            f"Edit not found: {edit_id}",
+            {"edit_id": edit_id, "project_id": project_id},
+        )
+
+    # Parse the source EDL and deep-copy it
+    try:
+        edl_data = json.loads(str(edit_row["edl_json"]))
+        source_edl = EditDecisionList(**edl_data)
+    except Exception as exc:
+        return error_response(
+            "INTERNAL_ERROR",
+            f"Failed to parse source EDL: {exc}",
+            {"edit_id": edit_id},
+        )
+
+    # Deep-copy the EDL for the branch
+    branched_edl = deepcopy(source_edl)
+
+    # Assign new identity
+    new_edit_id = f"edit_{secrets.token_hex(6)}"
+    new_profile = PLATFORM_PROFILES.get(target_platform, "tiktok_vertical")
+
+    branched_edl.edit_id = new_edit_id
+    branched_edl.target_platform = target_platform  # type: ignore[assignment]
+    branched_edl.target_profile = new_profile
+    branched_edl.render_settings = RenderSettingsSpec(profile=new_profile)
+    branched_edl.status = "draft"  # type: ignore[assignment]
+
+    # Store the branched edit
+    conn = get_connection(db, enable_vec=False, dict_rows=True)
+    try:
+        ensure_branch_columns(conn)
+
+        edl_json_str = branched_edl.model_dump_json()
+        total_duration_ms = int(edit_row.get("total_duration_ms", 0) or 0)
+
+        execute(
+            conn,
+            """INSERT INTO edits (
+                edit_id, project_id, name, status, target_platform,
+                target_profile, edl_json, source_sha256,
+                total_duration_ms, segment_count, captions_enabled,
+                crop_mode, thumbnail_timestamp_ms,
+                metadata_title, metadata_description, metadata_hashtags,
+                parent_edit_id, branch_name
+            ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                new_edit_id, project_id,
+                f"{edit_row['name']} ({branch_name})",
+                target_platform, new_profile,
+                edl_json_str, str(edit_row["source_sha256"]),
+                total_duration_ms,
+                int(edit_row.get("segment_count", 0) or 0),
+                bool(edit_row.get("captions_enabled", True)),
+                str(edit_row.get("crop_mode", "auto")),
+                edit_row.get("thumbnail_timestamp_ms"),
+                edit_row.get("metadata_title"),
+                edit_row.get("metadata_description"),
+                edit_row.get("metadata_hashtags"),
+                edit_id,
+                branch_name,
+            ),
+        )
+
+        # Copy segment rows
+        store_edit_segments(conn, new_edit_id, branched_edl.segments)
+
+        # Ensure the root edit has branch_name='main' if not set
+        execute(
+            conn,
+            "UPDATE edits SET branch_name = 'main' "
+            "WHERE edit_id = ? AND (branch_name IS NULL OR branch_name = '')",
+            (edit_id,),
+        )
+
+        conn.commit()
+    except ClipCannonError:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to store branched edit %s", new_edit_id)
+        return error_response("INTERNAL_ERROR", f"Failed to store branch: {exc}")
+    finally:
+        conn.close()
+
+    # Create edit directory
+    edit_dir = project_dir(project_id) / "edits" / new_edit_id
+    edit_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        "Branched edit %s -> %s (branch=%s, platform=%s)",
+        edit_id, new_edit_id, branch_name, target_platform,
+    )
+
+    return {
+        "edit_id": new_edit_id,
+        "parent_edit_id": edit_id,
+        "branch_name": branch_name,
+        "target_platform": target_platform,
+        "target_profile": new_profile,
+        "segment_count": len(branched_edl.segments),
+        "total_duration_ms": total_duration_ms,
+        "status": "draft",
+    }
+
+
+# ============================================================
+# TOOL 11: clipcannon_list_branches
+# ============================================================
+async def clipcannon_list_branches(
+    project_id: str,
+    edit_id: str,
+) -> dict[str, object]:
+    """List all branches of an edit.
+
+    Finds all edits where parent_edit_id matches OR the edit_id
+    itself matches. Returns the root edit and all branches.
+
+    Args:
+        project_id: Project identifier.
+        edit_id: Edit identifier (root or any branch).
+
+    Returns:
+        Dict with branches list, or error.
+    """
+    err = validate_project(project_id, required_status="ready")
+    if err is not None:
+        return err
+
+    db = db_path(project_id)
+    conn = get_connection(db, enable_vec=False, dict_rows=True)
+    try:
+        ensure_branch_columns(conn)
+
+        # First, find the root edit_id. If the given edit_id has a
+        # parent_edit_id, use that as the root. Otherwise, it IS the root.
+        row = fetch_one(
+            conn,
+            "SELECT edit_id, parent_edit_id FROM edits "
+            "WHERE edit_id = ? AND project_id = ?",
+            (edit_id, project_id),
+        )
+    finally:
+        conn.close()
+
+    if row is None:
+        return error_response(
+            "EDIT_NOT_FOUND",
+            f"Edit not found: {edit_id}",
+            {"edit_id": edit_id, "project_id": project_id},
+        )
+
+    parent = row.get("parent_edit_id")
+    root_id = str(parent) if parent else str(row["edit_id"])
+
+    # Fetch the root and all branches
+    conn = get_connection(db, enable_vec=False, dict_rows=True)
+    try:
+        branches = fetch_all(
+            conn,
+            "SELECT edit_id, branch_name, target_platform, status, created_at "
+            "FROM edits WHERE project_id = ? "
+            "AND (edit_id = ? OR parent_edit_id = ?) "
+            "ORDER BY created_at",
+            (project_id, root_id, root_id),
+        )
+    finally:
+        conn.close()
+
+    branch_list: list[dict[str, object]] = []
+    for b in branches:
+        branch_list.append({
+            "edit_id": str(b["edit_id"]),
+            "branch_name": str(b.get("branch_name") or "main"),
+            "target_platform": str(b["target_platform"]),
+            "status": str(b["status"]),
+            "created_at": str(b["created_at"]),
+        })
+
+    return {
+        "root_edit_id": root_id,
+        "branch_count": len(branch_list),
+        "branches": branch_list,
+    }
+
+
+# ============================================================
 # DISPATCH
 # ============================================================
 async def dispatch_editing_tool(
@@ -755,6 +1402,35 @@ async def dispatch_editing_tool(
             float(arguments.get("bg_opacity", 0.7)),
             str(arguments.get("animation", "fade_in")),
             int(arguments.get("animation_duration_ms", 500)),
+        )
+    if name == "clipcannon_edit_history":
+        return await clipcannon_edit_history(
+            str(arguments["project_id"]),
+            str(arguments["edit_id"]),
+        )
+    if name == "clipcannon_revert_edit":
+        return await clipcannon_revert_edit(
+            str(arguments["project_id"]),
+            str(arguments["edit_id"]),
+            int(arguments["version_number"]),
+        )
+    if name == "clipcannon_apply_feedback":
+        return await clipcannon_apply_feedback(
+            str(arguments["project_id"]),
+            str(arguments["edit_id"]),
+            str(arguments["feedback"]),
+        )
+    if name == "clipcannon_branch_edit":
+        return await clipcannon_branch_edit(
+            project_id=str(arguments["project_id"]),
+            edit_id=str(arguments["edit_id"]),
+            branch_name=str(arguments["branch_name"]),
+            target_platform=str(arguments["target_platform"]),
+        )
+    if name == "clipcannon_list_branches":
+        return await clipcannon_list_branches(
+            project_id=str(arguments["project_id"]),
+            edit_id=str(arguments["edit_id"]),
         )
 
     return error_response("INTERNAL_ERROR", f"Unknown editing tool: {name}")

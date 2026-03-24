@@ -40,7 +40,11 @@ logger = logging.getLogger(__name__)
 
 # Scene detection parameters
 SCENE_THRESHOLD = 0.92
-MAX_SCENE_DURATION_MS = 8000
+
+# Audio-aware boundary snapping: when a visual scene boundary falls
+# during speech, snap it to the nearest silence gap or word boundary
+# within this search radius (ms).
+AUDIO_SNAP_RADIUS_MS = 2000
 
 # Content exclusion zones (pixels in SOURCE coordinates)
 CHROME_TOP = 70
@@ -462,10 +466,102 @@ def _get_transcript_segments(db_path: Path, project_id: str) -> list[dict[str, o
     return segments
 
 
+def _fetch_silence_gaps(
+    db_path: Path, project_id: str,
+) -> list[dict[str, int]]:
+    """Fetch silence gaps from the acoustic analysis."""
+    gaps: list[dict[str, int]] = []
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT start_ms, end_ms, duration_ms FROM silence_gaps "
+            "WHERE project_id = ? ORDER BY start_ms",
+            (project_id,),
+        ).fetchall()
+        for r in rows:
+            gaps.append({
+                "start_ms": int(r["start_ms"]),
+                "end_ms": int(r["end_ms"]),
+                "mid_ms": (int(r["start_ms"]) + int(r["end_ms"])) // 2,
+            })
+    except sqlite3.OperationalError:
+        pass
+    finally:
+        conn.close()
+    return gaps
+
+
+def _fetch_word_boundaries(
+    db_path: Path, project_id: str,
+) -> list[int]:
+    """Fetch word end timestamps as potential safe snap points."""
+    boundaries: list[int] = []
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT end_ms FROM transcript_words "
+            "WHERE project_id = ? ORDER BY end_ms",
+            (project_id,),
+        ).fetchall()
+        boundaries = [int(r["end_ms"]) for r in rows]
+    except sqlite3.OperationalError:
+        pass
+    finally:
+        conn.close()
+    return boundaries
+
+
+def _snap_boundary_to_audio(
+    visual_ms: int,
+    silence_gaps: list[dict[str, int]],
+    word_boundaries: list[int],
+    radius_ms: int = AUDIO_SNAP_RADIUS_MS,
+) -> int:
+    """Snap a visual scene boundary to the nearest audio-safe point.
+
+    Priority: silence gap midpoint > word boundary > original.
+    Only snaps if a candidate exists within radius_ms.
+    """
+    best_ms = visual_ms
+    best_dist = radius_ms + 1  # Start beyond radius so original wins if nothing found
+
+    # Priority 1: Silence gap midpoints (safest — guaranteed no speech)
+    for gap in silence_gaps:
+        dist = abs(gap["mid_ms"] - visual_ms)
+        if dist < best_dist:
+            best_dist = dist
+            best_ms = gap["mid_ms"]
+
+    # Priority 2: Word boundaries (safe — speech pauses between words)
+    # Only use if no silence gap was found within radius
+    if best_dist > radius_ms:
+        import bisect
+        idx = bisect.bisect_left(word_boundaries, visual_ms)
+        for candidate_idx in (idx - 1, idx):
+            if 0 <= candidate_idx < len(word_boundaries):
+                dist = abs(word_boundaries[candidate_idx] - visual_ms)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_ms = word_boundaries[candidate_idx]
+
+    return best_ms
+
+
 def _detect_scene_boundaries(
-    frame_files: list[Path], fps: float,
+    frame_files: list[Path],
+    fps: float,
+    silence_gaps: list[dict[str, int]] | None = None,
+    word_boundaries: list[int] | None = None,
 ) -> list[dict[str, object]]:
-    """Detect scenes using SSIM on downsampled frames."""
+    """Detect scenes using SSIM, snapping boundaries to audio-safe points.
+
+    No artificial max duration — scenes are as long as the visual
+    content remains stable. When a visual change IS detected, the
+    boundary is snapped to the nearest silence gap or word boundary
+    to avoid cutting mid-speech.
+    """
     scenes: list[dict[str, object]] = []
     scene_start = 0
     prev_data: np.ndarray | None = None
@@ -484,20 +580,23 @@ def _detect_scene_boundaries(
             if ssim < SCENE_THRESHOLD:
                 is_scene_break = True
 
-        current_fn = _parse_frame_number(fp)
-        start_fn = _parse_frame_number(frame_files[scene_start])
-        current_ms = int((current_fn - 1) / fps * 1000)
-        start_ms = int((start_fn - 1) / fps * 1000)
-        if current_ms - start_ms > MAX_SCENE_DURATION_MS:
-            is_scene_break = True
-
         if is_scene_break and i > scene_start:
             fn = _parse_frame_number(frame_files[scene_start])
             efn = _parse_frame_number(frame_files[i - 1])
+            raw_end_ms = int((efn - 1) / fps * 1000)
+
+            # Snap boundary to audio-safe point
+            if silence_gaps or word_boundaries:
+                raw_end_ms = _snap_boundary_to_audio(
+                    raw_end_ms,
+                    silence_gaps or [],
+                    word_boundaries or [],
+                )
+
             scenes.append({
                 "start_frame": scene_start, "end_frame": i - 1,
                 "start_ms": int((fn - 1) / fps * 1000),
-                "end_ms": int((efn - 1) / fps * 1000),
+                "end_ms": raw_end_ms,
                 "mid_frame_idx": (scene_start + i - 1) // 2,
             })
             scene_start = i
@@ -608,8 +707,20 @@ async def run_scene_analysis(
 
         transcript_segments = _get_transcript_segments(db_path, project_id)
 
-        # Phase 1: Scene boundary detection (uses downsampled SSIM)
-        scenes = _detect_scene_boundaries(frame_files, fps)
+        # Fetch audio intelligence for boundary snapping
+        silence_gaps = _fetch_silence_gaps(db_path, project_id)
+        word_boundaries = _fetch_word_boundaries(db_path, project_id)
+        logger.info(
+            "Scene analysis: loaded %d silence gaps, %d word boundaries for audio snapping",
+            len(silence_gaps), len(word_boundaries),
+        )
+
+        # Phase 1: Scene boundary detection (SSIM + audio-aware snapping)
+        scenes = _detect_scene_boundaries(
+            frame_files, fps,
+            silence_gaps=silence_gaps,
+            word_boundaries=word_boundaries,
+        )
         logger.info("Detected %d scenes from %d frames", len(scenes), len(frame_files))
 
         # Phase 2: Face detection (reuse detector, one call per scene)

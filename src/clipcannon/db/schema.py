@@ -428,6 +428,8 @@ CREATE TABLE IF NOT EXISTS edits (
     metadata_hashtags TEXT,
     rejection_feedback TEXT,
     render_id TEXT,
+    parent_edit_id TEXT,
+    branch_name TEXT DEFAULT 'main',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (project_id) REFERENCES project(project_id)
@@ -489,6 +491,31 @@ CREATE TABLE IF NOT EXISTS audio_assets (
     FOREIGN KEY (edit_id) REFERENCES edits(edit_id),
     FOREIGN KEY (project_id) REFERENCES project(project_id)
 );
+
+-- EDIT VERSIONS (version history for iterative editing)
+CREATE TABLE IF NOT EXISTS edit_versions (
+    version_id TEXT PRIMARY KEY,
+    edit_id TEXT NOT NULL,
+    parent_version_id TEXT,
+    version_number INTEGER NOT NULL,
+    edl_json TEXT NOT NULL,
+    change_description TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (edit_id) REFERENCES edits(edit_id)
+);
+
+-- SEGMENT CACHE (partial re-rendering)
+CREATE TABLE IF NOT EXISTS segment_cache (
+    cache_hash TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    segment_spec_json TEXT NOT NULL,
+    file_size_bytes INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_used_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (project_id) REFERENCES project(project_id)
+);
 """
 
 _PHASE2_INDEXES_SQL = """
@@ -498,6 +525,8 @@ CREATE INDEX IF NOT EXISTS idx_edit_segments ON edit_segments(edit_id, segment_o
 CREATE INDEX IF NOT EXISTS idx_renders_edit ON renders(edit_id);
 CREATE INDEX IF NOT EXISTS idx_renders_status ON renders(status);
 CREATE INDEX IF NOT EXISTS idx_audio_assets_edit ON audio_assets(edit_id);
+CREATE INDEX IF NOT EXISTS idx_edit_versions_edit ON edit_versions(edit_id, version_number);
+CREATE INDEX IF NOT EXISTS idx_segment_cache_project ON segment_cache(project_id);
 """
 
 # All stream names tracked by stream_status

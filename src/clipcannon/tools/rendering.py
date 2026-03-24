@@ -948,6 +948,166 @@ async def clipcannon_get_scene_map(
 
 
 # ============================================================
+# TOOL 8: clipcannon_preview_segment
+# ============================================================
+async def clipcannon_preview_segment(
+    project_id: str,
+    edit_id: str,
+    segment_index: int,
+) -> dict[str, object]:
+    """Preview a single segment from an edit at low quality.
+
+    Renders ONE segment at 540p using fast software encoding for
+    quick validation. Extracts a midpoint frame for visual inspection.
+    No credits charged.
+
+    Args:
+        project_id: Project identifier.
+        edit_id: Edit identifier.
+        segment_index: 1-based segment index to preview.
+
+    Returns:
+        Dict with preview_path, frame_path, and segment_info, or error.
+    """
+    from clipcannon.rendering.ffmpeg_cmd import build_encoding_args, build_ffmpeg_cmd
+    from clipcannon.rendering.profiles import EncodingProfile
+
+    start_time = time.monotonic()
+
+    # Validate project
+    err = _validate_project(project_id)
+    if err is not None:
+        return err
+
+    # Load EDL
+    edl, err = _load_edl(project_id, edit_id)
+    if err is not None:
+        return err
+    assert edl is not None  # noqa: S101
+
+    # Validate segment_index (1-based)
+    segment_count = len(edl.segments)
+    if segment_index < 1 or segment_index > segment_count:
+        return _error(
+            "INVALID_PARAMETER",
+            f"segment_index {segment_index} out of range. "
+            f"Valid range: 1 to {segment_count}.",
+            {
+                "segment_index": segment_index,
+                "segment_count": segment_count,
+            },
+        )
+
+    segment = edl.segments[segment_index - 1]
+
+    # Resolve source video
+    source_path = _resolve_source(project_id)
+    if source_path is None:
+        return _error(
+            "SOURCE_NOT_FOUND",
+            f"Source video not found for project {project_id}",
+        )
+
+    # Create preview directory
+    preview_dir = _project_dir(project_id) / "renders" / "previews"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+
+    preview_filename = f"preview_{edit_id}_seg{segment_index}.mp4"
+    preview_path = preview_dir / preview_filename
+
+    # 540p preview profile (software encoding, fast)
+    preview_profile = EncodingProfile(
+        name="preview_540p",
+        width=540,
+        height=960,
+        aspect_ratio="9:16",
+        fps=30,
+        video_codec="libx264",
+        video_bitrate="1000k",
+        max_bitrate="1500k",
+        bufsize="3M",
+        audio_codec="aac",
+        audio_bitrate="128k",
+        audio_sample_rate=44100,
+        max_duration_ms=600000,
+        min_duration_ms=0,
+        movflags="+faststart",
+    )
+
+    encoding_args = build_encoding_args(preview_profile)
+
+    # Build FFmpeg command for just this one segment
+    cmd = build_ffmpeg_cmd(
+        source_path=source_path,
+        output_path=preview_path,
+        segments=[segment],
+        profile=preview_profile,
+        crop_region=None,
+        ass_path=None,
+        encoding_args=encoding_args,
+    )
+
+    # Execute FFmpeg
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            stderr_text = stderr.decode("utf-8", errors="replace")[:500]
+            return _error(
+                "RENDER_FAILED",
+                f"Preview render failed (exit {proc.returncode})",
+                {"stderr": stderr_text},
+            )
+    except Exception as exc:
+        return _error(
+            "RENDER_FAILED",
+            f"Preview render error: {exc}",
+        )
+
+    if not preview_path.exists() or preview_path.stat().st_size == 0:
+        return _error(
+            "RENDER_FAILED",
+            "Preview render produced no output",
+        )
+
+    # Extract midpoint frame for visual inspection
+    segment_duration_ms = int(
+        (segment.source_end_ms - segment.source_start_ms) / segment.speed
+    )
+    midpoint_ms = segment_duration_ms // 2
+    frame_path = await _extract_render_frame(preview_path, midpoint_ms)
+
+    elapsed_ms = int((time.monotonic() - start_time) * 1000)
+
+    result: dict[str, object] = {
+        "preview_path": str(preview_path),
+        "frame_path": str(frame_path) if frame_path else None,
+        "segment_info": {
+            "segment_index": segment_index,
+            "source_start_ms": segment.source_start_ms,
+            "source_end_ms": segment.source_end_ms,
+            "speed": segment.speed,
+            "output_duration_ms": segment_duration_ms,
+        },
+        "resolution": f"{preview_profile.width}x{preview_profile.height}",
+        "credits_charged": 0,
+        "elapsed_ms": elapsed_ms,
+    }
+
+    logger.info(
+        "Preview segment %d of edit %s rendered in %dms",
+        segment_index, edit_id, elapsed_ms,
+    )
+
+    return result
+
+
+# ============================================================
 # DISPATCH
 # ============================================================
 async def dispatch_rendering_tool(
@@ -1008,6 +1168,12 @@ async def dispatch_rendering_tool(
             end_ms=int(arguments["end_ms"]) if arguments.get("end_ms") is not None else None,
             detail=str(arguments.get("detail", "summary")),
             layout=str(arguments["layout"]) if arguments.get("layout") is not None else None,
+        )
+    if name == "clipcannon_preview_segment":
+        return await clipcannon_preview_segment(
+            project_id=str(arguments["project_id"]),
+            edit_id=str(arguments["edit_id"]),
+            segment_index=int(arguments["segment_index"]),
         )
 
     return _error("INTERNAL_ERROR", f"Unknown rendering tool: {name}")

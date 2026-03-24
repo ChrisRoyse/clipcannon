@@ -250,4 +250,33 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
             "required": ["project_id"],
         },
     ),
+    Tool(
+        name="clipcannon_preview_segment",
+        description=(
+            "Preview a single segment from an edit at low quality (540p) "
+            "for quick validation. Returns the preview video path and a "
+            "midpoint frame image. No credits charged. segment_index is "
+            "1-based (matching segment numbering in the edit)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier",
+                },
+                "edit_id": {
+                    "type": "string",
+                    "description": "Edit identifier",
+                },
+                "segment_index": {
+                    "type": "integer",
+                    "description": (
+                        "1-based segment index to preview"
+                    ),
+                },
+            },
+            "required": ["project_id", "edit_id", "segment_index"],
+        },
+    ),
 ]
