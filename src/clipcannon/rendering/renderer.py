@@ -167,6 +167,35 @@ def _scale_ass_file(
 
 
 # ============================================================
+# AUDIO ASSET HELPERS
+# ============================================================
+def _parse_sfx_offset_ms(raw_params: object) -> int:
+    """Extract start_ms offset from an SFX asset's generation_params.
+
+    Expects JSON shaped like ``{"params": {"start_ms": 1200}}``.
+    Returns 0 when the value is missing, malformed, or not parseable.
+
+    Args:
+        raw_params: The generation_params column value (str or dict).
+
+    Returns:
+        Offset in milliseconds, defaulting to 0.
+    """
+    if not raw_params:
+        return 0
+
+    import json
+
+    try:
+        parsed = json.loads(raw_params) if isinstance(
+            raw_params, str
+        ) else raw_params
+        return int(parsed.get("params", {}).get("start_ms", 0))
+    except (ValueError, TypeError, AttributeError):
+        return 0
+
+
+# ============================================================
 # SEGMENT RENDER CACHE HELPERS
 # ============================================================
 _SEGMENT_CACHE_DDL = """
@@ -600,21 +629,68 @@ class RenderEngine:
         canvas_spec = edl.canvas if edl.canvas.enabled else None
 
         if len(segments) <= 1:
-            # Single segment: use direct rendering (no concat needed)
-            cmd = build_ffmpeg_cmd(
-                source_path=source_path,
-                output_path=output_path,
-                segments=segments,
-                profile=profile,
-                crop_region=crop_region,
-                ass_path=ass_path,
-                encoding_args=encoding_args,
-                canvas=canvas_spec,
-                global_color=edl.color,
-                overlays=edl.overlays or None,
-                removals=edl.removals or None,
-            )
-            await self._execute_ffmpeg(cmd, render_id)
+            # Single segment: direct render (no concat needed).
+            # When db_path is available, render to a temp file first
+            # so we can mix audio assets in a second pass.
+            if db_path is not None:
+                import shutil
+                import tempfile
+
+                with tempfile.TemporaryDirectory(
+                    prefix="cc_single_"
+                ) as tmpdir:
+                    single_temp = Path(tmpdir)
+                    raw_output = single_temp / "raw.mp4"
+
+                    cmd = build_ffmpeg_cmd(
+                        source_path=source_path,
+                        output_path=raw_output,
+                        segments=segments,
+                        profile=profile,
+                        crop_region=crop_region,
+                        ass_path=ass_path,
+                        encoding_args=encoding_args,
+                        canvas=canvas_spec,
+                        global_color=edl.color,
+                        overlays=edl.overlays or None,
+                        removals=edl.removals or None,
+                    )
+                    await self._execute_ffmpeg(cmd, render_id)
+
+                    mixed = await self._prepare_mixed_audio(
+                        edl, db_path, raw_output, single_temp,
+                        render_id,
+                    )
+                    if mixed is not None:
+                        audio_cmd: list[str] = [
+                            "ffmpeg", "-y",
+                            "-i", str(raw_output),
+                            "-i", str(mixed),
+                            "-map", "0:v", "-map", "1:a",
+                            "-c:v", "copy",
+                            "-c:a", "aac", "-b:a", "192k",
+                            str(output_path),
+                        ]
+                        await self._execute_ffmpeg(
+                            audio_cmd, f"{render_id}_audio_mix"
+                        )
+                    else:
+                        shutil.move(str(raw_output), str(output_path))
+            else:
+                cmd = build_ffmpeg_cmd(
+                    source_path=source_path,
+                    output_path=output_path,
+                    segments=segments,
+                    profile=profile,
+                    crop_region=crop_region,
+                    ass_path=ass_path,
+                    encoding_args=encoding_args,
+                    canvas=canvas_spec,
+                    global_color=edl.color,
+                    overlays=edl.overlays or None,
+                    removals=edl.removals or None,
+                )
+                await self._execute_ffmpeg(cmd, render_id)
             return
 
         # Multi-segment: render each independently with cache
@@ -1047,7 +1123,8 @@ class RenderEngine:
         try:
             rows = fetch_all(
                 conn,
-                "SELECT asset_id, type, file_path, volume_db "
+                "SELECT asset_id, type, file_path, volume_db, "
+                "generation_params "
                 "FROM audio_assets WHERE edit_id = ? ORDER BY type",
                 (edl.edit_id,),
             )
@@ -1059,6 +1136,8 @@ class RenderEngine:
 
         music_path: Path | None = None
         music_volume_db = -18.0
+        cleanup_path: Path | None = None
+        sfx_entries: list[dict[str, object]] = []
 
         for row in rows:
             asset_type = str(row["type"])
@@ -1075,10 +1154,21 @@ class RenderEngine:
             if asset_type == "music":
                 music_path = file_path
                 music_volume_db = volume_db
+            elif asset_type == "sfx":
+                offset_ms = _parse_sfx_offset_ms(
+                    row["generation_params"]
+                )
+                sfx_entries.append({
+                    "path": str(file_path),
+                    "offset_ms": offset_ms,
+                    "volume_db": volume_db,
+                })
+            elif asset_type == "cleaned":
+                cleanup_path = file_path
 
-        if music_path is None:
+        if music_path is None and not sfx_entries and cleanup_path is None:
             logger.debug(
-                "Render %s: no music asset found, skipping mix",
+                "Render %s: no audio assets found, skipping mix",
                 render_id,
             )
             return None
@@ -1102,13 +1192,23 @@ class RenderEngine:
             )
             return None
 
-        # Mix source speech with background music (speech-aware ducking)
+        # Use cleanup audio as source when available
+        mix_source = source_audio
+        if cleanup_path is not None and cleanup_path.exists():
+            logger.info(
+                "Render %s: using cleaned audio as source: %s",
+                render_id, cleanup_path,
+            )
+            mix_source = cleanup_path
+
+        # Mix source speech with background music and SFX
         mixed_output = temp_dir / "mixed_audio.wav"
         try:
             result = await mix_audio(
-                source_audio_path=source_audio,
+                source_audio_path=mix_source,
                 output_path=mixed_output,
                 background_music_path=music_path,
+                sfx_entries=sfx_entries or None,
                 music_volume_db=music_volume_db,
                 duck_under_speech=True,
             )
