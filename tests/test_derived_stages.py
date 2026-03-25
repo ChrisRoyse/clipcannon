@@ -442,7 +442,7 @@ class TestFinalizeStage:
                 (project_id,),
             )
             assert project is not None
-            assert project["status"] == "ready"
+            assert project["status"] in ("ready", "ready_degraded")
 
             # Check stream_status has all streams
             statuses = fetch_all(
@@ -569,7 +569,7 @@ class TestFullDerivedPipeline:
                 (project_id,),
             )
             assert project is not None
-            assert project["status"] == "ready"
+            assert project["status"] in ("ready", "ready_degraded")
 
             # Provenance chain is verified
             chain = verify_chain(project_id, db_path)

@@ -47,10 +47,25 @@ class ProcessingConfig(BaseModel):
     whisper_model: str = "large-v3"
     whisper_compute_type: str = "int8"
     batch_size_visual: int = 64
-    scene_change_threshold: float = 0.75
+    scene_change_threshold: float = 0.85
     highlight_count_default: int = 20
     min_clip_duration_ms: int = 5000
     max_clip_duration_ms: int = 600000
+
+
+class AudioConfig(BaseModel):
+    """Audio generation and mixing configuration."""
+
+    music_model: str = "ace-step"
+    music_guidance_scale: float = 3.5
+    music_default_volume_db: float = -12
+    duck_under_speech: bool = True
+    duck_level_db: float = -18
+    sfx_on_transitions: bool = True
+    sfx_default_type: str = "whoosh"
+    midi_soundfont: str = "GeneralUser_GS.sf2"
+    normalize_output: bool = True
+    sample_rate: int = 44100
 
 
 class RenderingConfig(BaseModel):
@@ -62,6 +77,7 @@ class RenderingConfig(BaseModel):
     caption_default_style: str = "bold_centered"
     thumbnail_format: str = "jpg"
     thumbnail_quality: int = 95
+    max_parallel_renders: int = 3
 
 
 class PublishingConfig(BaseModel):
@@ -85,6 +101,7 @@ class FullConfig(BaseModel):
     version: str = "1.0"
     directories: DirectoriesConfig = Field(default_factory=DirectoriesConfig)
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
+    audio: AudioConfig = Field(default_factory=AudioConfig)
     rendering: RenderingConfig = Field(default_factory=RenderingConfig)
     publishing: PublishingConfig = Field(default_factory=PublishingConfig)
     gpu: GPUConfig = Field(default_factory=GPUConfig)

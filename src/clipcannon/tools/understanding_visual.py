@@ -1,12 +1,11 @@
 """Visual understanding MCP tools for ClipCannon.
 
-Provides get_frame, get_frame_strip, get_storyboard, and
-get_segment_detail tools for retrieving visual and temporal data.
+Provides get_frame tool for retrieving visual and temporal data.
 """
 
 from __future__ import annotations
 
-import json
+import base64
 import logging
 from typing import TYPE_CHECKING
 
@@ -18,6 +17,18 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_fetch_all(
+    conn: object,
+    sql: str,
+    params: tuple[object, ...],
+) -> list[dict[str, object]]:
+    """Fetch all rows, returning empty list if the table doesn't exist."""
+    try:
+        return [dict(r) for r in fetch_all(conn, sql, params)]  # type: ignore[arg-type]
+    except Exception:
+        return []
 
 _FRAME_INTERVAL_MS = 500  # 2fps => one frame every 500ms
 
@@ -104,230 +115,157 @@ def _get_moment_context(db: Path, project_id: str, ts: int) -> dict[str, object]
     }
 
 
-async def clipcannon_get_frame(project_id: str, timestamp_ms: int) -> dict[str, object]:
-    """Get nearest frame to timestamp with moment context."""
+async def clipcannon_get_frame(
+    project_id: str,
+    timestamp_ms: int,
+    render_id: str | None = None,
+) -> dict[str, object]:
+    """Get nearest frame to timestamp with moment context.
+
+    When ``render_id`` is provided, extracts the frame from the rendered
+    output video instead of looking in the pre-extracted frames directory.
+    Moment context (transcript, emotion, etc.) is not available for renders
+    and will be returned as ``null``.
+
+    Args:
+        project_id: Project identifier.
+        timestamp_ms: Target timestamp in milliseconds.
+        render_id: Optional render ID to get frame from rendered output.
+
+    Returns:
+        Dict with frame image and moment context.
+    """
     err = _validate_project(project_id, required_status="ready")
     if err is not None:
         return err
 
-    frames_dir = _project_dir(project_id) / "frames"
-    frame_path, actual_ms = _find_nearest_frame(frames_dir, timestamp_ms)
-    if frame_path is None:
-        return _error(
-            "FRAME_NOT_FOUND", f"No frame near {timestamp_ms}ms", {"frames_dir": str(frames_dir)}
-        )
+    if render_id is not None:
+        from clipcannon.tools.rendering import _extract_render_frame, _resolve_render_path
 
-    context = _get_moment_context(_db_path(project_id), project_id, actual_ms)
-    return {
+        render_path = _resolve_render_path(project_id, render_id)
+        if render_path is None:
+            return _error(
+                "RENDER_NOT_FOUND",
+                f"Render not found or output missing: {render_id}",
+            )
+        frame_path = await _extract_render_frame(render_path, timestamp_ms)
+        if frame_path is None:
+            return _error(
+                "FRAME_EXTRACTION_FAILED",
+                f"Could not extract frame at {timestamp_ms}ms from render {render_id}",
+            )
+        actual_ms = timestamp_ms
+        context = None
+    else:
+        frames_dir = _project_dir(project_id) / "frames"
+        frame_path, actual_ms = _find_nearest_frame(frames_dir, timestamp_ms)
+        if frame_path is None:
+            return _error(
+                "FRAME_NOT_FOUND", f"No frame near {timestamp_ms}ms",
+                {"frames_dir": str(frames_dir)},
+            )
+        context = _get_moment_context(_db_path(project_id), project_id, actual_ms)
+
+    # Encode frame as base64 for inline image viewing
+    try:
+        image_b64 = base64.b64encode(frame_path.read_bytes()).decode("ascii")
+        image_payload = {"data": image_b64, "mimeType": "image/jpeg"}
+    except Exception:
+        image_payload = None
+
+    result: dict[str, object] = {
         "project_id": project_id,
         "requested_ms": timestamp_ms,
         "actual_ms": actual_ms,
         "frame_path": str(frame_path),
         "at_this_moment": context,
     }
-
-
-async def clipcannon_get_frame_strip(
-    project_id: str,
-    start_ms: int,
-    end_ms: int,
-    count: int = 9,
-) -> dict[str, object]:
-    """Build a composite grid of evenly-spaced frames from a range."""
-    err = _validate_project(project_id, required_status="ready")
-    if err is not None:
-        return err
-    if end_ms <= start_ms:
-        return _error("INVALID_PARAMETER", "end_ms must be greater than start_ms")
-
-    frames_dir = _project_dir(project_id) / "frames"
-    proj_dir = _project_dir(project_id)
-    count = max(1, min(count, 16))
-
-    if count == 1:
-        timestamps = [(start_ms + end_ms) // 2]
-    else:
-        step = (end_ms - start_ms) / (count - 1)
-        timestamps = [int(start_ms + i * step) for i in range(count)]
-
-    cells: list[dict[str, object]] = []
-    frame_paths: list[Path] = []
-    db = _db_path(project_id)
-    for ts in timestamps:
-        fp, actual_ms = _find_nearest_frame(frames_dir, ts)
-        if fp is not None:
-            frame_paths.append(fp)
-            conn = get_connection(db, enable_vec=False, dict_rows=True)
-            try:
-                seg = fetch_one(
-                    conn,
-                    "SELECT text, speaker_id"
-                    " FROM transcript_segments"
-                    " WHERE project_id = ?"
-                    " AND start_ms <= ?"
-                    " AND end_ms >= ? LIMIT 1",
-                    (project_id, actual_ms, actual_ms),
-                )
-            finally:
-                conn.close()
-            cells.append(
-                {
-                    "timestamp_ms": actual_ms,
-                    "frame_path": str(fp),
-                    "transcript": str(seg.get("text", "")) if seg else None,
-                    "speaker_id": seg.get("speaker_id") if seg else None,
-                }
-            )
-
-    if not frame_paths:
-        return _error("FRAME_NOT_FOUND", "No frames found in range")
-
-    grid_path = proj_dir / "storyboards" / f"strip_{start_ms}_{end_ms}.jpg"
-    try:
-        _build_grid_image(frame_paths, grid_path)
-    except Exception as exc:
-        logger.warning("Grid composition failed: %s", exc)
-        return {
-            "project_id": project_id,
-            "start_ms": start_ms,
-            "end_ms": end_ms,
-            "grid_path": None,
-            "grid_error": str(exc),
-            "cell_count": len(cells),
-            "cells": cells,
-        }
-
-    return {
-        "project_id": project_id,
-        "start_ms": start_ms,
-        "end_ms": end_ms,
-        "grid_path": str(grid_path),
-        "cell_count": len(cells),
-        "cells": cells,
-    }
-
-
-def _build_grid_image(frame_paths: list[Path], output_path: Path, cols: int = 3) -> None:
-    """Compose frames into a JPEG grid image."""
-    from PIL import Image
-
-    if not frame_paths:
-        return
-    cell_size = 348
-    rows = (len(frame_paths) + cols - 1) // cols
-    grid = Image.new("RGB", (cell_size * cols, cell_size * rows), (0, 0, 0))
-    for idx, fp in enumerate(frame_paths):
-        try:
-            img = Image.open(fp).resize((cell_size, cell_size), Image.LANCZOS)
-            grid.paste(img, ((idx % cols) * cell_size, (idx // cols) * cell_size))
-        except Exception as exc:
-            logger.warning("Frame %s failed: %s", fp, exc)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    grid.save(str(output_path), "JPEG", quality=80)
-
-
-async def clipcannon_get_storyboard(
-    project_id: str,
-    batch: int = 1,
-    start_ms: int | None = None,
-    end_ms: int | None = None,
-) -> dict[str, object]:
-    """Get storyboard grids by batch (12/batch) or time range."""
-    err = _validate_project(project_id, required_status="ready")
-    if err is not None:
-        return err
-
-    db = _db_path(project_id)
-    conn = get_connection(db, enable_vec=False, dict_rows=True)
-    try:
-        cols = "grid_id, grid_number, grid_path, cell_timestamps_ms, cell_metadata"
-        if start_ms is not None and end_ms is not None:
-            grids = fetch_all(
-                conn,
-                f"SELECT {cols} FROM storyboard_grids WHERE project_id = ? ORDER BY grid_number",
-                (project_id,),
-            )
-            grids_out: list[dict[str, object]] = []
-            for g in grids:
-                try:
-                    ts_list = json.loads(str(g.get("cell_timestamps_ms", "[]")))
-                    if ts_list and max(ts_list) >= start_ms and min(ts_list) <= end_ms:
-                        grids_out.append(dict(g))
-                except (json.JSONDecodeError, TypeError):
-                    continue
-        else:
-            per_batch = 12
-            offset = (batch - 1) * per_batch
-            grids = fetch_all(
-                conn,
-                f"SELECT {cols} FROM storyboard_grids"
-                " WHERE project_id = ?"
-                " ORDER BY grid_number LIMIT ? OFFSET ?",
-                (project_id, per_batch, offset),
-            )
-            grids_out = [dict(g) for g in grids]
-
-        total_row = fetch_one(
-            conn, "SELECT count(*) as cnt FROM storyboard_grids WHERE project_id = ?", (project_id,)
-        )
-        total_grids = int(total_row["cnt"]) if total_row else 0
-    finally:
-        conn.close()
-
-    enriched: list[dict[str, object]] = []
-    for g in grids_out:
-        gd: dict[str, object] = {
-            "grid_id": g.get("grid_id"),
-            "grid_number": g.get("grid_number"),
-            "grid_path": g.get("grid_path"),
-        }
-        try:
-            gd["cell_timestamps_ms"] = json.loads(str(g.get("cell_timestamps_ms", "[]")))
-        except (json.JSONDecodeError, TypeError):
-            gd["cell_timestamps_ms"] = []
-        try:
-            gd["cell_metadata"] = json.loads(str(g.get("cell_metadata", "null")))
-        except (json.JSONDecodeError, TypeError):
-            gd["cell_metadata"] = None
-        enriched.append(gd)
-
-    return {
-        "project_id": project_id,
-        "batch": batch if start_ms is None else None,
-        "time_range": {"start_ms": start_ms, "end_ms": end_ms} if start_ms is not None else None,
-        "total_grids": total_grids,
-        "total_batches": (total_grids + 11) // 12 if total_grids > 0 else 0,
-        "grid_count": len(enriched),
-        "grids": enriched,
-    }
+    if image_payload is not None:
+        result["_image"] = image_payload
+    return result
 
 
 async def clipcannon_get_segment_detail(
     project_id: str,
-    start_ms: int,
-    end_ms: int,
+    start_ms: int = 0,
+    end_ms: int = 0,
+    timestamp_ms: int | None = None,
+    layout: str | None = None,
+    include_ocr: bool = False,
 ) -> dict[str, object]:
-    """Get ALL stream data for a time range: transcript, emotion, speakers,
-    reactions, beats, on-screen text, pacing, quality, silence gaps."""
+    """Get ALL intelligence for a time range from every pipeline table.
+
+    This is the master query tool. It pulls data from every embedder output
+    table for the specified time window, giving the AI complete context
+    about what is happening at any moment in the video.
+
+    Queries 17 tables: transcript (segments + words), emotion curve,
+    speakers, reactions, beat sections, on-screen text, text change events,
+    pacing, scenes (quality + shot type), scene map (face/webcam/content/
+    canvas), silence gaps, highlights, topics, profanity, music sections.
+
+    When ``timestamp_ms`` is provided, returns a 10-second window centred on
+    that timestamp plus the specific scene_map entry and canvas regions for
+    the requested ``layout``.
+
+    Args:
+        project_id: Project identifier.
+        start_ms: Start of time range in milliseconds.
+        end_ms: End of time range in milliseconds.
+        timestamp_ms: Optional point-query timestamp. Overrides start_ms/end_ms
+            with a 10-second window (timestamp - 5000 to timestamp + 5000).
+        layout: Optional layout name to filter canvas regions when using
+            timestamp_ms mode.
+
+    Returns:
+        Dict with all pipeline data for the time range.
+    """
+    import json as json_mod
+
     err = _validate_project(project_id, required_status="ready")
     if err is not None:
         return err
+
+    # Point-query mode: 10s window centred on timestamp_ms
+    if timestamp_ms is not None:
+        start_ms = max(0, timestamp_ms - 5000)
+        end_ms = timestamp_ms + 5000
+
     if end_ms <= start_ms:
         return _error("INVALID_PARAMETER", "end_ms must be greater than start_ms")
 
     db = _db_path(project_id)
     conn = get_connection(db, enable_vec=False, dict_rows=True)
     try:
+        # Time-range overlap condition used by most queries
         rq = "project_id = ? AND start_ms < ? AND end_ms > ?"
         rp = (project_id, end_ms, start_ms)
 
+        # -- Transcript segments --
         transcript = fetch_all(
             conn,
-            "SELECT segment_id, start_ms, end_ms, text, speaker_id"
+            "SELECT segment_id, start_ms, end_ms, text, speaker_id,"
+            " sentiment, sentiment_score"
             f" FROM transcript_segments WHERE {rq}"
             " ORDER BY start_ms",
             rp,
         )
+
+        # -- Word-level timestamps for precise captions --
+        seg_ids = [int(t["segment_id"]) for t in transcript]
+        words: list[dict[str, object]] = []
+        if seg_ids:
+            placeholders = ",".join(["?"] * len(seg_ids))
+            words_raw = fetch_all(
+                conn,
+                "SELECT word, start_ms, end_ms, confidence, speaker_id"
+                f" FROM transcript_words WHERE segment_id IN ({placeholders})"
+                " ORDER BY start_ms",
+                tuple(seg_ids),
+            )
+            words = [dict(w) for w in words_raw]
+
+        # -- Emotion curve (arousal, valence, energy) --
         emotion = fetch_all(
             conn,
             "SELECT start_ms, end_ms, arousal, valence, energy"
@@ -336,19 +274,20 @@ async def clipcannon_get_segment_detail(
             rp,
         )
 
+        # -- Speakers active in this range --
         speaker_ids = {int(t["speaker_id"]) for t in transcript if t.get("speaker_id") is not None}
         speakers: list[dict[str, object]] = []
         for sid in sorted(speaker_ids):
             row = fetch_one(
                 conn,
                 "SELECT speaker_id, label, total_speaking_ms,"
-                " speaking_pct FROM speakers"
-                " WHERE speaker_id = ?",
+                " speaking_pct FROM speakers WHERE speaker_id = ?",
                 (sid,),
             )
             if row:
                 speakers.append(dict(row))
 
+        # -- Reactions (laughter, applause, etc.) --
         reactions = fetch_all(
             conn,
             "SELECT start_ms, end_ms, type, confidence,"
@@ -357,6 +296,8 @@ async def clipcannon_get_segment_detail(
             " ORDER BY start_ms",
             rp,
         )
+
+        # -- Beat sections (tempo, time signature) --
         beat_sections = fetch_all(
             conn,
             "SELECT start_ms, end_ms, tempo_bpm, time_signature"
@@ -364,13 +305,37 @@ async def clipcannon_get_segment_detail(
             " ORDER BY start_ms",
             rp,
         )
-        on_screen = fetch_all(
+
+        # -- On-screen text (OCR detections) --
+        # Only fetch raw OCR when explicitly requested (very large payload).
+        # The cross-stream alignment logic below still needs the rows for
+        # matching, so we always query but only include in the response when
+        # include_ocr is True.
+        on_screen = _safe_fetch_all(
             conn,
-            "SELECT start_ms, end_ms, texts, type"
+            "SELECT start_ms, end_ms, texts, type, change_from_previous"
+            f" FROM on_screen_text WHERE {rq}"
+            " ORDER BY start_ms",
+            rp,
+        ) if include_ocr else _safe_fetch_all(
+            conn,
+            "SELECT start_ms, end_ms"
             f" FROM on_screen_text WHERE {rq}"
             " ORDER BY start_ms",
             rp,
         )
+
+        # -- Text change events (slide transitions) --
+        text_changes = _safe_fetch_all(
+            conn,
+            "SELECT timestamp_ms, type, new_title"
+            " FROM text_change_events"
+            " WHERE project_id = ? AND timestamp_ms >= ? AND timestamp_ms < ?"
+            " ORDER BY timestamp_ms",
+            (project_id, start_ms, end_ms),
+        )
+
+        # -- Pacing (speech rate, pauses) --
         pacing = fetch_all(
             conn,
             "SELECT start_ms, end_ms, words_per_minute,"
@@ -379,14 +344,67 @@ async def clipcannon_get_segment_detail(
             " ORDER BY start_ms",
             rp,
         )
+
+        # -- Scene quality + shot type --
         scenes = fetch_all(
             conn,
             "SELECT start_ms, end_ms, quality_avg, quality_min,"
-            " quality_classification, quality_issues, shot_type"
+            " quality_classification, quality_issues, shot_type,"
+            " shot_type_confidence, crop_recommendation"
             f" FROM scenes WHERE {rq}"
             " ORDER BY start_ms",
             rp,
         )
+
+        # -- Scene map (face/webcam/content/canvas regions) --
+        scene_map_rows = _safe_fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, face_x, face_y, face_w, face_h,"
+            " face_confidence, face_size_pct,"
+            " webcam_x, webcam_y, webcam_w, webcam_h,"
+            " content_x, content_y, content_w, content_h,"
+            " content_type, layout_recommendation,"
+            " canvas_regions_json, transcript_text"
+            " FROM scene_map"
+            " WHERE project_id = ? AND start_ms < ? AND end_ms > ?"
+            " ORDER BY start_ms",
+            (project_id, end_ms, start_ms),
+        )
+
+        # Parse scene_map canvas regions
+        scene_map: list[dict[str, object]] = []
+        for row in scene_map_rows:
+            sm: dict[str, object] = {
+                "start_ms": int(row["start_ms"]),
+                "end_ms": int(row["end_ms"]),
+                "layout": str(row.get("layout_recommendation", "A")),
+                "content_type": str(row.get("content_type", "unknown")),
+                "face_size_pct": float(row.get("face_size_pct", 0) or 0),
+            }
+            if row.get("face_x") is not None:
+                sm["face"] = {
+                    "x": int(row["face_x"]), "y": int(row["face_y"]),
+                    "w": int(row["face_w"]), "h": int(row["face_h"]),
+                    "confidence": float(row.get("face_confidence") or 0),
+                }
+            if row.get("webcam_x") is not None:
+                sm["webcam"] = {
+                    "x": int(row["webcam_x"]), "y": int(row["webcam_y"]),
+                    "w": int(row["webcam_w"]), "h": int(row["webcam_h"]),
+                }
+            if row.get("content_x") is not None:
+                sm["content"] = {
+                    "x": int(row["content_x"]), "y": int(row["content_y"]),
+                    "w": int(row["content_w"]), "h": int(row["content_h"]),
+                }
+            canvas_json = str(row.get("canvas_regions_json", "{}"))
+            try:
+                sm["canvas"] = json_mod.loads(canvas_json)
+            except (json_mod.JSONDecodeError, TypeError):
+                sm["canvas"] = {}
+            scene_map.append(sm)
+
+        # -- Silence gaps (natural cut points) --
         silence = fetch_all(
             conn,
             "SELECT start_ms, end_ms, duration_ms, type"
@@ -394,20 +412,162 @@ async def clipcannon_get_segment_detail(
             " ORDER BY start_ms",
             rp,
         )
+
+        # -- Highlights in this range --
+        highlights = _safe_fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, type, score, reason,"
+            " emotion_score, reaction_score, semantic_score,"
+            " visual_score, quality_score"
+            f" FROM highlights WHERE {rq}"
+            " ORDER BY score DESC",
+            rp,
+        )
+
+        # -- Topics overlapping this range --
+        topics = _safe_fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, label, keywords, coherence_score"
+            f" FROM topics WHERE {rq}"
+            " ORDER BY start_ms",
+            rp,
+        )
+
+        # -- Profanity events --
+        profanity = _safe_fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, severity"
+            " FROM profanity_events"
+            " WHERE project_id = ? AND start_ms >= ? AND end_ms <= ?",
+            (project_id, start_ms, end_ms),
+        )
+
+        # -- Music sections --
+        music = _safe_fetch_all(
+            conn,
+            "SELECT start_ms, end_ms, type, confidence"
+            f" FROM music_sections WHERE {rq}"
+            " ORDER BY start_ms",
+            rp,
+        )
+
+        # -- Narrative analysis from LLM --
+        narrative = _safe_fetch_all(
+            conn,
+            "SELECT analysis_json FROM narrative_analysis"
+            " WHERE project_id = ? LIMIT 1",
+            (project_id,),
+        )
+
     finally:
         conn.close()
 
-    return {
+    # -- Derived cross-stream intelligence (no new DB queries) --
+
+    # Derive emphasis words from word-level timing gaps (pause > 300ms)
+    emphasis_words: list[dict[str, object]] = []
+    if len(words) >= 2:
+        for i in range(1, len(words)):
+            prev_end = int(words[i - 1].get("end_ms", 0))
+            curr_start = int(words[i].get("start_ms", 0))
+            gap_ms = curr_start - prev_end
+            if gap_ms > 300:
+                emphasis_words.append({
+                    "word": str(words[i].get("word", "")),
+                    "start_ms": curr_start,
+                    "pause_before_ms": gap_ms,
+                })
+
+    # Detect speech-content alignment (speaker references screen content)
+    speech_screen_alignment: list[dict[str, object]] = []
+    visual_keywords = [
+        "look at", "you can see", "right here", "this is", "let me show",
+        "check this", "dashboard", "screen", "code", "file", "click",
+        "open", "scroll", "tab", "window", "button",
+    ]
+    on_screen_dicts = [dict(o) for o in on_screen]
+    for seg in transcript:
+        seg_text = str(seg.get("text", "")).lower()
+        matched_keywords = [kw for kw in visual_keywords if kw in seg_text]
+        if matched_keywords:
+            seg_start = int(seg.get("start_ms", 0))
+            seg_end = int(seg.get("end_ms", 0))
+            visible_ocr = [
+                o for o in on_screen_dicts
+                if int(o.get("start_ms", 0)) <= seg_end
+                and int(o.get("end_ms", 0)) >= seg_start
+            ]
+            speech_screen_alignment.append({
+                "transcript_ms": seg_start,
+                "text": str(seg.get("text", "")),
+                "keywords": matched_keywords,
+                "screen_text_visible": len(visible_ocr) > 0,
+            })
+
+    # Find peak emotion moments in this range (top 3 by energy)
+    emotion_peaks: list[dict[str, object]] = []
+    if emotion:
+        sorted_by_energy = sorted(
+            emotion, key=lambda e: float(e.get("energy", 0)), reverse=True,
+        )
+        for e in sorted_by_energy[:3]:
+            emotion_peaks.append({
+                "start_ms": int(e["start_ms"]),
+                "energy": round(float(e["energy"]), 4),
+                "arousal": round(float(e["arousal"]), 4),
+            })
+
+    result: dict[str, object] = {
         "project_id": project_id,
         "start_ms": start_ms,
         "end_ms": end_ms,
         "transcript": [dict(t) for t in transcript],
+        "words": words,
         "emotion_curve": [dict(e) for e in emotion],
         "speakers": speakers,
         "reactions": [dict(r) for r in reactions],
         "beat_sections": [dict(b) for b in beat_sections],
-        "on_screen_text": [dict(o) for o in on_screen],
+        "text_change_events": [dict(tc) for tc in text_changes],
         "pacing": [dict(p) for p in pacing],
         "scenes_quality": [dict(s) for s in scenes],
+        "scene_map": scene_map,
         "silence_gaps": [dict(sg) for sg in silence],
+        "highlights": [dict(h) for h in highlights],
+        "topics": [dict(t) for t in topics],
+        "profanity": [dict(p) for p in profanity],
+        "music_sections": [dict(m) for m in music],
+        "emphasis_words": emphasis_words,
+        "speech_screen_alignment": speech_screen_alignment,
+        "emotion_peaks": emotion_peaks,
+        "narrative_analysis": (
+            json_mod.loads(narrative[0]["analysis_json"])
+            if narrative
+            else None
+        ),
     }
+
+    # Only include raw OCR data when explicitly requested
+    if include_ocr:
+        result["on_screen_text"] = on_screen_dicts
+
+    # -- Point-query enrichment: scene_map entry + canvas regions for layout --
+    if timestamp_ms is not None:
+        result["timestamp_ms"] = timestamp_ms
+        # Find the exact scene_map entry containing timestamp_ms
+        point_scene: dict[str, object] | None = None
+        for sm_entry in scene_map:
+            sm_start = int(sm_entry.get("start_ms", 0))
+            sm_end = int(sm_entry.get("end_ms", 0))
+            if sm_start <= timestamp_ms < sm_end:
+                point_scene = sm_entry
+                break
+
+        result["point_scene"] = point_scene
+        if layout:
+            canvas_data = point_scene.get("canvas", {}) if point_scene else {}
+            result["requested_layout"] = layout
+            result["layout_canvas_regions"] = (
+                canvas_data.get(layout) if isinstance(canvas_data, dict) else None
+            )
+
+    return result

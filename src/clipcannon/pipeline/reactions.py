@@ -93,16 +93,6 @@ def _check_sensevoice_funasr() -> bool:
         return False
 
 
-def _check_sensevoice_transformers() -> bool:
-    """Check if SenseVoice via transformers is available."""
-    try:
-        from transformers import AutoModelForAudioClassification  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-
-
 def _detect_reactions_funasr(
     audio: np.ndarray,
     sample_rate: int,
@@ -162,6 +152,16 @@ def _detect_reactions_funasr(
         pos += stride_samples
 
     del model
+    import gc
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
     return reactions
 
 

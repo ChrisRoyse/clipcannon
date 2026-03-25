@@ -159,23 +159,10 @@ Human approval gate prevents accidental publishing of inappropriate content
 }
 ```
 
-> **Note (Phase 1 actual):** The Phase 1 implementation's `config/default_config.json` contains the 6 sections shown above: `version`, `directories`, `processing`, `rendering`, `publishing`, `gpu`. The `audio` and `animation` config sections below are planned for Phase 2 when the audio generation and motion graphics engines are built. The `gpu.ace_step_cpu_offload` key is also Phase 2.
+> **Note (Phase 2 actual):** The implementation's `config/default_config.json` contains 7 sections: `version`, `directories`, `processing`, `rendering`, `audio`, `publishing`, `gpu`. The `audio` section was added in Phase 2 with simplified keys: `music_model` ("ace-step"), `music_guidance_scale` (3.5), `music_default_volume_db` (-12), `duck_under_speech` (true), `sfx_on_transitions` (true), `normalize_output` (true). The `rendering` section gained `max_parallel_renders` (3). The `animation` config section below is planned for Phase 3.
 >
-> **Phase 2 config additions (planned):**
+> **Phase 3 config additions (planned):**
 > ```json
-> "audio": {
->   "music_model": "ace-step-v15-turbo-rl",
->   "music_lora": "Text2Samples",
->   "music_guidance_scale": 7.5,
->   "music_default_volume_db": -18,
->   "duck_under_speech": true,
->   "duck_level_db": -6,
->   "sfx_on_transitions": true,
->   "sfx_default_type": "whoosh",
->   "midi_soundfont": "GeneralUser_GS.sf2",
->   "normalize_output": true,
->   "sample_rate": 44100
-> },
 > "animation": {
 >   "lower_third_template": "modern_bar",
 >   "lower_third_duration_ms": 6000,

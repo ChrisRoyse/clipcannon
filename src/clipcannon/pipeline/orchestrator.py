@@ -79,6 +79,7 @@ class PipelineStage:
         depends_on: Stage names that must complete successfully first.
         run: Async function implementing the stage logic.
         fallback_values: Values to record if an optional stage fails.
+        timeout_s: Maximum seconds before the stage is killed. Default 600.
     """
 
     name: str
@@ -87,6 +88,7 @@ class PipelineStage:
     depends_on: list[str] = field(default_factory=list)
     run: StageRunFn | None = None
     fallback_values: dict[str, object] | None = None
+    timeout_s: int = 600
 
 
 # Re-export for backward compatibility with tests
@@ -115,6 +117,35 @@ class PipelineOrchestrator:
         self.config = config
         self._completed: set[str] = set()
         self._failed: set[str] = set()
+
+    @staticmethod
+    def _cleanup_gpu() -> None:
+        """Release GPU memory between pipeline levels.
+
+        Calls gc.collect() and torch.cuda.empty_cache() to free
+        VRAM from models loaded by completed stages. This prevents
+        memory accumulation across levels that can cause OOM.
+        """
+        import gc
+
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                before = torch.cuda.memory_allocated(0)
+                torch.cuda.empty_cache()
+                after = torch.cuda.memory_allocated(0)
+                freed_mb = (before - after) / 1024 / 1024
+                if freed_mb > 10:
+                    logger.info(
+                        "GPU cleanup: freed %.0f MB VRAM (%.0f MB -> %.0f MB)",
+                        freed_mb,
+                        before / 1024 / 1024,
+                        after / 1024 / 1024,
+                    )
+        except ImportError:
+            pass
 
     def register_stage(self, stage: PipelineStage) -> None:
         """Register a pipeline stage.
@@ -241,6 +272,10 @@ class PipelineOrchestrator:
                         else:
                             failed_optional.append(stage.name)
 
+            # Release GPU memory between levels to prevent OOM.
+            # Stages load models but may not fully clean up.
+            self._cleanup_gpu()
+
         total_ms = int((time.monotonic() - pipeline_start) * 1000)
         success = len(failed_required) == 0
 
@@ -341,7 +376,10 @@ class PipelineOrchestrator:
                     operation=stage.operation,
                 )
 
-            result = await stage.run(project_id, db_path, project_dir, self.config)
+            result = await asyncio.wait_for(
+                stage.run(project_id, db_path, project_dir, self.config),
+                timeout=stage.timeout_s,
+            )
             elapsed_ms = int((time.monotonic() - start) * 1000)
             result.duration_ms = elapsed_ms
 
@@ -363,6 +401,35 @@ class PipelineOrchestrator:
                 f": {result.error_message}" if result.error_message else "",
             )
             return result
+
+        except asyncio.TimeoutError:
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            error_msg = (
+                f"Stage '{stage.name}' timed out after {stage.timeout_s}s"
+            )
+            logger.error(error_msg)
+            update_stream_status(
+                db_path,
+                project_id,
+                stage.name,
+                "failed",
+                error_message=error_msg,
+                duration_ms=elapsed_ms,
+            )
+
+            if stage.required:
+                raise PipelineError(
+                    error_msg,
+                    stage_name=stage.name,
+                    operation=stage.operation,
+                )
+
+            return StageResult(
+                success=False,
+                operation=stage.operation,
+                error_message=error_msg,
+                duration_ms=elapsed_ms,
+            )
 
         except PipelineError:
             raise

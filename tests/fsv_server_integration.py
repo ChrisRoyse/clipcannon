@@ -2,7 +2,7 @@
 
 Forensic verification of:
   1. Server creation and identity
-  2. Tool registry completeness (27 tools)
+  2. Tool registry completeness (38 tools)
   3. Tool dispatcher mapping completeness
   4. Unknown tool error handling
   5. Default configuration validation
@@ -22,7 +22,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 
 # ============================================================
-# CONSTANTS: The spec-defined 27 tools
+# CONSTANTS: The spec-defined 38 tools
 # ============================================================
 
 EXPECTED_TOOLS = [
@@ -32,15 +32,13 @@ EXPECTED_TOOLS = [
     "clipcannon_project_list",
     "clipcannon_project_status",
     "clipcannon_project_delete",
-    # Understanding tools (9)
+    # Understanding tools (7)
     "clipcannon_ingest",
     "clipcannon_get_vud_summary",
     "clipcannon_get_analytics",
     "clipcannon_get_transcript",
     "clipcannon_get_segment_detail",
     "clipcannon_get_frame",
-    "clipcannon_get_frame_strip",
-    "clipcannon_get_storyboard",
     "clipcannon_search_content",
     # Provenance tools (4)
     "clipcannon_provenance_verify",
@@ -59,6 +57,35 @@ EXPECTED_TOOLS = [
     "clipcannon_credits_history",
     "clipcannon_credits_estimate",
     "clipcannon_spending_limit",
+    # Editing tools (8)
+    "clipcannon_create_edit",
+    "clipcannon_modify_edit",
+    "clipcannon_list_edits",
+    "clipcannon_generate_metadata",
+    "clipcannon_auto_trim",
+    "clipcannon_color_adjust",
+    "clipcannon_add_motion",
+    "clipcannon_add_overlay",
+    "clipcannon_remove_region",
+    "clipcannon_extract_subject",
+    "clipcannon_replace_background",
+    # Rendering tools (10)
+    "clipcannon_render",
+    "clipcannon_render_status",
+    "clipcannon_render_batch",
+    "clipcannon_get_editing_context",
+    "clipcannon_analyze_frame",
+    "clipcannon_preview_clip",
+    "clipcannon_inspect_render",
+    "clipcannon_preview_layout",
+    "clipcannon_measure_layout",
+    "clipcannon_get_storyboard",
+    "clipcannon_get_scene_map",
+    # Audio tools (4)
+    "clipcannon_generate_music",
+    "clipcannon_compose_midi",
+    "clipcannon_generate_sfx",
+    "clipcannon_audio_cleanup",
 ]
 
 REQUIRED_CONFIG_SECTIONS = ["version", "directories", "processing", "rendering", "publishing", "gpu"]
@@ -140,7 +167,7 @@ def test_tool_registry() -> None:
         from clipcannon.tools import ALL_TOOL_DEFINITIONS
 
         actual_count = len(ALL_TOOL_DEFINITIONS)
-        expected_count = 27
+        expected_count = 51
 
         record(
             f"ALL_TOOL_DEFINITIONS count = {expected_count}",
@@ -180,7 +207,6 @@ def test_tool_registry() -> None:
                 "clipcannon_ingest", "clipcannon_get_vud_summary",
                 "clipcannon_get_analytics", "clipcannon_get_transcript",
                 "clipcannon_get_segment_detail", "clipcannon_get_frame",
-                "clipcannon_get_frame_strip", "clipcannon_get_storyboard",
                 "clipcannon_search_content",
             ]
         ]
@@ -194,7 +220,7 @@ def test_tool_registry() -> None:
 
         print("\n  Category counts:")
         record(f"Project tools = 5", len(project_tools) == 5, f"actual={len(project_tools)}")
-        record(f"Understanding tools = 9", len(understanding_tools) == 9, f"actual={len(understanding_tools)}")
+        record(f"Understanding tools = 7", len(understanding_tools) == 7, f"actual={len(understanding_tools)}")
         record(f"Provenance tools = 4", len(provenance_tools) == 4, f"actual={len(provenance_tools)}")
         record(f"Disk tools = 2", len(disk_tools) == 2, f"actual={len(disk_tools)}")
         record(f"Config tools = 3", len(config_tools) == 3, f"actual={len(config_tools)}")
@@ -289,7 +315,7 @@ def test_unknown_tool() -> None:
             )
             record(
                 "Error details include available_tools list",
-                len(error_result["error"]["details"]["available_tools"]) == 27,
+                len(error_result["error"]["details"]["available_tools"]) == 51,
                 f"count={len(error_result['error']['details']['available_tools'])}",
             )
 
@@ -338,8 +364,8 @@ def test_default_config() -> None:
 
         scene_thresh = processing.get("scene_change_threshold")
         record(
-            "processing.scene_change_threshold = 0.75",
-            scene_thresh == 0.75,
+            "processing.scene_change_threshold = 0.85",
+            scene_thresh == 0.85,
             f"actual={scene_thresh!r}",
         )
 

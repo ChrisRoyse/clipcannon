@@ -155,10 +155,21 @@ def _compute_emotion_model(
         List of dicts with start_ms, end_ms, energy, arousal, valence,
         embedding.
     """
+    import gc
+
     import torch
     from transformers import AutoFeatureExtractor, AutoModel
 
+    # Clear GPU memory from previous pipeline stages to prevent
+    # VRAM exhaustion when loading Wav2Vec2 after other models.
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
     feature_extractor = AutoFeatureExtractor.from_pretrained(MODEL_ID)
+    # Wav2Vec2 must stay FP32 — its Conv1d feature extractor does not
+    # support FP16 (input/weight dtype mismatch). At 1.2GB it's tiny
+    # for the RTX 5090's 32GB VRAM.
     model = AutoModel.from_pretrained(MODEL_ID)
     model = model.to(device)
     model.eval()

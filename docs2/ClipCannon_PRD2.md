@@ -776,6 +776,8 @@ PROFILES = {
 
 ## 6. MCP Tool Definitions
 
+> **Implementation Status (Phase 2 Complete):** 51 MCP tools implemented (25 Phase 1 + 26 Phase 2). The tool names and signatures below reflect the original PRD design. The actual implemented tools may differ in naming and parameters -- see the source code in `src/clipcannon/tools/` for authoritative signatures. Sections 6.1-6.2 (project, understanding), 6.3 (editing -- 11 tools), 6.4 (audio -- 4 tools), 6.6 (rendering -- 11 tools), 6.7 (metadata), 6.9 (provenance), 6.10 (session/robustness), and 6.11 (configuration) are implemented. Section 6.5 (animation/overlay) features are integrated into the editing and rendering tools. Section 6.8 (publishing) remains Phase 3.
+
 
 ### 6.1 Project Management Tools
 
@@ -810,7 +812,9 @@ PROFILES = {
 | clipcannon_search_content | Semantic search across video content — returns matching segments with timestamps. Response always under 25K tokens. | project_id, query, stream?, limit? (default 20) |
 
 
-### 6.3 Editing Tools
+### 6.3 Editing Tools (Phase 2 -- IMPLEMENTED)
+
+> **Implemented as 11 tools:** clipcannon_create_edit, clipcannon_modify_edit, clipcannon_list_edits, clipcannon_generate_metadata, clipcannon_auto_trim, clipcannon_color_adjust, clipcannon_add_motion, clipcannon_add_overlay, clipcannon_extract_subject, clipcannon_replace_background, clipcannon_remove_region. The original PRD design below has been superseded by the actual implementation.
 
 | Tool | Description | Parameters |
 |:---|:---|:---|
@@ -827,7 +831,9 @@ PROFILES = {
 | clipcannon_delete_edit | Remove an edit plan | edit_id |
 
 
-### 6.4 Audio Generation Tools
+### 6.4 Audio Generation Tools (Phase 2 -- IMPLEMENTED)
+
+> **Implemented as 4 tools:** clipcannon_generate_music, clipcannon_compose_midi, clipcannon_generate_sfx, clipcannon_audio_cleanup. Audio preview, soundfont listing, edit attachment, and mixing are integrated into the rendering pipeline.
 
 | Tool | Description | Parameters |
 |:---|:---|:---|
@@ -840,7 +846,9 @@ PROFILES = {
 | clipcannon_mix_audio | Generate final audio mix for an edit (background + source + SFX) | edit_id, duck_under_speech?, duck_level_db?, normalize? |
 
 
-### 6.5 Animation & Overlay Tools
+### 6.5 Animation & Overlay Tools (Phase 2 -- integrated into editing/rendering tools)
+
+> **Note:** Animation and overlay features are implemented through clipcannon_add_overlay (editing) and the rendering pipeline rather than as separate standalone tools. The PRD-designed tools below were consolidated during implementation.
 
 | Tool | Description | Parameters |
 |:---|:---|:---|
@@ -855,7 +863,9 @@ PROFILES = {
 | clipcannon_import_asset | Import custom WebM/Lottie asset into local library | file_path, category, asset_id |
 
 
-### 6.6 Rendering Tools
+### 6.6 Rendering Tools (Phase 2 -- IMPLEMENTED)
+
+> **Implemented as 11 tools:** clipcannon_render, clipcannon_render_status, clipcannon_render_batch, clipcannon_get_editing_context, clipcannon_analyze_frame, clipcannon_preview_clip, clipcannon_inspect_render, clipcannon_preview_layout, clipcannon_measure_layout, clipcannon_get_storyboard, clipcannon_get_scene_map. The render_all_platforms and render_thumbnail features are handled through render_batch with platform profiles.
 
 | Tool | Description | Parameters |
 |:---|:---|:---|
@@ -866,7 +876,9 @@ PROFILES = {
 | clipcannon_render_thumbnail | Generate thumbnail image from edit | edit_id, timestamp_ms? |
 
 
-### 6.7 Metadata & Content Tools
+### 6.7 Metadata & Content Tools (Phase 2 -- IMPLEMENTED)
+
+> **Implemented as clipcannon_generate_metadata** (in the editing module). The individual generate_title, generate_description, generate_hashtags, and batch_metadata tools were consolidated into the single generate_metadata tool.
 
 | Tool | Description | Parameters |
 |:---|:---|:---|

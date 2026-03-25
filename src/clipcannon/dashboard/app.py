@@ -118,14 +118,20 @@ def create_app() -> FastAPI:
 
     # Register route modules
     from clipcannon.dashboard.routes.credits import router as credits_router
+    from clipcannon.dashboard.routes.editing import router as editing_router
     from clipcannon.dashboard.routes.home import router as home_router
     from clipcannon.dashboard.routes.projects import router as projects_router
     from clipcannon.dashboard.routes.provenance import router as provenance_router
+    from clipcannon.dashboard.routes.review import router as review_router
+    from clipcannon.dashboard.routes.timeline import router as timeline_router
 
     app.include_router(home_router)
     app.include_router(credits_router)
     app.include_router(projects_router)
     app.include_router(provenance_router)
+    app.include_router(timeline_router)
+    app.include_router(editing_router)
+    app.include_router(review_router)
 
     # Register auth routes
     from clipcannon.dashboard.auth import router as auth_router

@@ -5,8 +5,10 @@ for all extracted frames, then detects scene boundaries by measuring
 cosine similarity between consecutive frame embeddings.
 
 Scenes are defined by boundaries where similarity drops below
-SCENE_THRESHOLD (0.75). Each scene records its key frame, average
-visual similarity, and dominant colors.
+SCENE_THRESHOLD (0.85). Each scene records its key frame, average
+visual similarity, and dominant colors. Scenes longer than
+MAX_SCENE_DURATION_MS (30 s) are force-split to avoid very long
+monotonic stretches in screen recordings.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from typing import TYPE_CHECKING
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert
 from clipcannon.exceptions import PipelineError
+from clipcannon.pipeline.frame_utils import frame_timestamp_ms
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.provenance import (
     ExecutionInfo,
@@ -44,7 +47,8 @@ OPERATION = "visual_embedding"
 STAGE = "siglip_visual"
 SIGLIP_MODEL_ID = "google/siglip-so400m-patch14-384"
 EMBEDDING_DIM = 1152
-SCENE_THRESHOLD = 0.75
+SCENE_THRESHOLD = 0.85
+MAX_SCENE_DURATION_MS = 30000  # Force scene break after 30 seconds
 BATCH_SIZE = 64
 FRAME_RESIZE = 384
 
@@ -66,21 +70,6 @@ def _get_sorted_frames(frames_dir: Path) -> list[Path]:
             operation=OPERATION,
         )
     return frames
-
-
-def _frame_timestamp_ms(frame_path: Path, fps: int) -> int:
-    """Compute timestamp in ms from frame filename and extraction fps.
-
-    Args:
-        frame_path: Path like frame_000001.jpg (1-indexed).
-        fps: Frame extraction rate (e.g. 2).
-
-    Returns:
-        Timestamp in milliseconds.
-    """
-    stem = frame_path.stem  # "frame_000001"
-    frame_number = int(stem.split("_")[1])  # 1-indexed
-    return int((frame_number - 1) * 1000 / fps)
 
 
 def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
@@ -154,49 +143,18 @@ def _serialize_embedding(embedding: list[float]) -> bytes:
     return struct.pack(f"{len(embedding)}f", *embedding)
 
 
-def _load_and_embed_batch(
-    frame_paths: list[Path],
-    model: object,
-    processor: object,
-    device: str,
-) -> list[list[float]]:
-    """Load a batch of frames and compute SigLIP embeddings.
-
-    Args:
-        frame_paths: Paths to frame JPEG files.
-        model: SigLIP model instance.
-        processor: SigLIP processor instance.
-        device: Torch device string.
-
-    Returns:
-        List of embedding vectors (each 1152-dim).
-    """
-    import torch
-    from PIL import Image
-
-    images = []
-    for fp in frame_paths:
-        img = Image.open(fp).convert("RGB")
-        images.append(img)
-
-    inputs = processor(images=images, return_tensors="pt", padding=True)
-    inputs = {k: v.to(device) for k, v in inputs.items()}
-
-    with torch.no_grad():
-        outputs = model.get_image_features(**inputs)
-
-    # Normalize embeddings
-    embeddings = outputs / outputs.norm(dim=-1, keepdim=True)
-    return embeddings.cpu().tolist()
-
-
 def _run_embedding_pipeline(
     frame_paths: list[Path],
     batch_size: int,
     hf_token: str | None,
     device: str,
 ) -> list[list[float]]:
-    """Run the full SigLIP embedding pipeline on all frames.
+    """Run the full SigLIP embedding pipeline on all frames via subprocess.
+
+    Spawns a fresh Python subprocess to load and run the SigLIP model.
+    This avoids HuggingFace transformers 4.57 meta tensor errors that
+    occur when loading models in long-running MCP server processes.
+    The model loads cleanly in a fresh process every time.
 
     Args:
         frame_paths: All frame paths to process.
@@ -207,50 +165,168 @@ def _run_embedding_pipeline(
     Returns:
         List of embedding vectors for all frames.
     """
+    import subprocess
+    import tempfile
+
+    # Use larger batches in subprocess — 32GB VRAM handles it fine
+    subprocess_batch_size = 128
+
+    # Worker script runs in a clean Python process with no inherited state.
+    # All imports happen fresh, avoiding meta tensor corruption.
+    worker_script = r'''
+import json
+import os
+import sys
+import time
+
+def main():
+    frame_list_path = sys.argv[1]
+    device = sys.argv[2]
+    batch_size = int(sys.argv[3])
+    model_id = sys.argv[4]
+
+    # Read frame paths
+    with open(frame_list_path, "r") as f:
+        frame_paths = [line.strip() for line in f if line.strip()]
+
+    total_frames = len(frame_paths)
+    print(f"[siglip-worker] {total_frames} frames, batch_size={batch_size}, device={device}", file=sys.stderr)
+
     import torch
     from transformers import AutoModel, AutoProcessor
+    from PIL import Image
 
-    # Set HF token for model download
-    if hf_token:
-        os.environ["HF_TOKEN"] = hf_token
-        os.environ["HUGGING_FACE_HUB_TOKEN"] = hf_token
+    print(f"[siglip-worker] Loading model: {model_id}", file=sys.stderr)
+    t0 = time.monotonic()
 
-    logger.info("Loading SigLIP model: %s", SIGLIP_MODEL_ID)
-    processor = AutoProcessor.from_pretrained(SIGLIP_MODEL_ID)
-    model = AutoModel.from_pretrained(SIGLIP_MODEL_ID)
+    processor = AutoProcessor.from_pretrained(model_id)
 
-    if device != "cpu" and torch.cuda.is_available():
-        model = model.to(device)
+    use_fp16 = device != "cpu" and torch.cuda.is_available()
+    if use_fp16:
+        torch.cuda.empty_cache()
+        model = AutoModel.from_pretrained(
+            model_id,
+            torch_dtype=torch.float16,
+        ).to(device)
+        print(f"[siglip-worker] Model loaded FP16 on {device} in {time.monotonic()-t0:.1f}s", file=sys.stderr)
     else:
+        model = AutoModel.from_pretrained(model_id)
         device = "cpu"
+        print(f"[siglip-worker] Model loaded FP32 on CPU in {time.monotonic()-t0:.1f}s", file=sys.stderr)
 
     model.eval()
 
-    all_embeddings: list[list[float]] = []
-    total_batches = (len(frame_paths) + batch_size - 1) // batch_size
+    all_embeddings = []
+    total_batches = (total_frames + batch_size - 1) // batch_size
 
     for batch_idx in range(total_batches):
         start = batch_idx * batch_size
-        end = min(start + batch_size, len(frame_paths))
+        end = min(start + batch_size, total_frames)
         batch_paths = frame_paths[start:end]
 
-        logger.info(
-            "Processing visual embedding batch %d/%d (%d frames)",
-            batch_idx + 1,
-            total_batches,
-            len(batch_paths),
+        images = []
+        for fp in batch_paths:
+            img = Image.open(fp).convert("RGB")
+            images.append(img)
+
+        inputs = processor(images=images, return_tensors="pt", padding=True)
+        inputs = {
+            k: v.to(device, dtype=torch.float16) if v.is_floating_point() else v.to(device)
+            for k, v in inputs.items()
+        }
+
+        with torch.no_grad():
+            outputs = model.get_image_features(**inputs)
+
+        embeddings = outputs / outputs.norm(dim=-1, keepdim=True)
+        all_embeddings.extend(embeddings.cpu().tolist())
+
+        print(
+            f"[siglip-worker] Batch {batch_idx+1}/{total_batches} done ({len(all_embeddings)}/{total_frames} frames)",
+            file=sys.stderr,
         )
 
-        batch_embeddings = _load_and_embed_batch(
-            batch_paths,
-            model,
-            processor,
+    print(f"[siglip-worker] Complete: {len(all_embeddings)} embeddings in {time.monotonic()-t0:.1f}s", file=sys.stderr)
+
+    # Output embeddings as JSON to stdout
+    json.dump(all_embeddings, sys.stdout)
+
+if __name__ == "__main__":
+    main()
+'''
+
+    # Write frame paths to a temp file to avoid command-line length limits
+    tmp_frame_list = None
+    try:
+        tmp_frame_list = tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".txt",
+            prefix="siglip_frames_",
+            delete=False,
+        )
+        for fp in frame_paths:
+            tmp_frame_list.write(f"{fp}\n")
+        tmp_frame_list.close()
+
+        # Build environment for subprocess
+        env = os.environ.copy()
+        if hf_token:
+            env["HF_TOKEN"] = hf_token
+            env["HUGGING_FACE_HUB_TOKEN"] = hf_token
+
+        logger.info(
+            "Launching SigLIP subprocess: %d frames, batch_size=%d, device=%s",
+            len(frame_paths),
+            subprocess_batch_size,
             device,
         )
-        all_embeddings.extend(batch_embeddings)
 
-    logger.info("Computed %d visual embeddings", len(all_embeddings))
-    return all_embeddings
+        proc = subprocess.run(
+            [
+                "python3", "-c", worker_script,
+                tmp_frame_list.name,
+                device,
+                str(subprocess_batch_size),
+                SIGLIP_MODEL_ID,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=580,  # Just under the 600s stage timeout
+            env=env,
+        )
+
+        # Log stderr (progress messages)
+        if proc.stderr:
+            for line in proc.stderr.strip().splitlines():
+                logger.info("subprocess: %s", line)
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"SigLIP subprocess failed (rc={proc.returncode}): "
+                f"{proc.stderr[-500:] if proc.stderr else 'no stderr'}"
+            )
+
+        if not proc.stdout.strip():
+            raise RuntimeError("SigLIP subprocess produced no output")
+
+        all_embeddings: list[list[float]] = json.loads(proc.stdout)
+
+        if len(all_embeddings) != len(frame_paths):
+            raise RuntimeError(
+                f"Embedding count mismatch: got {len(all_embeddings)}, "
+                f"expected {len(frame_paths)}"
+            )
+
+        logger.info("Computed %d visual embeddings via subprocess", len(all_embeddings))
+        return all_embeddings
+
+    finally:
+        # Clean up temp file
+        if tmp_frame_list is not None:
+            try:
+                os.unlink(tmp_frame_list.name)
+            except OSError:
+                pass
 
 
 def _detect_scenes(
@@ -284,6 +360,12 @@ def _detect_scenes(
     for i, sim in enumerate(similarities):
         if sim < threshold:
             boundaries.append(i + 1)  # Index of the first frame in new scene
+        else:
+            # Force scene break if current scene exceeds max duration
+            scene_start_ms = frame_timestamp_ms(frame_paths[boundaries[-1]], fps)
+            current_ms = frame_timestamp_ms(frame_paths[i + 1], fps)
+            if current_ms - scene_start_ms > MAX_SCENE_DURATION_MS:
+                boundaries.append(i + 1)
 
     scenes: list[dict[str, int | float | str]] = []
     for scene_idx in range(len(boundaries)):
@@ -293,8 +375,8 @@ def _detect_scenes(
         else:
             end_frame_idx = len(frame_paths) - 1
 
-        start_ms = _frame_timestamp_ms(frame_paths[start_frame_idx], fps)
-        end_ms = _frame_timestamp_ms(frame_paths[end_frame_idx], fps)
+        start_ms = frame_timestamp_ms(frame_paths[start_frame_idx], fps)
+        end_ms = frame_timestamp_ms(frame_paths[end_frame_idx], fps)
 
         # Key frame is the first frame of the scene
         key_frame_path = str(frame_paths[start_frame_idx])
@@ -353,13 +435,8 @@ async def run_visual_embed(
         batch_size = int(config.get("processing.batch_size_visual"))
         threshold = float(config.get("processing.scene_change_threshold"))
         device = str(config.get("gpu.device"))
-        hf_token = os.environ.get(
-            "HF_TOKEN",
-            os.environ.get(
-                "HUGGING_FACE_HUB_TOKEN",
-                "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",
-            ),
-        )
+        # Models are pre-cached locally. No HF token needed at runtime.
+        hf_token = os.environ.get("HF_TOKEN")
 
         logger.info(
             "Starting visual embedding: %d frames, batch_size=%d, device=%s",
@@ -377,12 +454,44 @@ async def run_visual_embed(
             device,
         )
 
+        # Clear old data before inserting (idempotent re-runs).
+        # vec0 virtual tables: DROP + recreate is the most reliable cleanup.
+        conn = get_connection(db_path, enable_vec=True, dict_rows=True)
+        try:
+            conn.execute("DROP TABLE IF EXISTS vec_frames")
+            conn.execute(
+                "CREATE VIRTUAL TABLE vec_frames USING vec0("
+                "frame_id INTEGER PRIMARY KEY, "
+                "project_id TEXT, "
+                "timestamp_ms INTEGER, "
+                "frame_path TEXT, "
+                "visual_embedding float[1152])"
+            )
+            conn.commit()
+            logger.info("Cleared vec_frames table for re-ingest")
+        except Exception as exc:
+            logger.warning("vec_frames cleanup failed: %s", exc)
+        finally:
+            conn.close()
+
+        conn = get_connection(db_path, enable_vec=False, dict_rows=True)
+        try:
+            conn.execute(
+                "DELETE FROM scenes WHERE project_id = ?",
+                (project_id,),
+            )
+            conn.commit()
+        except Exception as exc:
+            logger.debug("scenes cleanup skipped: %s", exc)
+        finally:
+            conn.close()
+
         # Insert embeddings into vec_frames
         conn = get_connection(db_path, enable_vec=True, dict_rows=True)
         try:
             vec_rows: list[tuple[object, ...]] = []
             for idx, (fp, emb) in enumerate(zip(frame_paths, embeddings, strict=False)):
-                ts_ms = _frame_timestamp_ms(fp, extraction_fps)
+                ts_ms = frame_timestamp_ms(fp, extraction_fps)
                 vec_rows.append(
                     (
                         idx + 1,
@@ -411,19 +520,18 @@ async def run_visual_embed(
         # Insert scenes
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
-            scene_rows: list[tuple[object, ...]] = []
-            for scene in scenes:
-                scene_rows.append(
-                    (
-                        project_id,
-                        scene["start_ms"],
-                        scene["end_ms"],
-                        scene["key_frame_path"],
-                        scene["key_frame_timestamp_ms"],
-                        scene["visual_similarity_avg"],
-                        scene["dominant_colors"],
-                    )
+            scene_rows: list[tuple[object, ...]] = [
+                (
+                    project_id,
+                    scene["start_ms"],
+                    scene["end_ms"],
+                    scene["key_frame_path"],
+                    scene["key_frame_timestamp_ms"],
+                    scene["visual_similarity_avg"],
+                    scene["dominant_colors"],
                 )
+                for scene in scenes
+            ]
 
             batch_insert(
                 conn,

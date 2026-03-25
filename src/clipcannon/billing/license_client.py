@@ -25,28 +25,24 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class ChargeResult(BaseModel):
+class _TransactionResult(BaseModel):
+    """Base result for credit transaction operations."""
+
+    success: bool
+    balance_before: int = 0
+    balance_after: int = 0
+    transaction_id: str = ""
+    timestamp: str = ""
+    error: str = ""
+    message: str = ""
+
+
+class ChargeResult(_TransactionResult):
     """Result of a credit charge operation."""
 
-    success: bool
-    balance_before: int = 0
-    balance_after: int = 0
-    transaction_id: str = ""
-    timestamp: str = ""
-    error: str = ""
-    message: str = ""
 
-
-class RefundResult(BaseModel):
+class RefundResult(_TransactionResult):
     """Result of a credit refund operation."""
-
-    success: bool
-    balance_before: int = 0
-    balance_after: int = 0
-    transaction_id: str = ""
-    timestamp: str = ""
-    error: str = ""
-    message: str = ""
 
 
 class BalanceInfo(BaseModel):

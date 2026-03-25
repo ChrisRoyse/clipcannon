@@ -22,8 +22,13 @@ logger = logging.getLogger(__name__)
 SACRED_PATTERNS: set[str] = {"analysis.db", "analysis.db-wal", "analysis.db-shm"}
 SACRED_DIRS: set[str] = {"source"}
 
-REGENERABLE_DIRS: set[str] = {"stems", "frames", "storyboards"}
+REGENERABLE_DIRS: set[str] = {"frames", "storyboards"}
 REGENERABLE_FILE_PATTERNS: set[str] = {"source_cfr.mp4"}
+
+# Stems are regenerable but deleted LAST — audio_cleanup and the render
+# pipeline depend on them. Other tools self-heal if stems are missing,
+# but keeping them avoids unnecessary re-extraction from source video.
+PROTECTED_REGENERABLE_DIRS: set[str] = {"stems"}
 
 # Everything else is ephemeral (logs, temp files, etc.)
 
@@ -65,7 +70,8 @@ def _classify_file(file_path: Path, project_dir: Path) -> str:
         project_dir: Root of the project directory.
 
     Returns:
-        Tier name: "sacred", "regenerable", or "ephemeral".
+        Tier name: "sacred", "regenerable", "protected_regenerable",
+        or "ephemeral".
     """
     relative = file_path.relative_to(project_dir)
     parts = relative.parts
@@ -78,7 +84,11 @@ def _classify_file(file_path: Path, project_dir: Path) -> str:
     if len(parts) >= 1 and parts[0] in SACRED_DIRS:
         return "sacred"
 
-    # Check regenerable directories (stems/, frames/, storyboards/)
+    # Protected regenerable (stems/) — deleted last among regenerables
+    if len(parts) >= 1 and parts[0] in PROTECTED_REGENERABLE_DIRS:
+        return "protected_regenerable"
+
+    # Check regenerable directories (frames/, storyboards/)
     if len(parts) >= 1 and parts[0] in REGENERABLE_DIRS:
         return "regenerable"
 
@@ -137,7 +147,9 @@ async def clipcannon_disk_status(project_id: str) -> dict[str, object]:
             size = file_path.stat().st_size
             relative_path = str(file_path.relative_to(project_dir))
 
-            tier_data = tiers[tier]
+            # Display protected_regenerable as regenerable
+            display_tier = "regenerable" if tier == "protected_regenerable" else tier
+            tier_data = tiers[display_tier]
             tier_data["bytes"] = int(tier_data["bytes"]) + size
             tier_data["count"] = int(tier_data["count"]) + 1
 
@@ -200,6 +212,7 @@ async def clipcannon_disk_cleanup(
         # Collect files by tier
         ephemeral_files: list[tuple[Path, int]] = []
         regenerable_files: list[tuple[Path, int]] = []
+        protected_files: list[tuple[Path, int]] = []
 
         for file_path in project_dir.rglob("*"):
             if not file_path.is_file():
@@ -210,9 +223,12 @@ async def clipcannon_disk_cleanup(
                 ephemeral_files.append((file_path, size))
             elif tier == "regenerable":
                 regenerable_files.append((file_path, size))
+            elif tier == "protected_regenerable":
+                protected_files.append((file_path, size))
 
-        # Sort regenerable by size (largest first)
+        # Sort by size (largest first)
         regenerable_files.sort(key=lambda x: x[1], reverse=True)
+        protected_files.sort(key=lambda x: x[1], reverse=True)
 
         def _should_stop() -> bool:
             if target_bytes is None:
@@ -232,9 +248,24 @@ async def clipcannon_disk_cleanup(
             except OSError as exc:
                 logger.warning("Failed to delete %s: %s", file_path, exc)
 
-        # Then regenerable (largest first)
+        # Then regenerable (largest first) — frames, storyboards
         if not _should_stop():
             for file_path, size in regenerable_files:
+                if _should_stop():
+                    break
+                try:
+                    relative = str(file_path.relative_to(project_dir))
+                    file_path.unlink()
+                    deleted_files.append(
+                        {"path": relative, "size_bytes": size, "tier": "regenerable"}
+                    )
+                    total_freed += size
+                except OSError as exc:
+                    logger.warning("Failed to delete %s: %s", file_path, exc)
+
+        # Protected regenerable LAST (stems/) — audio tools depend on these
+        if not _should_stop():
+            for file_path, size in protected_files:
                 if _should_stop():
                     break
                 try:

@@ -79,10 +79,18 @@ def _classify_shot_types(
 
     logger.info("Loading SigLIP model for shot type classification")
     processor = AutoProcessor.from_pretrained(SIGLIP_MODEL_ID)
-    model = AutoModel.from_pretrained(SIGLIP_MODEL_ID)
+    model = AutoModel.from_pretrained(SIGLIP_MODEL_ID, torch_dtype=torch.float16)
 
     if device != "cpu" and torch.cuda.is_available():
-        model = model.to(device)
+        try:
+            model = model.to(device)
+        except NotImplementedError:
+            logger.warning("Meta tensor detected, reloading SigLIP with device_map")
+            del model
+            torch.cuda.empty_cache()
+            model = AutoModel.from_pretrained(
+                SIGLIP_MODEL_ID, torch_dtype=torch.float16, device_map={"": device},
+            )
     else:
         device = "cpu"
 
@@ -153,13 +161,8 @@ async def run_shot_type(
 
     try:
         device = str(config.get("gpu.device"))
-        hf_token = os.environ.get(
-            "HF_TOKEN",
-            os.environ.get(
-                "HUGGING_FACE_HUB_TOKEN",
-                "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",
-            ),
-        )
+        # Models are pre-cached locally. No HF token needed at runtime.
+        hf_token = os.environ.get("HF_TOKEN")
 
         # Fetch scenes with key frames
         conn = get_connection(db_path, enable_vec=False, dict_rows=True)

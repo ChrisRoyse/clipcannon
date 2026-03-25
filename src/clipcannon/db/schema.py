@@ -18,6 +18,7 @@ from clipcannon.exceptions import DatabaseError
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
+SCHEMA_VERSION_2 = 2
 
 # ============================================================
 # CORE TABLE DEFINITIONS
@@ -60,6 +61,8 @@ CREATE TABLE IF NOT EXISTS transcript_segments (
     speaker_id INTEGER,
     language TEXT DEFAULT 'en',
     word_count INTEGER,
+    sentiment TEXT,
+    sentiment_score REAL,
     FOREIGN KEY (project_id) REFERENCES project(project_id),
     FOREIGN KEY (speaker_id) REFERENCES speakers(speaker_id)
 );
@@ -401,6 +404,131 @@ _VECTOR_TABLES_SQL = [
     )""",
 ]
 
+# ============================================================
+# PHASE 2 TABLE DEFINITIONS (Schema Version 2)
+# ============================================================
+_PHASE2_TABLES_SQL = """
+-- EDITS (edit decision lists)
+CREATE TABLE IF NOT EXISTS edits (
+    edit_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    target_platform TEXT NOT NULL,
+    target_profile TEXT NOT NULL,
+    edl_json TEXT NOT NULL,
+    source_sha256 TEXT NOT NULL,
+    total_duration_ms INTEGER,
+    segment_count INTEGER,
+    captions_enabled BOOLEAN DEFAULT TRUE,
+    crop_mode TEXT DEFAULT 'auto',
+    thumbnail_timestamp_ms INTEGER,
+    metadata_title TEXT,
+    metadata_description TEXT,
+    metadata_hashtags TEXT,
+    rejection_feedback TEXT,
+    render_id TEXT,
+    parent_edit_id TEXT,
+    branch_name TEXT DEFAULT 'main',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (project_id) REFERENCES project(project_id)
+);
+
+-- EDIT SEGMENTS (timeline entries within an edit)
+CREATE TABLE IF NOT EXISTS edit_segments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    edit_id TEXT NOT NULL,
+    segment_order INTEGER NOT NULL,
+    source_start_ms INTEGER NOT NULL,
+    source_end_ms INTEGER NOT NULL,
+    output_start_ms INTEGER NOT NULL,
+    speed REAL DEFAULT 1.0,
+    transition_in_type TEXT,
+    transition_in_duration_ms INTEGER,
+    transition_out_type TEXT,
+    transition_out_duration_ms INTEGER,
+    FOREIGN KEY (edit_id) REFERENCES edits(edit_id)
+);
+
+-- RENDERS (output render jobs)
+CREATE TABLE IF NOT EXISTS renders (
+    render_id TEXT PRIMARY KEY,
+    edit_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    profile TEXT NOT NULL,
+    output_path TEXT,
+    output_sha256 TEXT,
+    file_size_bytes INTEGER,
+    duration_ms INTEGER,
+    resolution TEXT,
+    codec TEXT,
+    thumbnail_path TEXT,
+    render_duration_ms INTEGER,
+    error_message TEXT,
+    provenance_record_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT,
+    FOREIGN KEY (edit_id) REFERENCES edits(edit_id),
+    FOREIGN KEY (project_id) REFERENCES project(project_id)
+);
+
+-- AUDIO ASSETS (generated music, SFX, etc.)
+CREATE TABLE IF NOT EXISTS audio_assets (
+    asset_id TEXT PRIMARY KEY,
+    edit_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    sample_rate INTEGER DEFAULT 44100,
+    model_used TEXT,
+    generation_params TEXT,
+    seed INTEGER,
+    volume_db REAL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (edit_id) REFERENCES edits(edit_id),
+    FOREIGN KEY (project_id) REFERENCES project(project_id)
+);
+
+-- EDIT VERSIONS (version history for iterative editing)
+CREATE TABLE IF NOT EXISTS edit_versions (
+    version_id TEXT PRIMARY KEY,
+    edit_id TEXT NOT NULL,
+    parent_version_id TEXT,
+    version_number INTEGER NOT NULL,
+    edl_json TEXT NOT NULL,
+    change_description TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (edit_id) REFERENCES edits(edit_id)
+);
+
+-- SEGMENT CACHE (partial re-rendering)
+CREATE TABLE IF NOT EXISTS segment_cache (
+    cache_hash TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    segment_spec_json TEXT NOT NULL,
+    file_size_bytes INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_used_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (project_id) REFERENCES project(project_id)
+);
+"""
+
+_PHASE2_INDEXES_SQL = """
+CREATE INDEX IF NOT EXISTS idx_edits_project ON edits(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_edits_status ON edits(status);
+CREATE INDEX IF NOT EXISTS idx_edit_segments ON edit_segments(edit_id, segment_order);
+CREATE INDEX IF NOT EXISTS idx_renders_edit ON renders(edit_id);
+CREATE INDEX IF NOT EXISTS idx_renders_status ON renders(status);
+CREATE INDEX IF NOT EXISTS idx_audio_assets_edit ON audio_assets(edit_id);
+CREATE INDEX IF NOT EXISTS idx_edit_versions_edit ON edit_versions(edit_id, version_number);
+CREATE INDEX IF NOT EXISTS idx_segment_cache_project ON segment_cache(project_id);
+"""
+
 # All stream names tracked by stream_status
 PIPELINE_STREAMS: list[str] = [
     "source_separation",
@@ -427,6 +555,8 @@ PROJECT_SUBDIRS: list[str] = [
     "stems",
     "frames",
     "storyboards",
+    "edits",
+    "renders",
 ]
 
 
@@ -487,6 +617,48 @@ def _record_schema_version(conn: sqlite3.Connection, version: int) -> None:
     logger.debug("Recorded schema version: %d", version)
 
 
+def migrate_to_v2(db_path: str | Path) -> bool:
+    """Migrate a project database from schema v1 to v2.
+
+    Adds Phase 2 tables (edits, edit_segments, renders, audio_assets)
+    and their indexes. This function is idempotent -- safe to call
+    multiple times on the same database.
+
+    Args:
+        db_path: Path to the project database file.
+
+    Returns:
+        True if migration was applied, False if already at v2 or higher.
+
+    Raises:
+        DatabaseError: If the migration fails.
+    """
+    current_version = get_schema_version(db_path)
+
+    if current_version is not None and current_version >= SCHEMA_VERSION_2:
+        logger.debug(
+            "Database already at schema version %d, skipping v2 migration.",
+            current_version,
+        )
+        return False
+
+    conn = get_connection(db_path, enable_vec=False, dict_rows=False)
+    try:
+        conn.executescript(_PHASE2_TABLES_SQL)
+        conn.executescript(_PHASE2_INDEXES_SQL)
+        _record_schema_version(conn, SCHEMA_VERSION_2)
+        conn.commit()
+        logger.info("Migrated database to schema version %d: %s", SCHEMA_VERSION_2, db_path)
+        return True
+    except Exception as exc:
+        raise DatabaseError(
+            f"Failed to migrate database to schema v2: {exc}",
+            details={"path": str(db_path), "error": str(exc)},
+        ) from exc
+    finally:
+        conn.close()
+
+
 def create_project_db(project_id: str, base_dir: Path | None = None) -> Path:
     """Create a fresh project database with the full schema.
 
@@ -539,6 +711,9 @@ def create_project_db(project_id: str, base_dir: Path | None = None) -> Path:
         ) from exc
     finally:
         conn.close()
+
+    # Apply v2 migration (Phase 2 tables)
+    migrate_to_v2(db_path)
 
     return db_path
 

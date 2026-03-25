@@ -33,6 +33,7 @@ class FullConfig(BaseModel):
     rendering: RenderingConfig
     publishing: PublishingConfig
     gpu: GPUConfig
+    audio: AudioConfig          # Phase 2
 ```
 
 ### DirectoriesConfig
@@ -65,9 +66,21 @@ All path values support `~` expansion. Use `config.resolve_path("directories.pro
 | `rendering.default_profile` | `str` | `"youtube_standard"` | Default render profile name. |
 | `rendering.use_nvenc` | `bool` | `true` | Use NVIDIA hardware encoder (NVENC) for rendering. |
 | `rendering.nvenc_preset` | `str` | `"p4"` | NVENC encoder preset. p1 (fastest) to p7 (best quality). |
+| `rendering.max_parallel_renders` | `int` | `3` | Maximum concurrent render jobs in batch mode. |
 | `rendering.caption_default_style` | `str` | `"bold_centered"` | Default caption style for rendered clips. |
 | `rendering.thumbnail_format` | `str` | `"jpg"` | Output format for thumbnails. |
 | `rendering.thumbnail_quality` | `int` | `95` | JPEG quality for thumbnails (1-100). |
+
+### AudioConfig (Phase 2)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `audio.music_model` | `str` | `"ace-step"` | AI music generation model. Currently only ACE-Step v1.5 supported. |
+| `audio.music_guidance_scale` | `float` | `3.5` | Guidance scale for music diffusion model. Higher = more adherent to prompt. |
+| `audio.music_default_volume_db` | `float` | `-12` | Default volume level for generated music in dB. |
+| `audio.duck_under_speech` | `bool` | `true` | Automatically reduce music volume during speech regions. |
+| `audio.sfx_on_transitions` | `bool` | `true` | Auto-insert sound effects on segment transitions. |
+| `audio.normalize_output` | `bool` | `true` | Peak-normalize final audio mix to -1 dBFS. |
 
 ### PublishingConfig
 
@@ -110,9 +123,18 @@ The complete `config/default_config.json`:
     "default_profile": "youtube_standard",
     "use_nvenc": true,
     "nvenc_preset": "p4",
+    "max_parallel_renders": 3,
     "caption_default_style": "bold_centered",
     "thumbnail_format": "jpg",
     "thumbnail_quality": 95
+  },
+  "audio": {
+    "music_model": "ace-step",
+    "music_guidance_scale": 3.5,
+    "music_default_volume_db": -12,
+    "duck_under_speech": true,
+    "sfx_on_transitions": true,
+    "normalize_output": true
   },
   "publishing": {
     "require_approval": true,
@@ -137,6 +159,7 @@ config = ClipCannonConfig.load()
 model = config.get("processing.whisper_model")       # "large-v3"
 fps = config.get("processing.frame_extraction_fps")   # 2
 device = config.get("gpu.device")                     # "cuda:0"
+duck = config.get("audio.duck_under_speech")          # True
 
 # Write (re-validates against Pydantic model, raises ConfigError on invalid values)
 config.set("gpu.max_vram_usage_gb", 16)
@@ -155,8 +178,8 @@ projects_path = config.resolve_path("directories.projects")  # Path("/home/user/
 | `HF_TOKEN` | Docker Compose | Hugging Face API token for downloading gated models |
 | `STRIPE_PUBLISHABLE_KEY` | Docker Compose | Stripe publishable key for client-side credit purchases |
 | `STRIPE_WEBHOOK_SECRET` | `license_server/stripe_webhooks.py` | Stripe webhook signature verification secret. Without it, unsigned payloads are accepted (dev mode) |
-| `CLIPCANNON_D1_API_URL` | `license_server/d1_sync.py` | Cloudflare D1 API URL for remote sync (not used in Phase 1) |
-| `CLIPCANNON_D1_API_TOKEN` | `license_server/d1_sync.py` | Cloudflare D1 API token for remote sync (not used in Phase 1) |
+| `CLIPCANNON_D1_API_URL` | `license_server/d1_sync.py` | Cloudflare D1 API URL for remote sync (not currently active) |
+| `CLIPCANNON_D1_API_TOKEN` | `license_server/d1_sync.py` | Cloudflare D1 API token for remote sync (not currently active) |
 | `VIDEO_DIR` | Docker Compose | Host directory to mount as `/videos:ro` in the container. Defaults to `./videos` |
 
 ## Docker Compose Service Definitions
@@ -200,49 +223,13 @@ services:
       start_period: 60s
 ```
 
-Key details:
-
-- **NVIDIA runtime** required. The `deploy.resources` block reserves one GPU.
-- **NVIDIA capabilities**: `compute`, `utility`, and `video` (the `video` capability enables NVENC/NVDEC).
-- **Ports**: Only 3100 (license server) and 3200 (dashboard) are exposed. The MCP server uses stdio transport inside the container, not a TCP port.
-- **Volumes**: `clipcannon-data` is a named Docker volume mounted at `/root/.clipcannon` (contains projects, models, config, license.db). `VIDEO_DIR` is bind-mounted read-only at `/videos` for source video access.
-- **Health check**: Hits `GET /health` on the dashboard (port 3200) every 30 seconds. Allows 60 seconds for initial startup.
-
-### Named Volume
-
-```yaml
-volumes:
-  clipcannon-data:
-```
-
-Persists all ClipCannon data (projects, databases, models, config) across container restarts.
-
 ## License Server Database
 
-The license server stores its data in `~/.clipcannon/license.db`, separate from project databases. Schema:
-
-```sql
-CREATE TABLE IF NOT EXISTS balance (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    machine_id TEXT NOT NULL,
-    balance INTEGER NOT NULL DEFAULT 0,
-    balance_hmac TEXT NOT NULL,
-    last_sync_utc TEXT,
-    spending_this_month INTEGER DEFAULT 0,
-    spending_limit INTEGER DEFAULT 200,
-    ...
-);
-```
-
-- Single-row table (id=1) for the balance record.
-- `balance_hmac` is recomputed on every write using HMAC-SHA256 with a machine-derived key.
-- `spending_this_month` resets monthly.
-- `spending_limit` defaults to 200 credits.
-- Dev mode initializes with 100 credits.
+The license server stores its data in `~/.clipcannon/license.db`, separate from project databases. See [09_billing_system.md](09_billing_system.md) for full schema.
 
 ## SQLite Connection Pragmas
 
-Every database connection (both project databases and the license database) applies these pragmas:
+Every database connection applies these pragmas:
 
 | Pragma | Value | Purpose |
 |--------|-------|---------|

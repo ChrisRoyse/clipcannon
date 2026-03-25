@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all
+from clipcannon.pipeline.frame_utils import frame_timestamp_ms
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.provenance import (
     ExecutionInfo,
@@ -41,7 +42,6 @@ STAGE = "brisque"
 # Quality classification thresholds
 GOOD_THRESHOLD = 60.0
 ACCEPTABLE_THRESHOLD = 40.0
-POOR_THRESHOLD = 40.0
 BLUR_THRESHOLD = 30.0
 
 # Camera shake detection: if std dev of consecutive quality > this value
@@ -73,10 +73,9 @@ def _classify_quality(score: float) -> str:
     """
     if score > GOOD_THRESHOLD:
         return "good"
-    elif score > ACCEPTABLE_THRESHOLD:
+    if score > ACCEPTABLE_THRESHOLD:
         return "acceptable"
-    else:
-        return "poor"
+    return "poor"
 
 
 def _detect_issues(
@@ -138,22 +137,26 @@ def _run_pyiqa_scoring(
 
     metric = pyiqa.create_metric("brisque", device=device)
 
-    transform = transforms.Compose(
-        [
-            transforms.ToTensor(),
-        ]
-    )
+    transform = transforms.ToTensor()
 
     quality_scores: list[float] = []
     batch_size = 16
+    total_frames = len(frame_paths)
+    max_quality_dim = 512
 
-    for batch_start in range(0, len(frame_paths), batch_size):
+    for batch_start in range(0, total_frames, batch_size):
         batch_paths = frame_paths[batch_start : batch_start + batch_size]
         batch_tensors: list[object] = []
 
         for fp in batch_paths:
             try:
                 img = Image.open(fp).convert("RGB")
+                # Downsample large frames for quality scoring
+                # BRISQUE works fine at 512px - no need for 4K
+                if max(img.size) > max_quality_dim:
+                    ratio = max_quality_dim / max(img.size)
+                    new_size = (int(img.width * ratio), int(img.height * ratio))
+                    img = img.resize(new_size, Image.LANCZOS)
                 tensor = transform(img).unsqueeze(0).to(device)
                 batch_tensors.append(tensor)
             except Exception as exc:
@@ -173,6 +176,25 @@ def _run_pyiqa_scoring(
                 logger.warning("BRISQUE scoring failed: %s", exc)
                 quality_scores.append(50.0)
 
+        # Progress logging every 100 frames
+        scored_so_far = len(quality_scores)
+        if scored_so_far % 100 < batch_size or scored_so_far == total_frames:
+            logger.info(
+                "Quality scoring progress: %d/%d frames (%.0f%%)",
+                scored_so_far,
+                total_frames,
+                scored_so_far / total_frames * 100,
+            )
+
+    # Clean up GPU memory — model stays loaded otherwise
+    del metric
+    import gc
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    logger.info("BRISQUE model unloaded, GPU memory released")
+
     return quality_scores
 
 
@@ -191,10 +213,17 @@ def _run_laplacian_fallback(frame_paths: list[Path]) -> list[float]:
     logger.info("Using Laplacian variance fallback for quality assessment")
 
     quality_scores: list[float] = []
+    total_frames = len(frame_paths)
+    max_quality_dim = 512
 
-    for fp in frame_paths:
+    for idx, fp in enumerate(frame_paths):
         try:
             img = Image.open(fp).convert("L")
+            # Downsample large frames - Laplacian works fine at 512px
+            if max(img.size) > max_quality_dim:
+                ratio = max_quality_dim / max(img.size)
+                new_size = (int(img.width * ratio), int(img.height * ratio))
+                img = img.resize(new_size, Image.LANCZOS)
             img_array = np.array(img, dtype=np.float64)
 
             # Laplacian kernel
@@ -220,22 +249,17 @@ def _run_laplacian_fallback(frame_paths: list[Path]) -> list[float]:
             logger.warning("Laplacian scoring failed for %s: %s", fp, exc)
             quality_scores.append(50.0)
 
+        # Progress logging every 100 frames
+        scored_so_far = idx + 1
+        if scored_so_far % 100 == 0 or scored_so_far == total_frames:
+            logger.info(
+                "Laplacian scoring progress: %d/%d frames (%.0f%%)",
+                scored_so_far,
+                total_frames,
+                scored_so_far / total_frames * 100,
+            )
+
     return quality_scores
-
-
-def _frame_timestamp_ms(frame_path: Path, fps: int) -> int:
-    """Compute timestamp in ms from frame filename.
-
-    Args:
-        frame_path: Path like frame_000001.jpg (1-indexed).
-        fps: Frame extraction rate.
-
-    Returns:
-        Timestamp in milliseconds.
-    """
-    stem = frame_path.stem
-    frame_number = int(stem.split("_")[1])
-    return int((frame_number - 1) * 1000 / fps)
 
 
 async def run_quality(
@@ -303,7 +327,7 @@ async def run_quality(
         # Build frame -> quality mapping
         frame_quality: dict[int, float] = {}
         for fp, score in zip(frame_paths, quality_scores, strict=False):
-            ts_ms = _frame_timestamp_ms(fp, extraction_fps)
+            ts_ms = frame_timestamp_ms(fp, extraction_fps)
             frame_quality[ts_ms] = score
 
         # Fetch scenes and update with quality metrics

@@ -135,12 +135,10 @@ def _determine_stream_statuses(
 
         # Check evidence tables
         evidence_tables = _STREAM_EVIDENCE.get(stream_name, [])
-        has_data = False
-        for table in evidence_tables:
-            if _check_table_has_data(db_path, project_id, table):
-                has_data = True
-                break
-
+        has_data = any(
+            _check_table_has_data(db_path, project_id, table)
+            for table in evidence_tables
+        )
         results[stream_name] = "completed" if has_data else "skipped"
 
     return results
@@ -370,12 +368,14 @@ async def run_finalize(
             chain_result.total_records,
         )
 
-        # 4. Set project status to 'ready'
+        # 4. Set project status
+        # 'ready' = all streams completed, 'ready_degraded' = optional failures
+        final_status = "ready" if not degradation_note else "ready_degraded"
         await asyncio.to_thread(
             _set_project_status,
             db_path,
             project_id,
-            "ready",
+            final_status,
             degradation_note,
         )
 

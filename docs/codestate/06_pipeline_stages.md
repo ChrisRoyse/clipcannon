@@ -84,7 +84,7 @@ Failure of any required stage aborts the pipeline. All subsequent stages are ski
 5. `transcribe`
 6. `finalize`
 
-### Optional stages (14 stages)
+### Optional stages (15 stages)
 
 Failure is logged but does not stop the pipeline. Downstream stages that depend only on optional stages can still attempt to run.
 
@@ -94,14 +94,15 @@ Failure is logged but does not stop the pipeline. Downstream stages that depend 
 4. `quality`
 5. `shot_type`
 6. `storyboard`
-7. `semantic_embed`
-8. `speaker_embed`
-9. `emotion_embed`
-10. `reactions`
-11. `acoustic`
-12. `profanity`
-13. `chronemic`
-14. `highlights`
+7. `scene_analysis`
+8. `semantic_embed`
+9. `speaker_embed`
+10. `emotion_embed`
+11. `reactions`
+12. `acoustic`
+13. `profanity`
+14. `chronemic`
+15. `highlights`
 
 ## Complete Dependency Graph
 
@@ -118,6 +119,7 @@ Level 3: source_separation         -> audio_extract
          quality                   -> frame_extract
          shot_type                 -> frame_extract
          storyboard                -> frame_extract
+         scene_analysis            -> frame_extract
          acoustic                  -> audio_extract
 Level 4: transcribe                -> source_separation
 Level 5: semantic_embed            -> transcribe
@@ -137,7 +139,7 @@ Level 8: finalize                  -> transcribe, visual_embed, ocr, quality,
 
 Note: The actual level numbers at runtime depend on the topological sort output. The comment levels in the registry are approximate; the sort algorithm determines the true execution order based on the dependency edges above.
 
-## Stage Details (All 20 Stages)
+## Stage Details (All 21 Stages)
 
 ---
 
@@ -429,8 +431,15 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 2. **Fallback backend**: faster-whisper (no forced alignment, reduced precision).
    - Loads `WhisperModel` with `beam_size=5`, `word_timestamps=True`, `vad_filter=True`.
 3. If neither is installed, returns failure with install instructions.
-4. Inserts segments into `transcript_segments` table: `project_id`, `start_ms`, `end_ms`, `text`, `language`, `word_count`.
-5. Inserts individual words into `transcript_words` table: `segment_id`, `word`, `start_ms`, `end_ms`, `confidence`.
+4. **Anti-hallucination filtering** (Phase 2 addition):
+   - **VAD tuning**: WhisperX uses `_VAD_ONSET=0.5`, `_VAD_OFFSET=0.363`. Fallback uses `_NO_SPEECH_THRESHOLD=0.4`.
+   - **Confidence thresholds**: `_LOG_PROB_THRESHOLD=-0.7`, `_COMPRESSION_RATIO_THRESHOLD=2.0`, `_HALLUCINATION_SILENCE_THRESHOLD=2.0s`.
+   - **Word-level filtering**: `_MIN_WORD_CONFIDENCE=0.3` per word, `_MIN_SEGMENT_CONFIDENCE=0.4` per segment, `_MAX_COMPRESSION_RATIO=2.0`.
+   - **Known hallucination phrase rejection**: 35 known phrases including YouTube artifacts ("thank you for watching", "please subscribe", "click the notification bell"), repetitive patterns, and non-speech defaults ("♪♪", "[INAUDIBLE]").
+   - Segments matching known hallucination phrases are silently dropped.
+   - Words below confidence threshold are removed; segments with no remaining words are dropped.
+5. Inserts segments into `transcript_segments` table: `project_id`, `start_ms`, `end_ms`, `text`, `language`, `word_count`.
+6. Inserts individual words into `transcript_words` table: `segment_id`, `word`, `start_ms`, `end_ms`, `confidence`.
 
 **Outputs / DB writes**: `transcript_segments` (INSERT), `transcript_words` (INSERT).
 
@@ -733,7 +742,44 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 20. finalize
+### 20. scene_analysis
+
+| Property        | Value                                               |
+|-----------------|-----------------------------------------------------|
+| **Name**        | `scene_analysis`                                    |
+| **Operation ID**| `scene_analysis`                                    |
+| **Required**    | No                                                  |
+| **Depends on**  | `frame_extract`                                     |
+| **Module**      | `pipeline/scene_analysis.py`                        |
+| **Internal stage name** | `scene_analysis`                             |
+
+**Inputs**: All `frame_*.jpg` files in `<project_dir>/frames/`, transcript data from `transcript_segments` table (if available).
+
+**Operations**:
+1. Creates the `scene_map` table if it does not exist.
+2. Analyzes every extracted frame using OpenCV to detect scene boundaries via SSIM comparison (threshold: 0.92). Forces scene breaks after 8 seconds (`MAX_SCENE_DURATION_MS`).
+3. For each frame, detects face positions using OpenCV Haar cascades or MediaPipe.
+4. Identifies webcam overlay regions by detecting small face-containing rectangles in typical webcam positions (corners).
+5. Detects content areas by excluding browser chrome (top 70px) and OS taskbar (bottom 50px) regions.
+6. Classifies content type (code, slides, browser, terminal, etc.) based on detected text and layout patterns.
+7. Computes layout recommendations (A, B, C, or D) based on face-to-screen ratio and content type.
+8. Pre-computes canvas regions for all 4 layout types on a 1080x1920 (9:16) canvas:
+   - Layout A: 30/70 split (speaker 576px top, screen 1344px bottom)
+   - Layout B: 40/60 split (speaker 768px top, screen 1152px bottom)
+   - Layout C: PIP (240px speaker circle at position (24, 140), full-screen content)
+   - Layout D: Full-screen face crop
+9. Aligns transcript text with each scene from the `transcript_segments` table.
+10. Inserts scene records into the `scene_map` table.
+
+**Outputs / DB writes**: `scene_map` (INSERT) -- stores per-scene face position, webcam region, content area, content type, visible text, layout recommendation, canvas regions JSON, and aligned transcript.
+
+**ML model**: OpenCV Haar cascades for face detection (CPU-only). No GPU required.
+
+**Fallback if optional stage fails**: The `get_scene_map` MCP tool returns an error indicating the scene analysis has not been run. Editing still works but requires manual coordinate measurement via `measure_layout` or `analyze_frame` tools.
+
+---
+
+### 21. finalize
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|

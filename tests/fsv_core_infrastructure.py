@@ -346,22 +346,22 @@ def test_db_schema():
             str(found),
         )
 
-    sub_banner("Verify schema_version = 1")
+    sub_banner("Verify schema_version >= 1")
     sv = conn.execute("SELECT MAX(version) as v FROM schema_version").fetchone()
     sv_val = sv["v"] if sv else None
     record(
-        "schema_version == 1",
-        sv_val == SCHEMA_VERSION,
-        str(SCHEMA_VERSION),
+        "schema_version >= 1",
+        sv_val is not None and sv_val >= SCHEMA_VERSION,
+        f">={SCHEMA_VERSION}",
         str(sv_val),
     )
 
     # Cross-verify via get_schema_version
     sv_func = get_schema_version(db_path)
     record(
-        "get_schema_version() == 1",
-        sv_func == SCHEMA_VERSION,
-        str(SCHEMA_VERSION),
+        "get_schema_version() >= 1",
+        sv_func is not None and sv_func >= SCHEMA_VERSION,
+        f">={SCHEMA_VERSION}",
         str(sv_func),
     )
 

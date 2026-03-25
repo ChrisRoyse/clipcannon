@@ -60,15 +60,10 @@ async def get_balance() -> dict[str, object]:
             "server_reachable": balance_info.balance >= 0,
         }
     except Exception as exc:
-        logger.warning("Failed to get balance: %s", exc)
+        logger.error("License server unreachable: %s", exc)
         return {
-            "balance": -1,
-            "balance_hmac": "",
-            "last_sync_utc": "",
-            "spending_this_month": 0,
-            "spending_limit": 200,
             "server_reachable": False,
-            "error": str(exc),
+            "error": f"LICENSE_SERVER_UNREACHABLE: {exc}",
         }
 
 
@@ -159,17 +154,16 @@ async def get_packages() -> dict[str, object]:
     Returns:
         Dictionary with available packages and credit rates.
     """
-    packages = []
-    for name, info in CREDIT_PACKAGES.items():
-        packages.append(
-            {
-                "name": name,
-                "credits": info["credits"],
-                "price_cents": info["price_cents"],
-                "price_display": f"${info['price_cents'] / 100:.2f}",
-                "per_credit_cents": round(info["price_cents"] / info["credits"], 2),
-            }
-        )
+    packages = [
+        {
+            "name": name,
+            "credits": info["credits"],
+            "price_cents": info["price_cents"],
+            "price_display": f"${info['price_cents'] / 100:.2f}",
+            "per_credit_cents": round(info["price_cents"] / info["credits"], 2),
+        }
+        for name, info in CREDIT_PACKAGES.items()
+    ]
 
     return {
         "packages": packages,
