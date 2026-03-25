@@ -55,6 +55,12 @@ from clipcannon.tools.understanding_search import (
 from clipcannon.tools.understanding_visual import (
     clipcannon_get_frame,
 )
+from clipcannon.tools.voice import (
+    dispatch_voice_tool,
+)
+from clipcannon.tools.voice_defs import (
+    VOICE_TOOL_DEFINITIONS,
+)
 
 # ---------------------------------------------------------------
 # Understanding tool definitions (4 tools)
@@ -224,6 +230,8 @@ for _defs, _dispatch in [
     (RENDERING_TOOL_DEFINITIONS, dispatch_rendering_tool),
     (AUDIO_TOOL_DEFINITIONS, dispatch_audio_tool),
     (DISCOVERY_TOOL_DEFINITIONS, dispatch_discovery_tool),
+    # Phase 3 modules
+    (VOICE_TOOL_DEFINITIONS, dispatch_voice_tool),
 ]:
     for _tool_def in _defs:
         TOOL_DISPATCHERS[_tool_def.name] = _dispatch
@@ -241,6 +249,8 @@ ALL_TOOL_DEFINITIONS = (
     + RENDERING_TOOL_DEFINITIONS
     + AUDIO_TOOL_DEFINITIONS
     + DISCOVERY_TOOL_DEFINITIONS
+    # Phase 3
+    + VOICE_TOOL_DEFINITIONS
 )
 
 __all__ = [
@@ -252,10 +262,12 @@ __all__ = [
     "RENDERING_TOOL_DEFINITIONS",
     "TOOL_DISPATCHERS",
     "UNDERSTANDING_TOOL_DEFINITIONS",
+    "VOICE_TOOL_DEFINITIONS",
     "dispatch_audio_tool",
     "dispatch_billing_tool",
     "dispatch_discovery_tool",
     "dispatch_editing_tool",
     "dispatch_rendering_tool",
     "dispatch_understanding_tool",
+    "dispatch_voice_tool",
 ]

@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 SCHEMA_VERSION_2 = 2
+SCHEMA_VERSION_3 = 3
 
 # ============================================================
 # CORE TABLE DEFINITIONS
@@ -529,6 +530,30 @@ CREATE INDEX IF NOT EXISTS idx_edit_versions_edit ON edit_versions(edit_id, vers
 CREATE INDEX IF NOT EXISTS idx_segment_cache_project ON segment_cache(project_id);
 """
 
+# ============================================================
+# PHASE 3 TABLE DEFINITIONS (Schema Version 3)
+# ============================================================
+_PHASE3_TABLES_SQL = """
+-- VOICE PROFILES (voice cloning / AI avatar)
+CREATE TABLE IF NOT EXISTS voice_profiles (
+    profile_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    model_path TEXT NOT NULL,
+    training_hours REAL DEFAULT 0,
+    training_projects TEXT DEFAULT '[]',
+    sample_rate INTEGER DEFAULT 24000,
+    reference_embedding BLOB,
+    verification_threshold REAL DEFAULT 0.80,
+    training_status TEXT DEFAULT 'pending',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+_PHASE3_INDEXES_SQL = """
+CREATE INDEX IF NOT EXISTS idx_voice_profiles_name ON voice_profiles(name);
+"""
+
 # All stream names tracked by stream_status
 PIPELINE_STREAMS: list[str] = [
     "source_separation",
@@ -659,6 +684,51 @@ def migrate_to_v2(db_path: str | Path) -> bool:
         conn.close()
 
 
+def migrate_to_v3(db_path: str | Path) -> bool:
+    """Migrate a project database to schema v3.
+
+    Adds Phase 3 tables (voice_profiles) and their indexes.
+    This function is idempotent -- safe to call multiple times.
+
+    Args:
+        db_path: Path to the project database file.
+
+    Returns:
+        True if migration was applied, False if already at v3 or higher.
+
+    Raises:
+        DatabaseError: If the migration fails.
+    """
+    current_version = get_schema_version(db_path)
+
+    if current_version is not None and current_version >= SCHEMA_VERSION_3:
+        logger.debug(
+            "Database already at schema version %d, skipping v3 migration.",
+            current_version,
+        )
+        return False
+
+    # Ensure v2 is applied first
+    if current_version is None or current_version < SCHEMA_VERSION_2:
+        migrate_to_v2(db_path)
+
+    conn = get_connection(db_path, enable_vec=False, dict_rows=False)
+    try:
+        conn.executescript(_PHASE3_TABLES_SQL)
+        conn.executescript(_PHASE3_INDEXES_SQL)
+        _record_schema_version(conn, SCHEMA_VERSION_3)
+        conn.commit()
+        logger.info("Migrated database to schema version %d: %s", SCHEMA_VERSION_3, db_path)
+        return True
+    except Exception as exc:
+        raise DatabaseError(
+            f"Failed to migrate database to schema v3: {exc}",
+            details={"path": str(db_path), "error": str(exc)},
+        ) from exc
+    finally:
+        conn.close()
+
+
 def create_project_db(project_id: str, base_dir: Path | None = None) -> Path:
     """Create a fresh project database with the full schema.
 
@@ -714,6 +784,9 @@ def create_project_db(project_id: str, base_dir: Path | None = None) -> Path:
 
     # Apply v2 migration (Phase 2 tables)
     migrate_to_v2(db_path)
+
+    # Apply v3 migration (Phase 3 tables)
+    migrate_to_v3(db_path)
 
     return db_path
 
