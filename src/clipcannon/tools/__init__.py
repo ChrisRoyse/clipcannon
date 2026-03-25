@@ -55,6 +55,19 @@ from clipcannon.tools.understanding_search import (
 from clipcannon.tools.understanding_visual import (
     clipcannon_get_frame,
 )
+from clipcannon.tools.avatar import (
+    dispatch_avatar_tool,
+)
+from clipcannon.tools.avatar_defs import (
+    AVATAR_TOOL_DEFINITIONS,
+)
+from clipcannon.tools.generate_defs import (
+    GENERATE_TOOL_DEFINITIONS,
+)
+from clipcannon.tools.generate_video import (
+    clipcannon_generate_video,
+    dispatch_generate_tool,
+)
 from clipcannon.tools.voice import (
     dispatch_voice_tool,
 )
@@ -232,6 +245,8 @@ for _defs, _dispatch in [
     (DISCOVERY_TOOL_DEFINITIONS, dispatch_discovery_tool),
     # Phase 3 modules
     (VOICE_TOOL_DEFINITIONS, dispatch_voice_tool),
+    (AVATAR_TOOL_DEFINITIONS, dispatch_avatar_tool),
+    (GENERATE_TOOL_DEFINITIONS, dispatch_generate_tool),
 ]:
     for _tool_def in _defs:
         TOOL_DISPATCHERS[_tool_def.name] = _dispatch
@@ -251,22 +266,28 @@ ALL_TOOL_DEFINITIONS = (
     + DISCOVERY_TOOL_DEFINITIONS
     # Phase 3
     + VOICE_TOOL_DEFINITIONS
+    + AVATAR_TOOL_DEFINITIONS
+    + GENERATE_TOOL_DEFINITIONS
 )
 
 __all__ = [
     "ALL_TOOL_DEFINITIONS",
     "AUDIO_TOOL_DEFINITIONS",
+    "AVATAR_TOOL_DEFINITIONS",
     "BILLING_TOOL_DEFINITIONS",
     "DISCOVERY_TOOL_DEFINITIONS",
     "EDITING_TOOL_DEFINITIONS",
+    "GENERATE_TOOL_DEFINITIONS",
     "RENDERING_TOOL_DEFINITIONS",
     "TOOL_DISPATCHERS",
     "UNDERSTANDING_TOOL_DEFINITIONS",
     "VOICE_TOOL_DEFINITIONS",
     "dispatch_audio_tool",
+    "dispatch_avatar_tool",
     "dispatch_billing_tool",
     "dispatch_discovery_tool",
     "dispatch_editing_tool",
+    "dispatch_generate_tool",
     "dispatch_rendering_tool",
     "dispatch_understanding_tool",
     "dispatch_voice_tool",

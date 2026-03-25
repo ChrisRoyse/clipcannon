@@ -37,6 +37,46 @@ def _voice_db_path() -> Path:
     return Path.home() / ".clipcannon" / "voice_profiles.db"
 
 
+def resolve_voice_profile(voice_name: str) -> dict[str, object]:
+    """Load a voice profile and extract synthesis parameters.
+
+    Shared by ``_handle_speak`` and ``generate_video`` to avoid
+    duplicating the profile-loading + embedding-extraction logic.
+
+    Args:
+        voice_name: Name of the voice profile to look up.
+
+    Returns:
+        Dict with ``model_path``, ``verification_threshold``, and
+        ``reference_embedding`` (numpy array or None).
+        On failure returns an ``{"error": ...}`` dict instead.
+    """
+    import numpy as np
+
+    from clipcannon.voice.profiles import get_voice_profile
+
+    db_path = _voice_db_path()
+    profile = get_voice_profile(db_path, voice_name)
+    if profile is None:
+        return _error("PROFILE_NOT_FOUND", f"Voice profile not found: {voice_name}")
+
+    raw_mp = profile.get("model_path")
+    model_path = str(raw_mp) if raw_mp else None
+    verification_threshold = float(profile.get("verification_threshold", 0.80))
+
+    reference_embedding = None
+    if profile.get("reference_embedding"):
+        reference_embedding = np.frombuffer(
+            profile["reference_embedding"], dtype=np.float32,
+        ).copy()
+
+    return {
+        "model_path": model_path,
+        "verification_threshold": verification_threshold,
+        "reference_embedding": reference_embedding,
+    }
+
+
 async def _handle_prepare_voice_data(
     arguments: dict[str, object],
 ) -> dict[str, object]:
@@ -210,28 +250,20 @@ async def _handle_speak(arguments: dict[str, object]) -> dict[str, object]:
 
     import secrets as _secrets
 
-    import numpy as np
-
     from clipcannon.voice.inference import VoiceSynthesizer
 
     # Resolve voice profile if provided
-    reference_embedding: np.ndarray | None = None
+    reference_embedding = None
     verification_threshold = 0.80
     model_path: str | None = None
 
     if voice_name:
-        db_path = _voice_db_path()
-        from clipcannon.voice.profiles import get_voice_profile
-        profile = get_voice_profile(db_path, str(voice_name))
-        if profile is None:
-            return _error("PROFILE_NOT_FOUND", f"Voice profile not found: {voice_name}")
-        raw_model_path = profile.get("model_path")
-        model_path = str(raw_model_path) if raw_model_path else None
-        verification_threshold = float(profile.get("verification_threshold", 0.80))
-        if profile.get("reference_embedding"):
-            reference_embedding = np.frombuffer(
-                profile["reference_embedding"], dtype=np.float32,
-            ).copy()
+        resolved = resolve_voice_profile(str(voice_name))
+        if "error" in resolved:
+            return resolved
+        model_path = resolved["model_path"]
+        verification_threshold = resolved["verification_threshold"]
+        reference_embedding = resolved["reference_embedding"]
 
     # Output path
     projects_dir = _projects_dir()
