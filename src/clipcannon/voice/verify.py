@@ -61,10 +61,20 @@ def _levenshtein_distance(a: list[str], b: list[str]) -> int:
     return dp[n]
 
 
+def _normalize_words(text: str) -> list[str]:
+    """Lowercase, strip punctuation from each word, drop empty tokens."""
+    import re
+    return [w for w in (re.sub(r"[^\w']", "", t) for t in text.lower().split()) if w]
+
+
 def compute_wer(reference: str, hypothesis: str) -> float:
-    """Word Error Rate between reference and hypothesis (case-insensitive)."""
-    ref_words = reference.lower().split()
-    hyp_words = hypothesis.lower().split()
+    """Word Error Rate between reference and hypothesis.
+
+    Case-insensitive, punctuation-stripped. Compares only the spoken
+    words so trailing periods, commas, etc. don't inflate the error.
+    """
+    ref_words = _normalize_words(reference)
+    hyp_words = _normalize_words(hypothesis)
     if not ref_words:
         return 0.0 if not hyp_words else 1.0
     return _levenshtein_distance(ref_words, hyp_words) / len(ref_words)

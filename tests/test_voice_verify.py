@@ -148,7 +148,7 @@ class TestComputeWer:
 class TestEmbeddingExtraction:
     """Tests for speaker encoder embedding extraction."""
 
-    def test_extract_embedding_returns_192_dim(self, segment_a: Path) -> None:
+    def test_extract_embedding_returns_2048_dim(self, segment_a: Path) -> None:
         """Embedding from a real vocal segment has shape (2048,)."""
         from clipcannon.voice.verify import build_reference_embedding
 
