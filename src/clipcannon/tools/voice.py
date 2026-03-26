@@ -338,6 +338,23 @@ async def _handle_speak(arguments: dict[str, object]) -> dict[str, object]:
         logger.exception("speak() failed for project %s", project_id)
         return _error("SYNTHESIS_FAILED", str(exc))
 
+    # Post-process: enhance audio to remove vocoder artifacts
+    enhance = arguments.get("enhance", True)
+    if enhance:
+        try:
+            from clipcannon.voice.enhance import enhance_speech
+
+            enhanced_path = output_path.parent / f"{asset_id}_voice_enhanced.wav"
+            enhance_speech(result.audio_path, enhanced_path)
+            result.audio_path = enhanced_path
+            # Update duration/SR from enhanced file
+            import soundfile as _sf
+            _info = _sf.info(str(enhanced_path))
+            result.duration_ms = int(_info.duration * 1000)
+            result.sample_rate = _info.samplerate
+        except Exception as exc:
+            logger.warning("Enhancement failed, using raw TTS output: %s", exc)
+
     elapsed_ms = int((time.monotonic() - start) * 1000)
 
     response: dict[str, object] = {
@@ -429,6 +446,22 @@ async def _handle_speak_optimized(arguments: dict[str, object]) -> dict[str, obj
     except Exception as exc:
         logger.exception("Optimized speak failed for %s", voice_name)
         return _error("SYNTHESIS_FAILED", str(exc))
+
+    # Post-process: enhance audio to remove vocoder artifacts
+    enhance = arguments.get("enhance", True)
+    if enhance:
+        try:
+            from clipcannon.voice.enhance import enhance_speech
+
+            enhanced_path = output_path.parent / f"{asset_id}_voice_opt_enhanced.wav"
+            enhance_speech(result.audio_path, enhanced_path)
+            result.audio_path = enhanced_path
+            import soundfile as _sf
+            _info = _sf.info(str(enhanced_path))
+            result.duration_ms = int(_info.duration * 1000)
+            result.sample_rate = _info.samplerate
+        except Exception as exc:
+            logger.warning("Enhancement failed, using raw TTS output: %s", exc)
 
     return {
         "audio_asset_id": asset_id,

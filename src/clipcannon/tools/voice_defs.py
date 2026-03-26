@@ -128,6 +128,15 @@ VOICE_TOOL_DEFINITIONS: list[Tool] = [
                     "default": 5,
                     "description": "Max verification retry attempts (best-of-N)",
                 },
+                "enhance": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": (
+                        "Post-process with Resemble Enhance to remove metallic "
+                        "vocoder artifacts and upsample to 44.1kHz broadcast quality. "
+                        "Adds ~10s processing time. Set false for raw TTS output."
+                    ),
+                },
             },
             "required": ["project_id", "text"],
         },
@@ -157,6 +166,14 @@ VOICE_TOOL_DEFINITIONS: list[Tool] = [
                     "type": "integer",
                     "default": 8,
                     "description": "Candidates to generate and rank (8 = good tradeoff)",
+                },
+                "enhance": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": (
+                        "Post-process with Resemble Enhance to remove metallic "
+                        "vocoder artifacts and upsample to 44.1kHz broadcast quality."
+                    ),
                 },
             },
             "required": ["project_id", "text", "voice_name"],
