@@ -156,3 +156,21 @@ Face detection + precise canvas region computation on 1080x1920 canvas:
 | D | Full-screen face | Full screen | N/A |
 
 Returns ready-to-use `canvas.regions[]` for `clipcannon_create_edit`.
+
+## 11. Iterative Editing
+
+### Version Control (`edit_versions` table)
+
+Every `modify_edit` call auto-saves the current EDL to the `edit_versions` table before applying changes. `edit_history` retrieves the full version chain. `revert_edit` restores a previous version (saving current state first).
+
+### Branching (`parent_edit_id`, `branch_name` columns)
+
+`branch_edit` creates a new edit linked to the parent via `parent_edit_id`, with a configurable `branch_name` and `target_platform`. `list_branches` returns all edits sharing the same parent.
+
+### Feedback Application
+
+`apply_feedback` parses natural language feedback into structured EDL changes (e.g., "make it shorter" -> trim segments, "cut the intro" -> remove first segment).
+
+### Segment Cache (`segment_cache` table)
+
+Rendered segments are cached by content hash. When an edit is modified but some segments are unchanged, the cache avoids re-rendering those segments.

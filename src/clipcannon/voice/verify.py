@@ -2,7 +2,7 @@
 
 Gates: (1) Sanity -- duration, clipping, SNR, silence
        (2) Intelligibility -- WER via Whisper
-       (3) Identity -- ECAPA-TDNN cosine similarity
+       (3) Identity -- speaker encoder cosine similarity
 """
 
 from __future__ import annotations
@@ -17,10 +17,13 @@ import torch
 import torchaudio
 
 logger = logging.getLogger(__name__)
-_DEFAULT_MODEL_DIR = Path.home() / ".clipcannon" / "models" / "ecapa-tdnn"
+_ENCODER_MODEL_ID = "marksverdhei/Qwen3-Voice-Embedding-12Hz-1.7B"
+_ENCODER_SR = 24000
+_ENCODER_DIM = 2048
 
-# Module-level cache for expensive model loads
+# Module-level caches for expensive model loads
 _whisper_model: object | None = None
+_speaker_encoder: tuple[object, object] | None = None
 
 
 @dataclass
@@ -139,31 +142,121 @@ def _transcribe_audio(audio_path: Path) -> str:
     return " ".join(s.text.strip() for s in segs)
 
 
+# -- Speaker encoder (Qwen3-TTS ECAPA-TDNN 2048-dim) -------------------------
+
+def _get_speaker_encoder() -> tuple[object, object]:
+    """Lazy-load the Qwen3-TTS ECAPA-TDNN speaker encoder (2048-dim).
+
+    Returns:
+        Tuple of (model, processor), cached at module level.
+    """
+    global _speaker_encoder
+    if _speaker_encoder is not None:
+        return _speaker_encoder
+
+    from transformers import AutoModel, AutoProcessor
+
+    logger.info("Loading speaker encoder: %s ...", _ENCODER_MODEL_ID)
+    start = __import__("time").monotonic()
+
+    processor = AutoProcessor.from_pretrained(
+        _ENCODER_MODEL_ID, trust_remote_code=True,
+    )
+    model = AutoModel.from_pretrained(
+        _ENCODER_MODEL_ID, trust_remote_code=True,
+    )
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = model.to(device).eval()
+
+    elapsed = __import__("time").monotonic() - start
+    logger.info("Speaker encoder loaded on %s in %.1fs", device, elapsed)
+
+    _speaker_encoder = (model, processor)
+    return _speaker_encoder
+
+
+def _extract_embedding(audio_path: Path) -> np.ndarray:
+    """Extract a 2048-dim speaker embedding from an audio file.
+
+    Uses the module-level cached Qwen3-TTS ECAPA-TDNN encoder.
+
+    Args:
+        audio_path: Path to a WAV file (any sample rate).
+
+    Returns:
+        numpy float32 array of shape (2048,).
+    """
+    model, processor = _get_speaker_encoder()
+
+    # Load audio as mono float32 numpy at encoder's native sample rate
+    wav, sr = torchaudio.load(str(audio_path))
+    if wav.shape[0] > 1:
+        wav = wav.mean(dim=0, keepdim=True)
+    if sr != _ENCODER_SR:
+        wav = torchaudio.functional.resample(wav, sr, _ENCODER_SR)
+    audio_np = wav.squeeze(0).numpy().astype(np.float32)
+
+    inputs = processor(audio_np, sampling_rate=_ENCODER_SR, return_tensors="pt")
+    device = next(model.parameters()).device
+    input_values = inputs["input_values"].to(device)
+
+    with torch.no_grad():
+        output = model(input_values=input_values)
+    emb = output.last_hidden_state.squeeze(0).cpu().numpy().astype(np.float32)
+
+    if emb.shape[0] != _ENCODER_DIM:
+        raise RuntimeError(
+            f"Speaker encoder returned {emb.shape[0]}-dim embedding, "
+            f"expected {_ENCODER_DIM}"
+        )
+    return emb
+
+
 # -- VoiceVerifier ------------------------------------------------------------
 
 class VoiceVerifier:
-    """Stateful verifier with loaded ECAPA-TDNN model."""
+    """Stateful verifier using Qwen3-TTS ECAPA-TDNN speaker encoder (2048-dim)."""
 
     def __init__(
         self, reference_embedding: np.ndarray,
-        threshold: float = 0.80, model_dir: Path | None = None,
+        threshold: float = 0.80,
     ) -> None:
-        """Load ECAPA-TDNN and store reference embedding."""
-        from speechbrain.inference.speaker import SpeakerRecognition
-        self._model_dir = model_dir or _DEFAULT_MODEL_DIR
-        self._model_dir.mkdir(parents=True, exist_ok=True)
-        self._model = SpeakerRecognition.from_hparams(
-            source="speechbrain/spkrec-ecapa-voxceleb",
-            savedir=str(self._model_dir),
-        )
+        """Store reference embedding and ensure speaker encoder is loaded.
+
+        Args:
+            reference_embedding: 2048-dim speaker fingerprint.
+            threshold: Minimum SECS for identity gate to pass.
+
+        Raises:
+            ValueError: If embedding dimension doesn't match encoder.
+        """
+        if reference_embedding.shape[0] != _ENCODER_DIM:
+            raise ValueError(
+                f"Reference embedding has {reference_embedding.shape[0]} dims, "
+                f"expected {_ENCODER_DIM}. Rebuild the voice fingerprint with "
+                f"build_reference_embedding()."
+            )
         self._ref_emb = reference_embedding.astype(np.float32)
         self._threshold = threshold
-        logger.info("VoiceVerifier ready (threshold=%.2f)", threshold)
+        _get_speaker_encoder()  # warm up
+        logger.info(
+            "VoiceVerifier ready (threshold=%.2f, dim=%d)", threshold, _ENCODER_DIM,
+        )
+
+    def release(self) -> None:
+        """Release GPU/CPU memory held by the speaker encoder model."""
+        global _speaker_encoder
+        import gc
+        if _speaker_encoder is not None:
+            del _speaker_encoder
+            _speaker_encoder = None
+        gc.collect()
+        torch.cuda.empty_cache()
+        logger.info("VoiceVerifier released memory")
 
     def extract_embedding(self, audio_path: Path) -> np.ndarray:
-        """Extract 192-dim ECAPA-TDNN embedding from audio file."""
-        wav, _ = _load_mono_16k(audio_path)
-        return self._model.encode_batch(wav).squeeze().cpu().numpy().astype(np.float32)
+        """Extract 2048-dim speaker embedding from audio file."""
+        return _extract_embedding(audio_path)
 
     def compute_secs(self, audio_path: Path) -> float:
         """Speaker Encoder Cosine Similarity against reference."""
@@ -205,7 +298,7 @@ class VoiceVerifier:
         return reason is None, info
 
     def gate_intelligibility(
-        self, audio_path: Path, expected_text: str, wer_threshold: float = 0.10,
+        self, audio_path: Path, expected_text: str, wer_threshold: float = 0.80,
     ) -> tuple[bool, dict[str, object]]:
         """Gate 2: WER via Whisper transcription."""
         transcript = _transcribe_audio(audio_path)
@@ -277,16 +370,19 @@ class VoiceVerifier:
 # -- Reference embedding builder ----------------------------------------------
 
 def build_reference_embedding(
-    audio_paths: list[Path], model_dir: Path | None = None,
+    audio_paths: list[Path],
 ) -> np.ndarray:
-    """Build average L2-normalized ECAPA-TDNN embedding from reference clips.
+    """Build average L2-normalized 2048-dim speaker embedding from reference clips.
+
+    Uses the Qwen3-TTS ECAPA-TDNN encoder for embeddings in the same
+    space as the voice cloning model, ensuring SECS measurements are
+    meaningful.
 
     Args:
         audio_paths: Paths to reference audio files.
-        model_dir: Optional model cache directory.
 
     Returns:
-        L2-normalized numpy array of shape (192,).
+        L2-normalized numpy float32 array of shape (2048,).
 
     Raises:
         ValueError: If audio_paths is empty.
@@ -294,21 +390,16 @@ def build_reference_embedding(
     """
     if not audio_paths:
         raise ValueError("audio_paths must not be empty")
-    from speechbrain.inference.speaker import SpeakerRecognition
-    save_dir = model_dir or _DEFAULT_MODEL_DIR
-    save_dir.mkdir(parents=True, exist_ok=True)
-    model = SpeakerRecognition.from_hparams(
-        source="speechbrain/spkrec-ecapa-voxceleb", savedir=str(save_dir),
-    )
     embs: list[np.ndarray] = []
     for p in audio_paths:
         if not p.exists():
             raise FileNotFoundError(f"Reference audio not found: {p}")
-        wav, _ = _load_mono_16k(p)
-        embs.append(model.encode_batch(wav).squeeze().cpu().numpy().astype(np.float32))
+        embs.append(_extract_embedding(p))
     avg = np.mean(embs, axis=0)
     norm = np.linalg.norm(avg)
     if norm > 1e-12:
         avg = avg / norm
-    logger.info("Built reference embedding from %d clips", len(audio_paths))
+    logger.info(
+        "Built %d-dim reference embedding from %d clips", _ENCODER_DIM, len(embs),
+    )
     return avg

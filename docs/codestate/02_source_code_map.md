@@ -13,7 +13,7 @@ src/
         db/
             __init__.py                     # Re-exports get_connection, execute, fetch_one, fetch_all, batch_insert, create_project_db, init_project_directory
             connection.py                   # SQLite connection factory with WAL mode, pragmas, sqlite-vec extension loading, dict row factory
-            schema.py                       # Full DDL for 27 core tables + 4 vector tables + indexes. Phase 2 migration. PROJECT_SUBDIRS includes edits/ and renders/
+            schema.py                       # Full DDL for 29 core tables + 4 vector tables + indexes. Phase 2/3 migrations. PROJECT_SUBDIRS includes edits/ and renders/
             queries.py                      # Parameterized query helpers: fetch_one, fetch_all, execute, execute_returning_id, batch_insert, transaction context manager, table_exists, count_rows
 
         gpu/
@@ -34,7 +34,7 @@ src/
             license_client.py               # Async HTTP client for license server on port 3100. LicenseClient class, BalanceInfo, ChargeResult, RefundResult, TransactionRecord models
 
         editing/                            # Edit Decision List engine
-            __init__.py                     # Re-exports EDL models (EditDecisionList, SegmentSpec, CaptionSpec, CropSpec, AudioSpec, MotionSpec, OverlaySpec, ColorSpec), PLATFORM_ASPECTS, caption/crop functions
+            __init__.py                     # Re-exports EDL models, PLATFORM_ASPECTS, caption/crop functions
             edl.py                          # EDL Pydantic models: EditDecisionList, SegmentSpec, TransitionSpec, CaptionSpec, CropSpec, AudioSpec, SplitScreenSpec, PipSpec, CanvasSpec, MetadataSpec, MotionSpec, OverlaySpec, ColorSpec, RenderSettingsSpec. validate_edl, compute_total_duration
             captions.py                     # Adaptive caption chunking: chunk_transcript_words (max 3 words, punctuation breaks, speech rate adaptation), fetch_words_for_segments, remap_timestamps
             caption_render.py               # ASS subtitle file generation (4 styles: bold_centered, word_highlight, subtitle_bar, karaoke) and FFmpeg drawtext filter generation
@@ -47,14 +47,13 @@ src/
             subject_extraction.py           # AI background removal via rembg: extract_subject generates alpha mask frames
 
         rendering/                          # Video rendering engine
-            __init__.py                     # Re-exports RenderEngine, RenderResult, EncodingProfile, generate_thumbnail, get_profile, list_profiles, render_batch
+            __init__.py                     # Re-exports RenderEngine, RenderResult, EncodingProfile, generate_thumbnail, get_profile, list_profiles
             renderer.py                     # RenderEngine class: async render pipeline (source validation, caption write, crop compute, FFmpeg execution, thumbnail, provenance, DB update)
             ffmpeg_cmd.py                   # FFmpeg command builder: build_ffmpeg_cmd (dispatches to standard/split_screen/pip/canvas builders), build_encoding_args, xfade transitions, per-segment canvas compositing, animated zoom, fit_mode scaling, blur background, delogo region removal
             profiles.py                     # 7 encoding profiles (tiktok_vertical, instagram_reels, youtube_shorts, youtube_standard, youtube_4k, facebook, linkedin), get_software_fallback
-            batch.py                        # render_batch: concurrent rendering with asyncio.Semaphore (max_concurrent=3)
             thumbnail.py                    # generate_thumbnail: extract JPEG frame at timestamp with optional crop
             inspector.py                    # Render inspection: extract frames at 5 key timestamps, probe metadata, run quality checks
-            preview.py                      # Preview generation: low-quality 540p preview clips, canvas layout preview frames
+            preview.py                      # Preview generation: low-quality 540p preview clips, canvas layout preview frames, segment previews
 
         audio/                              # Audio generation engine
             __init__.py                     # Re-exports MidiResult, MixResult, MusicResult, SfxResult, CleanupResult, PRESETS, SAMPLE_RATE, SUPPORTED_EFFECTS, SUPPORTED_CLEANUP_OPS, SUPPORTED_SFX_TYPES, all generation functions
@@ -66,23 +65,42 @@ src/
             sfx.py                          # 9 DSP sound effects (whoosh, riser, downer, impact, chime, tick, bass_drop, shimmer, stinger). generate_sfx function, SfxResult
             cleanup.py                      # Audio cleanup: noise reduction, normalization, silence trimming, EQ adjustment. cleanup_audio function, CleanupResult, SUPPORTED_CLEANUP_OPS
 
+        voice/                              # Voice cloning engine (Phase 3)
+            __init__.py                     # Package docstring
+            data_prep.py                    # Voice training data preparation: silence-boundary splitting, transcript matching, phonemization, train/val manifests
+            inference.py                    # VoiceSynthesizer class: Qwen3-TTS integration with iterative verification loop, reference audio/embedding support, SpeakResult
+            verify.py                       # Multi-gate voice verification: VoiceVerifier with sanity (duration/clipping/SNR/silence), intelligibility (WER via Whisper), identity (SECS via ECAPA-VOXCELEB)
+            optimize.py                     # SECS-optimized synthesis: best-of-N candidate selection, reference clip scoring, OptimizedSpeakResult
+            profiles.py                     # Voice profile SQLite CRUD: create/get/list/update/delete profiles in ~/.clipcannon/voice_profiles.db
+
+        avatar/                             # Avatar / lip-sync engine (Phase 3)
+            lip_sync.py                     # LipSyncEngine: LatentSync 1.6 (ByteDance) diffusion pipeline, VAE + UNet3D + DDIM scheduler, 512x512 output, LipSyncResult
+
         tools/
-            __init__.py                     # Tool registry. Combines all tool definitions (51 total) and dispatcher functions from 9 modules into ALL_TOOL_DEFINITIONS and TOOL_DISPATCHERS
+            __init__.py                     # Tool registry. Combines all tool definitions (51 total) and dispatcher functions from 13 modules into ALL_TOOL_DEFINITIONS and TOOL_DISPATCHERS
             project.py                      # 5 project tools: create, open, list, status, delete
-            provenance_tools.py             # 4 provenance tools: verify, query, chain, timeline
+            provenance_tools.py             # Provenance tools (definitions exported but currently empty list; provenance accessed via dashboard/direct DB)
             disk.py                         # 2 disk tools: status, cleanup
             config_tools.py                 # 3 config tools: get, set, list
             billing_tools.py                # 4 billing tools: credits_balance, credits_history, credits_estimate, spending_limit
-            understanding.py                # 4 understanding tools: ingest, get_vud_summary, get_analytics, get_transcript
-            understanding_visual.py         # 2 visual tools: get_frame, get_segment_detail
+            understanding.py                # 2 understanding tools: ingest, get_transcript
+            understanding_visual.py         # 1 visual tool: get_frame
             understanding_search.py         # 1 search tool: search_content
             video_probe.py                  # FFprobe wrapper: run_ffprobe, extract_video_metadata, detect_vfr, SUPPORTED_FORMATS
-            editing.py                      # 11 editing tools: create_edit, modify_edit, list_edits, generate_metadata, auto_trim, color_adjust, add_motion, add_overlay, extract_subject, replace_background, remove_region. dispatch_editing_tool
+            editing.py                      # 11 editing tools: create_edit, modify_edit, auto_trim, color_adjust, add_motion, add_overlay, edit_history, revert_edit, apply_feedback, branch_edit, list_branches. dispatch_editing_tool
             editing_defs.py                 # JSON schema definitions for 11 editing MCP tools
             editing_helpers.py              # Builder functions for EDL construction (build_segments, build_caption_spec, build_crop_spec, etc.), DB storage helpers
-            rendering.py                    # 11 rendering tools: render, render_status, render_batch, get_editing_context, analyze_frame, preview_clip, inspect_render, preview_layout, measure_layout, get_storyboard, get_scene_map. dispatch_rendering_tool
-            rendering_defs.py               # JSON schema definitions for 11 rendering MCP tools
-            audio.py                        # 4 audio tools: generate_music, compose_midi, generate_sfx, audio_cleanup. dispatch_audio_tool with AUDIO_TOOL_DEFINITIONS
+            rendering.py                    # 8 rendering tools: render, get_editing_context, analyze_frame, preview_clip, inspect_render, preview_layout, get_scene_map, preview_segment. dispatch_rendering_tool
+            rendering_defs.py               # JSON schema definitions for 8 rendering MCP tools
+            audio.py                        # 4 audio tools: generate_music, compose_midi, generate_sfx, audio_cleanup. dispatch_audio_tool
+            discovery.py                    # 4 discovery tools: find_best_moments, find_cut_points, get_narrative_flow, find_safe_cuts. dispatch_discovery_tool
+            discovery_defs.py               # JSON schema definitions for 4 discovery MCP tools
+            voice.py                        # 4 voice tools: prepare_voice_data, voice_profiles, speak, speak_optimized. dispatch_voice_tool
+            voice_defs.py                   # JSON schema definitions for 4 voice MCP tools
+            avatar.py                       # 1 avatar tool: lip_sync. dispatch_avatar_tool
+            avatar_defs.py                  # JSON schema definition for lip_sync tool
+            generate_video.py               # 1 generate tool: generate_video (end-to-end voice + lip-sync). dispatch_generate_tool
+            generate_defs.py                # JSON schema definition for generate_video tool
             storyboard.py                   # Contact sheet generation: build_contact_sheet creates grid of all frames with timestamps
 
         pipeline/
@@ -137,8 +155,6 @@ src/
 
 ## Module Dependency Graph
 
-The arrows indicate "imports from" relationships between ClipCannon's own modules.
-
 ```
 server.py
     -> clipcannon.__init__ (__version__)
@@ -158,6 +174,14 @@ clipcannon.tools.__init__
     -> clipcannon.tools.rendering
     -> clipcannon.tools.rendering_defs
     -> clipcannon.tools.audio
+    -> clipcannon.tools.discovery
+    -> clipcannon.tools.discovery_defs
+    -> clipcannon.tools.voice
+    -> clipcannon.tools.voice_defs
+    -> clipcannon.tools.avatar
+    -> clipcannon.tools.avatar_defs
+    -> clipcannon.tools.generate_video
+    -> clipcannon.tools.generate_defs
 
 clipcannon.tools.editing
     -> clipcannon.editing.edl (EditDecisionList, CanvasSpec, ColorSpec, MotionSpec, OverlaySpec, RenderSettingsSpec, validate_edl, compute_total_duration)
@@ -174,7 +198,7 @@ clipcannon.tools.rendering
     -> clipcannon.rendering.renderer (RenderEngine)
     -> clipcannon.rendering.profiles (get_profile)
     -> clipcannon.rendering.inspector (inspect_render)
-    -> clipcannon.rendering.preview (preview_clip, preview_layout_frame)
+    -> clipcannon.rendering.preview (preview_clip, preview_layout_frame, preview_segment)
     -> clipcannon.editing.measure_layout (measure_layout_regions)
     -> clipcannon.tools.storyboard (build_contact_sheet)
     -> clipcannon.pipeline.scene_analysis (get_scene_map)
@@ -187,6 +211,20 @@ clipcannon.tools.audio
     -> clipcannon.audio.midi_render (render_midi_to_wav)
     -> clipcannon.audio.sfx (generate_sfx)
     -> clipcannon.audio.cleanup (cleanup_audio)
+
+clipcannon.tools.voice
+    -> clipcannon.voice.data_prep (prepare_voice_training_data)
+    -> clipcannon.voice.profiles (create/get/list/update/delete_voice_profile)
+    -> clipcannon.voice.inference (VoiceSynthesizer)
+    -> clipcannon.voice.optimize (optimized_speak)
+    -> clipcannon.voice.verify (VoiceVerifier, build_reference_embedding)
+
+clipcannon.tools.avatar
+    -> clipcannon.avatar.lip_sync (get_engine, LipSyncEngine)
+
+clipcannon.tools.generate_video
+    -> clipcannon.tools.voice (_handle_speak)
+    -> clipcannon.tools.avatar (_handle_lip_sync)
 
 clipcannon.rendering.renderer
     -> clipcannon.rendering.ffmpeg_cmd (build_ffmpeg_cmd, build_encoding_args)

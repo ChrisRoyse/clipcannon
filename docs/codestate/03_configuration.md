@@ -33,7 +33,7 @@ class FullConfig(BaseModel):
     rendering: RenderingConfig
     publishing: PublishingConfig
     gpu: GPUConfig
-    audio: AudioConfig          # Phase 2
+    audio: AudioConfig
 ```
 
 ### DirectoriesConfig
@@ -71,7 +71,7 @@ All path values support `~` expansion. Use `config.resolve_path("directories.pro
 | `rendering.thumbnail_format` | `str` | `"jpg"` | Output format for thumbnails. |
 | `rendering.thumbnail_quality` | `int` | `95` | JPEG quality for thumbnails (1-100). |
 
-### AudioConfig (Phase 2)
+### AudioConfig
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|

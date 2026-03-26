@@ -9,7 +9,7 @@ GENERATE_TOOL_DEFINITIONS: list[Tool] = [
         name="clipcannon_generate_video",
         description=(
             "Generate a complete video from a text script. "
-            "End-to-end pipeline: (1) StyleTTS 2 synthesizes speech "
+            "End-to-end pipeline: (1) Qwen3-TTS synthesizes speech "
             "in the target voice with verification loop, (2) LatentSync "
             "maps the audio onto a driver video for lip sync. "
             "Every step is verified. Returns paths to the generated "

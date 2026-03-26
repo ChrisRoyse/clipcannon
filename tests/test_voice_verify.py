@@ -1,7 +1,7 @@
 """Tests for voice verification multi-gate quality pipeline.
 
 Tests use real audio from proj_76961210/stems/vocals.wav for
-ECAPA-TDNN embedding extraction and gate validation. Segments
+speaker encoder embedding extraction and gate validation. Segments
 are extracted using pydub and saved as temporary WAV files.
 """
 
@@ -140,20 +140,20 @@ class TestComputeWer:
 
 
 # ===========================================================================
-# ECAPA-TDNN EMBEDDING EXTRACTION
+# SPEAKER ENCODER EMBEDDING EXTRACTION
 # ===========================================================================
 
 
 @SKIP_NO_VOCALS
 class TestEmbeddingExtraction:
-    """Tests for ECAPA-TDNN embedding extraction."""
+    """Tests for speaker encoder embedding extraction."""
 
     def test_extract_embedding_returns_192_dim(self, segment_a: Path) -> None:
-        """Embedding from a real vocal segment has shape (192,)."""
+        """Embedding from a real vocal segment has shape (2048,)."""
         from clipcannon.voice.verify import build_reference_embedding
 
         emb = build_reference_embedding([segment_a])
-        assert emb.shape == (192,)
+        assert emb.shape == (2048,)
         assert emb.dtype == np.float32
 
     def test_same_audio_high_similarity(
@@ -174,11 +174,11 @@ class TestEmbeddingExtraction:
     def test_build_reference_embedding_from_3_clips(
         self, segment_a: Path, segment_b: Path, segment_c: Path,
     ) -> None:
-        """Average embedding from 3 clips has shape (192,) and is L2-normalized."""
+        """Average embedding from 3 clips has shape (2048,) and is L2-normalized."""
         from clipcannon.voice.verify import build_reference_embedding
 
         emb = build_reference_embedding([segment_a, segment_b, segment_c])
-        assert emb.shape == (192,)
+        assert emb.shape == (2048,)
         norm = float(np.linalg.norm(emb))
         assert norm == pytest.approx(1.0, abs=1e-5), f"Not L2-normalized: norm={norm}"
 

@@ -39,7 +39,7 @@ async def clipcannon_generate_video(
     """Generate a complete video from a text script.
 
     Pipeline:
-    1. VOICE: StyleTTS 2 generates speech (with verification loop)
+    1. VOICE: Qwen3-TTS generates speech (with verification loop)
     2. LIP SYNC: LatentSync maps audio onto driver video
     3. Result: A video file of the person speaking the script
 
@@ -89,8 +89,8 @@ async def clipcannon_generate_video(
 
     voice_path = gen_dir / "voice.wav"
     reference_embedding = None
+    reference_audio_path = None
     verification_threshold = 0.80
-    model_path: str | None = None
 
     if voice_name:
         from clipcannon.tools.voice import resolve_voice_profile
@@ -98,17 +98,20 @@ async def clipcannon_generate_video(
         resolved = resolve_voice_profile(str(voice_name))
         if "error" in resolved:
             return resolved
-        model_path = resolved["model_path"]
         verification_threshold = resolved["verification_threshold"]
         reference_embedding = resolved["reference_embedding"]
+        ref_audio_str = resolved.get("reference_audio")
+        if ref_audio_str:
+            reference_audio_path = Path(str(ref_audio_str))
 
     try:
         from clipcannon.voice.inference import VoiceSynthesizer
 
-        synth = VoiceSynthesizer(model_path=model_path)
+        synth = VoiceSynthesizer()
         voice_result = synth.speak(
             text=script,
             output_path=voice_path,
+            reference_audio=reference_audio_path,
             reference_embedding=reference_embedding,
             verification_threshold=verification_threshold,
             max_attempts=max_voice_attempts,

@@ -60,8 +60,6 @@ def resolve_voice_profile(voice_name: str) -> dict[str, object]:
     if profile is None:
         return _error("PROFILE_NOT_FOUND", f"Voice profile not found: {voice_name}")
 
-    raw_mp = profile.get("model_path")
-    model_path = str(raw_mp) if raw_mp else None
     verification_threshold = float(profile.get("verification_threshold", 0.80))
 
     reference_embedding = None
@@ -69,11 +67,57 @@ def resolve_voice_profile(voice_name: str) -> dict[str, object]:
         reference_embedding = np.frombuffer(
             profile["reference_embedding"], dtype=np.float32,
         ).copy()
+        # Detect stale 192-dim SpeechBrain embeddings (now need 2048-dim)
+        if reference_embedding.shape[0] != 2048:
+            return _error(
+                "EMBEDDING_OUTDATED",
+                f"Voice profile '{voice_name}' has a {reference_embedding.shape[0]}-dim "
+                f"embedding from the old speaker encoder. Rebuild the fingerprint: "
+                f"run build_reference_embedding() with the voice data clips, then "
+                f"update the profile's reference_embedding.",
+            )
+
+    # Auto-discover a reference audio clip for style transfer.
+    # The fine-tuned model produces much better results when given
+    # a reference clip of the target speaker at inference time.
+    reference_audio = None
+    training_projects = profile.get("training_projects", "[]")
+    import json as _json
+    try:
+        proj_ids = _json.loads(training_projects) if isinstance(training_projects, str) else []
+    except Exception:
+        proj_ids = []
+
+    # Look for vocals.wav in any training project
+    if proj_ids:
+        projects_dir = _projects_dir()
+        for pid in proj_ids:
+            vocals = projects_dir / pid / "stems" / "vocals.wav"
+            if vocals.exists():
+                reference_audio = str(vocals)
+                break
+
+    # Fallback: check voice_data directory for training clips
+    if reference_audio is None:
+        from pathlib import Path as _Path
+        voice_data = _Path.home() / ".clipcannon" / "voice_data" / voice_name / "wavs"
+        if voice_data.exists():
+            clips = sorted(voice_data.glob("*.wav"))
+            if clips:
+                reference_audio = str(clips[0])
+
+    # Collect ALL available reference clips for optimized synthesis
+    all_reference_clips: list[str] = []
+    from pathlib import Path as _Path
+    voice_data = _Path.home() / ".clipcannon" / "voice_data" / voice_name / "wavs"
+    if voice_data.exists():
+        all_reference_clips = [str(c) for c in sorted(voice_data.glob("*.wav"))]
 
     return {
-        "model_path": model_path,
         "verification_threshold": verification_threshold,
         "reference_embedding": reference_embedding,
+        "reference_audio": reference_audio,
+        "all_reference_clips": all_reference_clips,
     }
 
 
@@ -254,16 +298,18 @@ async def _handle_speak(arguments: dict[str, object]) -> dict[str, object]:
 
     # Resolve voice profile if provided
     reference_embedding = None
+    reference_audio_path: Path | None = None
     verification_threshold = 0.80
-    model_path: str | None = None
 
     if voice_name:
         resolved = resolve_voice_profile(str(voice_name))
         if "error" in resolved:
             return resolved
-        model_path = resolved["model_path"]
         verification_threshold = resolved["verification_threshold"]
         reference_embedding = resolved["reference_embedding"]
+        ref_audio_str = resolved.get("reference_audio")
+        if ref_audio_str:
+            reference_audio_path = Path(str(ref_audio_str))
 
     # Output path
     projects_dir = _projects_dir()
@@ -278,10 +324,11 @@ async def _handle_speak(arguments: dict[str, object]) -> dict[str, object]:
 
     start = time.monotonic()
     try:
-        synth = VoiceSynthesizer(model_path=model_path)
+        synth = VoiceSynthesizer()
         result = synth.speak(
             text=text,
             output_path=output_path,
+            reference_audio=reference_audio_path,
             reference_embedding=reference_embedding,
             verification_threshold=verification_threshold,
             max_attempts=max_attempts,
@@ -314,35 +361,85 @@ async def _handle_speak(arguments: dict[str, object]) -> dict[str, object]:
     return response
 
 
-async def _handle_train_voice(arguments: dict[str, object]) -> dict[str, object]:
-    """Handle clipcannon_train_voice tool call."""
+async def _handle_speak_optimized(arguments: dict[str, object]) -> dict[str, object]:
+    """Handle clipcannon_speak_optimized tool call.
+
+    SECS-optimized synthesis: selects best references, generates N
+    candidates, scores ALL by SECS (same model, same embedding space),
+    returns the winner.
+    """
+    project_id = str(arguments.get("project_id", ""))
+    text = str(arguments.get("text", ""))
     voice_name = str(arguments.get("voice_name", ""))
-    data_dir = str(arguments.get("data_dir", ""))
-    epochs = int(arguments.get("epochs", 50))
-    batch_size = int(arguments.get("batch_size", 4))
+    n_candidates = int(arguments.get("n_candidates", 8))
 
-    if not voice_name or not data_dir:
-        return _error("MISSING_PARAMETER", "voice_name and data_dir are required")
+    if not project_id or not text or not voice_name:
+        return _error("MISSING_PARAMETER", "project_id, text, and voice_name are required")
 
-    from clipcannon.voice.train import TrainConfig, train_voice
+    resolved = resolve_voice_profile(voice_name)
+    if "error" in resolved:
+        return resolved
 
-    config = TrainConfig(
-        data_dir=Path(data_dir),
-        output_dir=Path.home() / ".clipcannon" / "voices" / voice_name,
-        voice_name=voice_name,
-        epochs=epochs,
-        batch_size=batch_size,
-    )
+    reference_embedding = resolved["reference_embedding"]
+    all_clips = resolved.get("all_reference_clips", [])
 
-    result = await train_voice(config)
+    if reference_embedding is None:
+        return _error(
+            "NO_FINGERPRINT",
+            "Voice profile has no reference embedding. "
+            "Run voice data prep and build the fingerprint first.",
+        )
+
+    if not all_clips:
+        return _error(
+            "NO_REFERENCE_CLIPS",
+            "No reference audio clips found for this voice profile. "
+            "Run clipcannon_prepare_voice_data first.",
+        )
+
+    projects_dir = _projects_dir()
+    project_dir = projects_dir / project_id
+    if not project_dir.exists():
+        return _error("PROJECT_NOT_FOUND", f"Project not found: {project_id}")
+
+    import secrets as _secrets
+
+    audio_dir = project_dir / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    asset_id = f"audio_{_secrets.token_hex(6)}"
+    output_path = audio_dir / f"{asset_id}_voice_optimized.wav"
+
+    try:
+        from clipcannon.voice.inference import VoiceSynthesizer
+        from clipcannon.voice.optimize import optimized_speak
+        from clipcannon.voice.verify import VoiceVerifier
+
+        synth = VoiceSynthesizer()
+        engine = synth._ensure_engine()
+        verifier = VoiceVerifier(reference_embedding, threshold=0.35)
+
+        result = optimized_speak(
+            engine=engine,
+            text=text,
+            output_path=output_path,
+            verifier=verifier,
+            reference_clips=[Path(c) for c in all_clips],
+            n_candidates=n_candidates,
+        )
+    except Exception as exc:
+        logger.exception("Optimized speak failed for %s", voice_name)
+        return _error("SYNTHESIS_FAILED", str(exc))
 
     return {
-        "success": result.success,
-        "model_path": str(result.model_path) if result.model_path else None,
-        "config_path": str(result.config_path) if result.config_path else None,
-        "epochs_completed": result.epochs_completed,
-        "training_duration_s": round(result.training_duration_s, 2),
-        "error_message": result.error_message,
+        "audio_asset_id": asset_id,
+        "file_path": str(result.audio_path),
+        "duration_ms": result.duration_ms,
+        "sample_rate": result.sample_rate,
+        "secs_score": round(result.secs_score, 4),
+        "candidates_generated": result.candidates_generated,
+        "best_candidate_index": result.best_candidate_index,
+        "reference_clip_used": result.reference_clip_used,
+        "elapsed_s": result.elapsed_s,
     }
 
 
@@ -365,6 +462,6 @@ async def dispatch_voice_tool(
         return await _handle_voice_profiles(arguments)
     if name == "clipcannon_speak":
         return await _handle_speak(arguments)
-    if name == "clipcannon_train_voice":
-        return await _handle_train_voice(arguments)
+    if name == "clipcannon_speak_optimized":
+        return await _handle_speak_optimized(arguments)
     return _error("INTERNAL_ERROR", f"Unknown voice tool: {name}")

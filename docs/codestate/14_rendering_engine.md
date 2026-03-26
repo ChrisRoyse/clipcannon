@@ -91,24 +91,22 @@ Software fallback: `h264_nvenc` -> `libx264`, `hevc_nvenc` -> `libx265`.
 
 ---
 
-## 4. Batch Rendering (`batch.py`)
-
-`render_batch(edl_list, project_dir, db_path, config, max_concurrent=3)`: `asyncio.Semaphore` caps concurrent FFmpeg. Individual failures don't stop batch.
-
-## 5. Thumbnail (`thumbnail.py`)
+## 4. Thumbnail (`thumbnail.py`)
 
 `generate_thumbnail(source_path, timestamp_ms, output_path, width, height, crop_region=None)`: JPEG at `-q:v 2` (~95% quality) with optional crop.
 
-## 6. Render Inspection (`inspector.py`)
+## 5. Render Inspection (`inspector.py`)
 
 Extracts frames at 5 key timestamps (0/25/50/75/100%), probes metadata via ffprobe, compares against profile spec, runs quality checks, returns inline base64 frames + pass/fail.
 
-## 7. Preview (`preview.py`)
+## 6. Preview (`preview.py`)
 
 **Preview clip**: 2-5s 540p fast encode. No credits.
 
 **Preview layout**: Single JPEG frame compositing all regions onto 1080x1920 canvas via Pillow. ~300ms.
 
-## 8. Credits
+**Preview segment**: Low-quality preview of a specific segment within an edit. No credits.
 
-`clipcannon_render`: 2 credits. `clipcannon_render_batch`: 2 credits/edit. Refunded on failure.
+## 7. Credits
+
+`clipcannon_render`: 2 credits. Refunded on failure.

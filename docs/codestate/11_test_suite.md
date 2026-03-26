@@ -34,25 +34,34 @@ Test video: `testdata/2026-03-20 14-43-20.mp4` (209.9s, 2560x1440, 60fps h264).
 
 ---
 
-## Unit Tests (278 total across 15 files)
+## Unit Tests (439 total across 24 files)
 
 | File | Tests | Domain |
 |---|---|---|
 | `test_pipeline_stages.py` | 12 | Probe, audio/frame extract, DAG, orchestrator |
 | `test_billing.py` | 40 | HMAC, credits, license server, D1, Stripe |
-| `test_understanding_tools.py` | 20 | VUD, analytics, transcript, search |
+| `test_understanding_tools.py` | 11 | Transcript, search, frame tools |
 | `test_provenance_integration.py` | 19 | Hash chain, tamper detection |
 | `test_visual_pipeline.py` | 34 | Storyboard, quality, visual embed, OCR, shot type |
 | `test_derived_stages.py` | 14 | Profanity, chronemic, highlights, finalize |
 | `test_edl.py` | 19 | EDL models, validation, platform constraints |
 | `test_captions.py` | 14 | Caption chunking, ASS generation |
 | `test_smart_crop.py` | 15 | Crop regions, face tracking, aspect ratios |
-| `test_editing_tools.py` | 10 | Create/modify/list edits, metadata (async) |
+| `test_editing_tools.py` | 19 | Create/modify/list edits, metadata, iterative editing |
 | `test_rendering.py` | 14 | Encoding profiles, codec fallback |
 | `test_audio_generation.py` | 15 | 9 SFX types, 6 MIDI presets |
 | `dashboard/test_dashboard.py` | 18 | Dashboard endpoints |
 | `test_dashboard_phase2.py` | 12 | Timeline, editing, review endpoints |
-| `integration/test_full_pipeline.py` | 22 | Full pipeline with real video: probe, audio, frames, all stages, DB, provenance, edge cases |
+| `test_discovery_tools.py` | 28 | Best moments, cut points, narrative flow, safe cuts |
+| `test_change_classifier.py` | 27 | Change classification for iterative editing |
+| `test_feedback.py` | 30 | Natural language feedback application |
+| `test_preview_segment.py` | 3 | Segment preview rendering |
+| `test_segment_cache.py` | 17 | Segment-level render caching |
+| `test_avatar.py` | 12 | Lip-sync engine (LatentSync) |
+| `test_voice_verify.py` | 16 | Multi-gate voice verification (WER, SECS, sanity) |
+| `test_voice_inference.py` | 5 | Qwen3-TTS voice synthesis |
+| `test_voice_data_prep.py` | 11 | Voice data preparation, profile CRUD |
+| `integration/test_full_pipeline.py` | 22 | Full pipeline with real video |
 
 ---
 
@@ -77,7 +86,7 @@ Standalone forensic testing (`python tests/fsv_*.py`). Each script: imports ever
 ## Running
 
 ```bash
-pytest                              # Full suite (278 tests)
+pytest                              # Full suite (439 tests)
 pytest tests/integration/           # Integration only
 python tests/fsv_core_infrastructure.py  # Individual FSV script
 ruff check src/                     # Lint

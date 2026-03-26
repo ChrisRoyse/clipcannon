@@ -1,9 +1,15 @@
-"""StyleTTS2 voice synthesis with iterative verification loop.
+"""Qwen3-TTS voice synthesis with iterative verification loop.
 
-Wraps the StyleTTS2 inference engine and integrates the multi-gate
-VoiceVerifier for quality-gated output. Each speak() call optionally
-runs up to N attempts, varying generation parameters until the
-verification threshold is met or attempts are exhausted.
+Wraps the Qwen3-TTS-12Hz-1.7B-Base model for voice cloning with
+speaker encoder verification gating. Uses SDPA attention backend
+optimized for RTX 5090 Blackwell (compute cap 12.0) with BF16 precision.
+
+Key features:
+  - Voice cloning via reference audio (10-15s clip + transcript)
+  - x_vector_only mode for embedding-only cloning (no ref text needed)
+  - create_voice_clone_prompt for reusable speaker prompts
+  - Multi-reference averaging via speaker embeddings
+  - max_new_tokens controls generation length (prevents runaway)
 """
 
 from __future__ import annotations
@@ -16,13 +22,19 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 import torch
-import torchaudio
 
 from clipcannon.voice.verify import VerificationResult, VoiceVerifier
 
 logger = logging.getLogger(__name__)
 
-_TARGET_SR = 24000  # StyleTTS2 default output sample rate
+# Qwen3-TTS outputs at 24kHz
+_OUTPUT_SR = 24000
+
+# Max reference audio duration (seconds) — longer causes runaway generation
+_MAX_REF_DURATION_S = 15.0
+
+# HuggingFace model ID
+_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 
 
 @dataclass
@@ -37,146 +49,183 @@ class SpeakResult:
     parameters_used: dict[str, object] = field(default_factory=dict)
 
 
-# -- Parameter escalation schedule -------------------------------------------
+def _trim_reference(audio_path: Path, max_duration_s: float = _MAX_REF_DURATION_S) -> Path:
+    """Trim reference audio to max duration to prevent runaway generation.
 
-_ESCALATION = [
-    # (diffusion_steps, alpha_override)
-    (5, None),
-    (10, None),
-    (20, 0.15),
-    (20, 0.1),
-    (20, 0.05),
-]
+    Args:
+        audio_path: Path to reference WAV.
+        max_duration_s: Maximum duration in seconds.
 
-
-def _escalation_params(
-    attempt: int, base_alpha: float, base_beta: float,
-) -> dict[str, object]:
-    """Return parameters for a given attempt (0-indexed).
-
-    Escalation strategy:
-      Attempt 0: base parameters + random seed
-      Attempt 1: seed + diffusion_steps 10
-      Attempt 2: seed + steps 20 + alpha 0.15
-      Attempt 3: seed + steps 20 + alpha 0.1
-      Attempt 4: seed + steps 20 + alpha 0.05
+    Returns:
+        Original path if already short enough, or path to trimmed copy.
     """
-    idx = min(attempt, len(_ESCALATION) - 1)
-    steps, alpha_override = _ESCALATION[idx]
-    seed = int(torch.randint(0, 2**31, (1,)).item())
-    return {
-        "diffusion_steps": steps,
-        "alpha": alpha_override if alpha_override is not None else base_alpha,
-        "beta": base_beta,
-        "seed": seed,
-    }
+    import torchaudio
 
-
-# -- Audio resampling helper -------------------------------------------------
-
-def _resample_to_24k(audio_path: Path) -> Path:
-    """Resample audio file to 24 kHz WAV for StyleTTS2 compute_style().
-
-    Returns the original path if already 24 kHz, otherwise writes a
-    resampled copy next to the original.
-    """
     wav, sr = torchaudio.load(str(audio_path))
-    if sr == _TARGET_SR:
+    max_samples = int(max_duration_s * sr)
+    if wav.shape[-1] <= max_samples:
         return audio_path
-    wav = torchaudio.functional.resample(wav, sr, _TARGET_SR)
-    if wav.shape[0] > 1:
-        wav = wav.mean(dim=0, keepdim=True)
-    resampled_path = audio_path.parent / f"{audio_path.stem}_24k.wav"
-    torchaudio.save(str(resampled_path), wav, _TARGET_SR)
-    logger.info("Resampled %s (%d Hz) -> %s (24000 Hz)", audio_path, sr, resampled_path)
-    return resampled_path
 
+    wav = wav[:, :max_samples]
+    trimmed = audio_path.parent / f"{audio_path.stem}_trimmed.wav"
+    torchaudio.save(str(trimmed), wav, sr)
+    logger.info("Trimmed reference %s to %.0fs", audio_path.name, max_duration_s)
+    return trimmed
 
-# -- VoiceSynthesizer --------------------------------------------------------
 
 class VoiceSynthesizer:
-    """StyleTTS2 wrapper with verification-gated output.
+    """Qwen3-TTS voice cloning engine with verification gating.
 
-    Loads the model lazily on first speak() call to avoid slow startup
-    when the synthesizer is instantiated but not immediately used.
+    Loads the model lazily on first speak() call. Uses SDPA attention
+    backend (optimal for RTX 5090 Blackwell without flash-attn).
+    All inference in BF16 for maximum Tensor Core utilization.
     """
 
-    def __init__(self, model_path: str | None = None) -> None:
+    def __init__(self, model_id: str = _MODEL_ID) -> None:
         """Configure the synthesizer. Model loads on first use.
 
         Args:
-            model_path: Path to a fine-tuned StyleTTS2 checkpoint.
-                        None uses the default LJSpeech model.
+            model_id: HuggingFace model ID or local path.
         """
-        self._model_path = model_path
+        self._model_id = model_id
         self._engine: object | None = None
+        self._cached_prompt: object | None = None
+        self._cached_prompt_key: str | None = None
         self._cached_verifier: VoiceVerifier | None = None
         self._cached_verifier_key: tuple[int, float] | None = None
 
+    def release(self) -> None:
+        """Release GPU memory held by the engine.
+
+        Call when the synthesizer is no longer needed to prevent
+        VRAM leaks on WSL2.
+        """
+        import gc
+        if self._engine is not None:
+            del self._engine
+            self._engine = None
+        self._cached_prompt = None
+        self._cached_verifier = None
+        gc.collect()
+        torch.cuda.empty_cache()
+        logger.info("VoiceSynthesizer released GPU memory")
+
     def _ensure_engine(self) -> object:
-        """Lazy-load StyleTTS2 engine on first call."""
+        """Lazy-load Qwen3-TTS model on first call."""
         if self._engine is not None:
             return self._engine
-        from styletts2.tts import StyleTTS2
 
-        logger.info("Loading StyleTTS2 model (path=%s)...", self._model_path or "default")
+        # RTX 5090 Blackwell optimizations
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+        torch.set_float32_matmul_precision("high")
+
+        from qwen_tts import Qwen3TTSModel
+
+        logger.info("Loading Qwen3-TTS model: %s ...", self._model_id)
         start = time.monotonic()
-        if self._model_path:
-            self._engine = StyleTTS2(model_checkpoint_path=self._model_path)
-        else:
-            self._engine = StyleTTS2()
+
+        self._engine = Qwen3TTSModel.from_pretrained(
+            self._model_id,
+            device_map="cuda:0",
+            dtype=torch.bfloat16,
+            attn_implementation="sdpa",
+        )
+
         elapsed = time.monotonic() - start
-        logger.info("StyleTTS2 model loaded in %.1fs", elapsed)
+        logger.info(
+            "Qwen3-TTS loaded in %.1fs, VRAM: %.2fGB",
+            elapsed, torch.cuda.memory_allocated() / 1024**3,
+        )
         return self._engine
+
+    def _get_or_create_prompt(
+        self,
+        ref_audio: Path,
+        ref_text: str | None = None,
+    ) -> object:
+        """Get or create a cached voice clone prompt.
+
+        Caches the prompt so repeated calls with the same reference
+        don't recompute speaker embeddings and codec tokens.
+
+        Args:
+            ref_audio: Path to reference audio (10-15s max).
+            ref_text: Transcript of reference audio. If None, uses
+                     x_vector_only_mode (embedding only, no ICL).
+
+        Returns:
+            VoiceClonePromptItem for generate_voice_clone.
+        """
+        cache_key = f"{ref_audio}:{ref_text or 'xvec'}"
+        if self._cached_prompt_key == cache_key and self._cached_prompt is not None:
+            return self._cached_prompt
+
+        engine = self._ensure_engine()
+
+        # Trim reference if too long
+        ref_path = _trim_reference(ref_audio)
+        use_xvec = ref_text is None
+
+        logger.info(
+            "Creating voice clone prompt: ref=%s, x_vector_only=%s",
+            ref_path.name, use_xvec,
+        )
+
+        items = engine.create_voice_clone_prompt(  # type: ignore[union-attr]
+            ref_audio=str(ref_path),
+            ref_text=ref_text if not use_xvec else None,
+            x_vector_only_mode=use_xvec,
+        )
+
+        self._cached_prompt = items
+        self._cached_prompt_key = cache_key
+        return items
 
     def speak(
         self,
         text: str,
         output_path: Path,
         reference_audio: Path | None = None,
+        reference_text: str | None = None,
         reference_embedding: np.ndarray | None = None,
         verification_threshold: float = 0.80,
         max_attempts: int = 5,
-        alpha: float = 0.3,
-        beta: float = 0.7,
-        diffusion_steps: int = 5,
+        temperature: float = 0.8,
+        max_new_tokens: int = 2048,
         speed: float = 1.0,
     ) -> SpeakResult:
         """Generate speech with iterative verification.
 
-        The verification loop:
-          1. Generate audio with current parameters
-          2. If reference_embedding is provided, run verification gates
-          3. If verification fails, adjust parameters and retry
-          4. Return best result after max_attempts
-
         Args:
             text: Text to synthesize.
             output_path: Where to write the final WAV file.
-            reference_audio: WAV for StyleTTS2 style transfer.
-            reference_embedding: ECAPA-TDNN embedding for verification.
+            reference_audio: WAV clip of the target speaker (10-15s).
+            reference_text: Transcript of the reference audio.
+            reference_embedding: Speaker encoder embedding for
+                identity verification (cosine similarity gate).
             verification_threshold: SECS threshold for identity gate.
-            max_attempts: Maximum generation attempts.
-            alpha: StyleTTS2 alpha (timbre strength). Lower = closer to ref.
-            beta: StyleTTS2 beta (prosody strength).
-            diffusion_steps: Initial diffusion sampling steps.
-            speed: Playback speed multiplier (1.0 = normal).
+            max_attempts: Maximum generation attempts (best-of-N).
+            temperature: Sampling temperature (0.8 = balanced).
+            max_new_tokens: Max generation tokens (2048 = ~170s audio).
+            speed: Playback speed multiplier.
 
         Returns:
             SpeakResult with audio path and verification details.
         """
         if speed <= 0:
             raise ValueError(f"speed must be positive, got {speed}")
+
         engine = self._ensure_engine()
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Compute style vector from reference audio
-        ref_s = None
+        # Build voice clone prompt from reference audio
+        prompt = None
         if reference_audio is not None:
-            ref_path = _resample_to_24k(reference_audio)
-            ref_s = engine.compute_style(str(ref_path))  # type: ignore[union-attr]
+            prompt = self._get_or_create_prompt(reference_audio, reference_text)
 
-        # Build or reuse cached verifier for the given embedding/threshold
+        # Build or reuse cached verifier
         verifier: VoiceVerifier | None = None
         if reference_embedding is not None:
             cache_key = (id(reference_embedding), verification_threshold)
@@ -194,29 +243,45 @@ class VoiceSynthesizer:
         best_secs: float = -1.0
 
         for attempt_idx in range(max_attempts):
-            params = _escalation_params(attempt_idx, alpha, beta)
-            # Override diffusion_steps on first attempt to use caller's value
-            if attempt_idx == 0:
-                params["diffusion_steps"] = diffusion_steps
+            seed = int(torch.randint(0, 2**31, (1,)).item())
+            torch.manual_seed(seed)
 
-            torch.manual_seed(int(params["seed"]))
+            params = {
+                "temperature": temperature,
+                "max_new_tokens": max_new_tokens,
+                "seed": seed,
+            }
 
-            # Generate audio
-            wav_np: np.ndarray = engine.inference(  # type: ignore[union-attr]
-                text,
-                ref_s=ref_s,
-                alpha=float(params["alpha"]),
-                beta=float(params["beta"]),
-                diffusion_steps=int(params["diffusion_steps"]),
-                output_sample_rate=_TARGET_SR,
+            logger.info(
+                "Attempt %d/%d: temp=%.1f, max_tokens=%d, seed=%d",
+                attempt_idx + 1, max_attempts, temperature, max_new_tokens, seed,
             )
 
-            # Apply speed adjustment via resampling
-            effective_sr = _TARGET_SR
-            if speed != 1.0:
-                effective_sr = int(_TARGET_SR * speed)
+            # Generate voice clone
+            if prompt is None:
+                raise ValueError(
+                    "Qwen3-TTS requires a reference audio clip for voice cloning. "
+                    "Provide reference_audio when calling speak()."
+                )
 
-            # Write to output path
+            wavs, sr = engine.generate_voice_clone(  # type: ignore[union-attr]
+                text=text,
+                language="English",
+                voice_clone_prompt=prompt,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=0.9,
+                repetition_penalty=1.05,
+            )
+
+            wav_np = wavs[0] if isinstance(wavs[0], np.ndarray) else wavs[0].cpu().numpy()
+
+            # Apply speed adjustment
+            effective_sr = sr
+            if speed != 1.0:
+                effective_sr = int(sr * speed)
+
+            # Write output
             sf.write(str(output_path), wav_np, effective_sr)
             duration_ms = int(len(wav_np) / effective_sr * 1000)
 
@@ -226,10 +291,10 @@ class VoiceSynthesizer:
                 sample_rate=effective_sr,
                 verification=None,
                 attempts=attempt_idx + 1,
-                parameters_used=dict(params),
+                parameters_used=params,
             )
 
-            # No verification requested: return immediately
+            # No verification: return first result
             if verifier is None:
                 logger.info(
                     "Attempt %d/%d: generated %dms audio (no verification)",
@@ -247,14 +312,13 @@ class VoiceSynthesizer:
             result.verification = vr
 
             logger.info(
-                "Attempt %d/%d: SECS=%.2f (threshold=%.2f), gate_failed=%s%s",
+                "Attempt %d/%d: SECS=%.3f (threshold=%.2f), gate=%s%s",
                 attempt_idx + 1, max_attempts, vr.secs_score,
                 verification_threshold,
-                vr.gate_failed or "none",
+                vr.gate_failed or "pass",
                 "" if vr.passed else ", retrying...",
             )
 
-            # Track best result by SECS score
             if vr.secs_score > best_secs:
                 best_secs = vr.secs_score
                 best_result = result
@@ -262,10 +326,9 @@ class VoiceSynthesizer:
             if vr.passed:
                 return result
 
-        # All attempts exhausted: return the best one
         assert best_result is not None
         logger.warning(
-            "Max attempts (%d) exhausted. Returning best result (SECS=%.3f)",
+            "Max attempts (%d) exhausted. Best SECS=%.3f",
             max_attempts, best_secs,
         )
         return best_result

@@ -1,13 +1,13 @@
 # ClipCannon System Overview
 
-**Version**: 0.1.0 (Phase 1 + Phase 2)
+**Version**: 0.1.0 (Phase 1 + Phase 2 + Phase 3)
 **Python**: >=3.12
 **License**: MIT
 **Build System**: Hatchling
 
 ## What ClipCannon Is
 
-ClipCannon is an AI-powered video understanding, editing, and rendering pipeline exposed as an MCP (Model Context Protocol) server. An AI assistant connects to ClipCannon over MCP, sends tool calls to analyze video files, create edits, render platform-optimized clips, and generate audio. The pipeline ingests a source video, runs it through a 21-stage analysis DAG (transcription, scene detection, scene analysis, emotion analysis, beat tracking, and more), and stores all results in a per-project SQLite database. The assistant then queries that database through additional MCP tools to retrieve summaries, transcripts, analytics, frames, storyboards, scene maps, and editing context -- and uses the editing, rendering, and audio tools to produce platform-ready video clips.
+ClipCannon is an AI-powered video understanding, editing, rendering, and voice/avatar pipeline exposed as an MCP (Model Context Protocol) server. An AI assistant connects to ClipCannon over MCP, sends tool calls to analyze video files, create edits, render platform-optimized clips, generate audio, clone voices, and produce lip-synced talking-head videos. The pipeline ingests a source video, runs it through a 21-stage analysis DAG (transcription, scene detection, scene analysis, emotion analysis, beat tracking, and more), and stores all results in a per-project SQLite database. The assistant then queries that database through additional MCP tools to retrieve transcripts, analytics, frames, storyboards, scene maps, editing context, narrative analysis, and discovery data -- and uses the editing, rendering, audio, voice, and avatar tools to produce platform-ready video clips.
 
 ## Architecture
 
@@ -37,8 +37,10 @@ The MCP server uses stdio transport by default (the `clipcannon` console script)
 | GPU (optional) | `torch>=2.3.0`, `faster-whisper>=1.0.0`, `transformers>=4.40.0`, `sentence-transformers>=3.0.0`, `demucs>=4.0.0`, `librosa>=0.10.0` |
 | Audio (Phase 2) | `pydub` (audio mixing), `pedalboard` (effects processing), `midiutil` (MIDI composition), `pyfluidsynth` (MIDI rendering), `ace-step` (AI music generation) |
 | Video (Phase 2) | `mediapipe` (face detection for smart cropping), `opencv-python` (scene analysis, frame processing), `rembg` (subject extraction) |
+| Voice (Phase 3) | `speechbrain` (ECAPA-VOXCELEB speaker encoder), Qwen3-TTS (voice synthesis) |
+| Avatar (Phase 3) | LatentSync 1.6 (ByteDance diffusion-based lip-sync) |
 
-ML dependencies are in the `[ml]` optional extra and are not required for the MCP server to start. Phase 2 audio/video dependencies are in the `[phase2]` optional extra.
+ML dependencies are in the `[ml]` optional extra and are not required for the MCP server to start. Phase 2 audio/video dependencies are in the `[phase2]` optional extra. Phase 3 voice/avatar reuses the `[ml]` group.
 
 ## MCP Tools (51 Total)
 
@@ -52,14 +54,23 @@ ML dependencies are in the `[ml]` optional extra and are not required for the MC
 | `clipcannon_project_status` | Get detailed status including pipeline stream progress, completion percentages, and disk usage. |
 | `clipcannon_project_delete` | Delete a project directory. Can optionally preserve the original source video. |
 
-### Provenance (4 tools)
+### Understanding (4 tools)
 
 | Tool | Description |
 |------|-------------|
-| `clipcannon_provenance_verify` | Verify the integrity of the provenance hash chain for a project. Detects tampering or broken links. |
-| `clipcannon_provenance_query` | Query provenance records with optional filtering by operation or stage name. |
-| `clipcannon_provenance_chain` | Walk the provenance chain from genesis to a specific record, showing full processing lineage. |
-| `clipcannon_provenance_timeline` | Get a chronological timeline of all provenance events with durations and models used. |
+| `clipcannon_ingest` | Run the full 21-stage analysis pipeline on a created project. Registers all stages, executes the DAG, returns results. |
+| `clipcannon_get_transcript` | Get transcript with word-level timestamps. Paginated in 15-minute windows. Supports `text` and `words` detail levels. |
+| `clipcannon_get_frame` | Get the nearest frame to a timestamp with moment context (transcript, speaker, emotion, topic, shot type, quality, pacing, OCR, profanity). Returns inline base64 image. Supports `render_id` for inspecting rendered output. |
+| `clipcannon_search_content` | Search video content by semantic similarity (sqlite-vec + Nomic embeddings) or text match (SQL LIKE fallback). |
+
+### Discovery (4 tools)
+
+| Tool | Description |
+|------|-------------|
+| `clipcannon_find_best_moments` | Find key moments with purpose-aware scoring (hook, highlight, cta, tutorial_step). Cross-stream convergence analysis. |
+| `clipcannon_find_cut_points` | Find natural edit boundaries with cross-stream convergence scoring (silence, beat, scene, sentence). |
+| `clipcannon_get_narrative_flow` | Analyze narrative coherence of proposed segments before creating an edit. |
+| `clipcannon_find_safe_cuts` | Find audio-safe cut points across entire video using multiple analysis streams. |
 
 ### Disk Management (2 tools)
 
@@ -76,59 +87,34 @@ ML dependencies are in the `[ml]` optional extra and are not required for the MC
 | `clipcannon_config_set` | Set a configuration value, validate against the Pydantic schema, and persist to disk. |
 | `clipcannon_config_list` | List all configuration values with their current settings. |
 
-### Understanding -- Pipeline & Summary (4 tools)
-
-| Tool | Description |
-|------|-------------|
-| `clipcannon_ingest` | Run the full 21-stage analysis pipeline on a created project. Registers all stages, executes the DAG, returns results. |
-| `clipcannon_get_vud_summary` | Get a compact Video Understanding Document summary (~8K tokens). Includes speakers, topics, highlights, reactions, beats, content safety. |
-| `clipcannon_get_analytics` | Get detailed analytics (~18K tokens) for specific sections: highlights, scenes, topics, reactions, beats, pacing, silence_gaps. |
-| `clipcannon_get_transcript` | Get transcript with word-level timestamps. Paginated in 15-minute windows. |
-
-### Understanding -- Visual (2 tools)
-
-| Tool | Description |
-|------|-------------|
-| `clipcannon_get_segment_detail` | Get ALL stream data for a time range (~15K tokens): transcript, emotion, speakers, reactions, beats, on-screen text, pacing, quality, silence gaps. |
-| `clipcannon_get_frame` | Get the nearest frame to a timestamp with moment context (transcript, speaker, emotion, topic, shot type, quality, pacing, OCR, profanity). Returns inline base64 image. |
-
-### Understanding -- Search (1 tool)
-
-| Tool | Description |
-|------|-------------|
-| `clipcannon_search_content` | Search video content by semantic similarity (sqlite-vec + Nomic embeddings) or text match (SQL LIKE fallback). |
-
 ### Editing (11 tools)
 
 | Tool | Description |
 |------|-------------|
 | `clipcannon_create_edit` | Create a new edit from an EDL specification. Auto-generates captions from transcript words, validates segments against source. Supports canvas compositing. |
-| `clipcannon_modify_edit` | Modify a draft edit via deep merge. Re-validates and regenerates captions if segments change. |
-| `clipcannon_list_edits` | List edits for a project with optional status filtering (draft, rendering, rendered, approved, rejected, failed). |
-| `clipcannon_generate_metadata` | Generate platform-specific title, description, hashtags, and thumbnail timestamp from VUD data. |
+| `clipcannon_modify_edit` | Modify a draft edit via deep merge. Re-validates and regenerates captions if segments change. Auto-saves version history. |
 | `clipcannon_auto_trim` | Analyze transcript to find filler words and long pauses, generate optimized segments that remove them. Returns segments ready for create_edit. |
 | `clipcannon_color_adjust` | Apply color grading (brightness, contrast, saturation, gamma, hue shift) globally or per-segment. |
 | `clipcannon_add_motion` | Add motion effects to segments: zoom_in, zoom_out, pan_left/right/up/down, ken_burns. Configurable easing. |
 | `clipcannon_add_overlay` | Add visual overlays: lower_third, title_card, logo, watermark, cta. Includes position, timing, animation. |
-| `clipcannon_extract_subject` | Extract subject from video frames using AI background removal (rembg). Generates alpha masks. |
-| `clipcannon_replace_background` | Replace video background using extracted masks. Supports blur and solid color replacement. |
-| `clipcannon_remove_region` | Remove rectangular region using FFmpeg delogo filter. Used for browser chrome, taskbars, watermarks. |
+| `clipcannon_edit_history` | List version history for an edit showing all saved versions. |
+| `clipcannon_revert_edit` | Revert an edit to a previous version with automatic versioning. |
+| `clipcannon_apply_feedback` | Apply natural language feedback to an edit (e.g., "make it shorter", "cut the intro"). |
+| `clipcannon_branch_edit` | Fork an edit into a platform-specific variant (e.g., TikTok -> Instagram). |
+| `clipcannon_list_branches` | List all branches of an edit. |
 
-### Rendering (11 tools)
+### Rendering (8 tools)
 
 | Tool | Description |
 |------|-------------|
 | `clipcannon_render` | Render a single edit to a platform-optimized video file. Charges 2 credits. Supports NVENC GPU acceleration with software fallback. |
-| `clipcannon_render_status` | Check the status and metadata of a completed or in-progress render. |
-| `clipcannon_render_batch` | Render multiple edits concurrently (max 3 parallel). Charges 2 credits per edit. |
-| `clipcannon_get_editing_context` | Get ALL data needed for editing decisions in one call: transcript, highlights, silence gaps, pacing, scene boundaries. |
+| `clipcannon_get_editing_context` | Get ALL data needed for editing decisions in one call: transcript, highlights, silence gaps, pacing, scene boundaries, narrative analysis. |
 | `clipcannon_analyze_frame` | Analyze a frame for content regions and webcam PIP overlay. Returns bounding boxes. ~125ms per frame. No credits. |
 | `clipcannon_preview_clip` | Render a short (2-5 second) low-quality 540p preview of an edit. No credits charged. |
 | `clipcannon_inspect_render` | Inspect rendered output: extracts frames at 5 key timestamps, probes metadata, runs quality checks. |
 | `clipcannon_preview_layout` | Generate a single preview frame showing canvas layout at a timestamp. ~300ms. No credits. |
-| `clipcannon_measure_layout` | Measure exact layout coordinates using face detection. Returns ready-to-use canvas regions for layouts A/B/C/D. |
-| `clipcannon_get_storyboard` | Get contact sheet of ALL video frames in one image. 2fps thumbnails with timestamps in a grid. Returns inline image (~9K tokens) plus transcript. |
-| `clipcannon_get_scene_map` | Get complete scene map: every scene with boundaries, face positions, webcam region, content area, pre-computed canvas regions for layouts A/B/C/D, aligned transcript. |
+| `clipcannon_get_scene_map` | Get scene map with time-window pagination: scene boundaries, face positions, webcam region, content area, pre-computed canvas regions for layouts A/B/C/D, aligned transcript. |
+| `clipcannon_preview_segment` | Low-quality preview of a specific segment. No credits. |
 
 ### Audio Generation (4 tools)
 
@@ -138,6 +124,27 @@ ML dependencies are in the `[ml]` optional extra and are not required for the MC
 | `clipcannon_compose_midi` | Compose MIDI from 6 presets (ambient_pad, upbeat_pop, corporate, dramatic, minimal_piano, intro_jingle) and render to WAV via FluidSynth. |
 | `clipcannon_generate_sfx` | Generate programmatic DSP sound effects (9 types: whoosh, riser, downer, impact, chime, tick, bass_drop, shimmer, stinger). |
 | `clipcannon_audio_cleanup` | Clean up source audio: noise reduction, normalization, silence trimming, EQ adjustment. |
+
+### Voice (4 tools)
+
+| Tool | Description |
+|------|-------------|
+| `clipcannon_prepare_voice_data` | Extract vocal stems from ingested projects, split at silence boundaries, match with transcript, produce training manifests. |
+| `clipcannon_voice_profiles` | Manage voice profiles: list, get, create, delete, update. Stores speaker embeddings and verification thresholds. |
+| `clipcannon_speak` | Synthesize speech in a cloned voice via Qwen3-TTS with iterative multi-gate verification (sanity, intelligibility, identity). |
+| `clipcannon_speak_optimized` | SECS-optimized synthesis: generate N candidates, score by speaker encoder cosine similarity, return best match. |
+
+### Avatar (1 tool)
+
+| Tool | Description |
+|------|-------------|
+| `clipcannon_lip_sync` | Generate lip-synced talking-head video using LatentSync 1.6 (ByteDance) diffusion pipeline. Takes audio + driver video, produces synced output. |
+
+### Video Generation (1 tool)
+
+| Tool | Description |
+|------|-------------|
+| `clipcannon_generate_video` | End-to-end video generation: voice synthesis (Qwen3-TTS) + lip-sync (LatentSync) from a text script and driver video. |
 
 ### Billing (4 tools)
 
@@ -167,13 +174,11 @@ Each project lives under `~/.clipcannon/projects/{project_id}/`:
     stems/               # Audio stems from source separation (vocal, music, etc.)
     frames/              # Extracted frames (frame_000001.jpg, frame_000002.jpg, ...)
     storyboards/         # Contact sheet images
-    edits/               # Edit working directories (captions, metadata)
+    edits/               # Edit working directories (captions, metadata, audio)
     renders/             # Rendered output video files and thumbnails
 ```
 
 ### Storage Tier Classification
-
-The disk management system classifies files into three tiers:
 
 | Tier | Files | Policy |
 |------|-------|--------|
@@ -183,17 +188,19 @@ The disk management system classifies files into three tiers:
 
 ## Database Schema
 
-Each project's `analysis.db` contains 27 core tables and 4 vector virtual tables:
+Each project's `analysis.db` uses schema version 3 and contains:
 
 **Phase 1 tables (22)**: `schema_version`, `project`, `transcript_segments`, `transcript_words`, `scenes`, `speakers`, `emotion_curve`, `topics`, `highlights`, `reactions`, `silence_gaps`, `acoustic`, `music_sections`, `beats`, `beat_sections`, `on_screen_text`, `text_change_events`, `profanity_events`, `content_safety`, `pacing`, `storyboard_grids`, `stream_status`, `provenance`
 
-**Phase 2 tables (4)**: `edits`, `edit_segments`, `renders`, `audio_assets`
+**Phase 2 tables (6)**: `edits`, `edit_segments`, `renders`, `audio_assets`, `edit_versions`, `segment_cache`
 
 **Scene analysis table (1)**: `scene_map` -- stores per-scene face positions, webcam regions, content areas, layout recommendations, and pre-computed canvas regions for layouts A/B/C/D
 
 **Vector tables** (sqlite-vec `vec0`): `vec_frames` (float[1152]), `vec_semantic` (float[768]), `vec_emotion` (float[1024]), `vec_speakers` (float[512])
 
-Schema version: 2 (migrated from v1 via `migrate_to_v2()`). Connection pragmas: WAL journal mode, NORMAL synchronous, 64MB cache, foreign keys ON, temp store in memory.
+**Phase 3 table (1)**: `voice_profiles` -- stores voice profile metadata, speaker embeddings, verification thresholds. Located in `~/.clipcannon/voice_profiles.db` (separate from project databases).
+
+Schema version: 3 (migrated from v1 -> v2 -> v3 via `migrate_to_v2()` and `migrate_to_v3()`). Connection pragmas: WAL journal mode, NORMAL synchronous, 64MB cache, foreign keys ON, temp store in memory.
 
 ## Exception Hierarchy
 
@@ -248,15 +255,27 @@ The `ModelManager` in the GPU module uses an LRU eviction strategy. GPUs with >1
 
 ### Editing Engine (`src/clipcannon/editing/`)
 
-Declarative Edit Decision List (EDL) architecture supporting segment-based editing, adaptive caption generation, content-aware smart cropping (face tracking, split-screen, picture-in-picture, canvas compositing), automated filler/pause trimming, color grading, motion effects (zoom, pan, Ken Burns), visual overlays (lower thirds, title cards, logos, CTAs), subject extraction with background replacement, region removal, and platform-specific metadata generation for 7 target platforms.
+Declarative Edit Decision List (EDL) architecture supporting segment-based editing, adaptive caption generation, content-aware smart cropping (face tracking, split-screen, picture-in-picture, canvas compositing), automated filler/pause trimming, color grading, motion effects (zoom, pan, Ken Burns), visual overlays (lower thirds, title cards, logos, CTAs), iterative editing with version control (edit history, revert, branching, feedback application), and platform-specific metadata generation for 7 target platforms.
 
 ### Rendering Engine (`src/clipcannon/rendering/`)
 
-Async FFmpeg-based rendering pipeline with 7 platform-optimized encoding profiles, GPU acceleration (NVENC/HEVC), transition effects (xfade), caption burn-in (ASS subtitles), per-segment canvas compositing with animated zoom, thumbnail generation, batch rendering with concurrency control, layout preview generation, render inspection, and contact sheet storyboard generation.
+Async FFmpeg-based rendering pipeline with 7 platform-optimized encoding profiles, GPU acceleration (NVENC/HEVC), transition effects (xfade), caption burn-in (ASS subtitles), per-segment canvas compositing with animated zoom, thumbnail generation, segment-level caching, render inspection, segment preview, and contact sheet storyboard generation.
 
 ### Audio Engine (`src/clipcannon/audio/`)
 
 Three-tier audio generation: AI music via ACE-Step v1.5 diffusion model (GPU), MIDI composition from 6 presets with FluidSynth rendering, and 9 programmatic DSP sound effects. Includes speech-aware audio mixing with automatic ducking, peak normalization, audio cleanup (noise reduction, normalization, silence trimming, EQ), and effects processing.
+
+### Discovery Engine (`src/clipcannon/tools/discovery.py`)
+
+Cross-stream intelligence tools for finding optimal editing moments. Purpose-aware scoring (hook, highlight, CTA, tutorial step), natural cut-point detection using convergence of silence, beat, scene, and sentence boundaries. Narrative flow analysis validates segment sequences before rendering. Audio-safe cut-point detection across the entire video.
+
+### Voice Engine (`src/clipcannon/voice/`)
+
+Voice cloning pipeline with data preparation (silence-boundary splitting, transcript matching, phonemization, train/val manifests), voice profile management (SQLite CRUD with ECAPA-VOXCELEB 192-dim speaker embeddings), Qwen3-TTS voice synthesis with iterative multi-gate verification (sanity -> intelligibility -> identity), and SECS-optimized best-of-N candidate selection.
+
+### Avatar Engine (`src/clipcannon/avatar/`)
+
+Lip-sync video generation using LatentSync 1.6 (ByteDance) diffusion pipeline. Takes audio + driver video input, produces lip-synced talking-head output at 512x512 resolution with configurable inference steps. Integrated with voice synthesis for end-to-end video generation from text scripts.
 
 ### Scene Analysis (`src/clipcannon/pipeline/scene_analysis.py`)
 

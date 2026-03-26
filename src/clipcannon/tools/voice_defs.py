@@ -15,9 +15,9 @@ VOICE_TOOL_DEFINITIONS: list[Tool] = [
         description=(
             "Prepare voice training data from one or more ingested projects. "
             "Splits vocal stems at silence boundaries, matches transcript text, "
-            "normalizes volume, phonemizes, and writes train/val split files "
-            "in StyleTTS2-compatible format. Requires projects to have been "
-            "ingested with vocals.wav and transcript_words populated."
+            "normalizes volume, phonemizes, and writes train/val split files. "
+            "Requires projects to have been ingested with vocals.wav and "
+            "transcript_words populated."
         ),
         inputSchema={
             "type": "object",
@@ -99,12 +99,12 @@ VOICE_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
         name="clipcannon_speak",
         description=(
-            "Generate speech in a cloned voice using StyleTTS 2. "
+            "Generate speech in a cloned voice using Qwen3-TTS. "
             "Takes text and a voice profile name, synthesizes audio "
             "with iterative verification: compares output against "
             "the speaker's voice fingerprint and retries if needed. "
-            "Returns an audio asset attached to the project. "
-            "Without a trained voice profile, uses the default model voice."
+            "Uses SDPA attention on RTX 5090 Blackwell with BF16. "
+            "Without a voice profile, uses the model's default voice."
         ),
         inputSchema={
             "type": "object",
@@ -126,43 +126,40 @@ VOICE_TOOL_DEFINITIONS: list[Tool] = [
                 "max_attempts": {
                     "type": "integer",
                     "default": 5,
-                    "description": "Max verification retry attempts",
+                    "description": "Max verification retry attempts (best-of-N)",
                 },
             },
             "required": ["project_id", "text"],
         },
     ),
     Tool(
-        name="clipcannon_train_voice",
+        name="clipcannon_speak_optimized",
         description=(
-            "Fine-tune StyleTTS 2 on voice training data to create "
-            "a custom voice profile. Requires voice data prepared "
-            "via clipcannon_prepare_voice_data. Training takes 8-12 "
-            "hours on RTX 5090 and produces a permanent voice model."
+            "SECS-optimized voice synthesis using Qwen3-TTS. Generates "
+            "N candidates, scores each against your voice fingerprint "
+            "using a speaker encoder, and returns the one that sounds "
+            "most like you. Selects the best reference clip automatically. "
+            "Slower but higher quality than clipcannon_speak."
         ),
         inputSchema={
             "type": "object",
             "properties": {
+                "project_id": _PID,
+                "text": {
+                    "type": "string",
+                    "description": "Text to synthesize",
+                },
                 "voice_name": {
                     "type": "string",
-                    "description": "Name for the voice profile",
+                    "description": "Voice profile name (must have trained model)",
                 },
-                "data_dir": {
-                    "type": "string",
-                    "description": "Path to prepared training data directory",
-                },
-                "epochs": {
+                "n_candidates": {
                     "type": "integer",
-                    "default": 50,
-                    "description": "Training epochs",
-                },
-                "batch_size": {
-                    "type": "integer",
-                    "default": 4,
-                    "description": "Training batch size",
+                    "default": 8,
+                    "description": "Candidates to generate and rank (8 = good tradeoff)",
                 },
             },
-            "required": ["voice_name", "data_dir"],
+            "required": ["project_id", "text", "voice_name"],
         },
     ),
 ]

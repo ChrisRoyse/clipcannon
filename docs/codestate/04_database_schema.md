@@ -7,7 +7,7 @@ at `~/.clipcannon/projects/{project_id}/analysis.db`.
 **Source files covered:**
 
 - `src/clipcannon/db/connection.py` -- connection factory, pragmas, sqlite-vec loading
-- `src/clipcannon/db/schema.py` -- table DDL, vector tables, indexes, project init, Phase 2 migration
+- `src/clipcannon/db/schema.py` -- table DDL, vector tables, indexes, project init, Phase 2/3 migrations
 
 ---
 
@@ -61,19 +61,20 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 ```
 
-The current schema version constant is **`SCHEMA_VERSION = 2`** (upgraded from 1 by Phase 2 migration).
+The current schema version constants are:
+- **`SCHEMA_VERSION = 1`** (Phase 1 core tables)
+- **`SCHEMA_VERSION_2 = 2`** (Phase 2 editing/rendering tables)
+- **`SCHEMA_VERSION_3 = 3`** (Phase 3 voice profiles)
 
 `create_project_db` writes version 1 via `INSERT OR REPLACE` after core
-tables are created. `migrate_to_v2()` upgrades to version 2 by adding
-Phase 2 tables. `get_schema_version(db_path)` reads it back
-with `SELECT MAX(version) FROM schema_version`.
+tables are created, then calls `migrate_to_v2()` and `migrate_to_v3()`.
 
 ---
 
 ## 3. Core Tables
 
-There are 27 core tables (including `schema_version`, `provenance`, and
-`scene_map`), organized below by domain.
+There are 30 core tables (including `schema_version`, `provenance`,
+`scene_map`, Phase 2, and Phase 3 tables), organized below by domain.
 
 ### 3.1 Project Metadata
 
@@ -151,54 +152,15 @@ There are 27 core tables (including `schema_version`, `provenance`, and
 | `quality_classification` | TEXT | | Quality classification label |
 | `quality_issues` | TEXT | | Detected quality issues (JSON) |
 
-#### `on_screen_text`
+#### `on_screen_text`, `text_change_events`, `storyboard_grids`
 
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Auto-incrementing ID |
-| `project_id` | TEXT | NOT NULL, FK -> project | Owning project |
-| `start_ms` | INTEGER | NOT NULL | Text appearance start time |
-| `end_ms` | INTEGER | NOT NULL | Text appearance end time |
-| `texts` | TEXT | NOT NULL | Detected text content |
-| `type` | TEXT | | Text type classification |
-| `change_from_previous` | BOOLEAN | | Whether this differs from prior text |
-
-#### `text_change_events`
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Auto-incrementing ID |
-| `project_id` | TEXT | NOT NULL, FK -> project | Owning project |
-| `timestamp_ms` | INTEGER | NOT NULL | Timestamp of the text change |
-| `type` | TEXT | | Type of change |
-| `new_title` | TEXT | | New text content after change |
-
-#### `storyboard_grids`
-
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `grid_id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Auto-incrementing ID |
-| `project_id` | TEXT | NOT NULL, FK -> project | Owning project |
-| `grid_number` | INTEGER | NOT NULL | Sequential grid number |
-| `grid_path` | TEXT | NOT NULL | Path to the grid image file |
-| `cell_timestamps_ms` | TEXT | NOT NULL | JSON array of cell timestamps |
-| `cell_metadata` | TEXT | | JSON metadata for each cell |
+*(Unchanged from Phase 1)*
 
 ### 3.4 Audio Analysis Tables
 
-#### `speakers`
+#### `speakers`, `emotion_curve`, `reactions`, `silence_gaps`, `acoustic`, `music_sections`, `beats`, `beat_sections`
 
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `speaker_id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Auto-incrementing ID |
-| `project_id` | TEXT | NOT NULL, FK -> project | Owning project |
-| `label` | TEXT | NOT NULL | Speaker label (e.g., "Speaker 1") |
-| `total_speaking_ms` | INTEGER | | Total speaking duration in ms |
-| `speaking_pct` | REAL | | Percentage of total audio |
-
-#### `emotion_curve`, `reactions`, `silence_gaps`, `acoustic`, `music_sections`, `beats`, `beat_sections`
-
-*(Unchanged from Phase 1 -- see previous schema version for full column details)*
+*(Unchanged from Phase 1)*
 
 ### 3.5 Derived / Scoring Tables
 
@@ -260,14 +222,21 @@ Created by the `scene_analysis` pipeline stage. Stores per-scene face positions,
 | `name` | TEXT | NOT NULL | Human-readable edit name |
 | `status` | TEXT | NOT NULL DEFAULT 'draft' | Edit status (draft/rendering/rendered/approved/rejected/failed) |
 | `target_platform` | TEXT | NOT NULL | Target platform (tiktok, instagram_reels, etc.) |
-| `target_profile` | TEXT | | Render profile name |
+| `target_profile` | TEXT | NOT NULL | Render profile name |
 | `edl_json` | TEXT | NOT NULL | Full EDL serialized as JSON |
-| `captions_enabled` | BOOLEAN | DEFAULT TRUE | Whether captions are enabled |
-| `crop_mode` | TEXT | DEFAULT 'auto' | Crop mode (auto/manual/none) |
+| `source_sha256` | TEXT | NOT NULL | SHA-256 of source video for validation |
 | `total_duration_ms` | INTEGER | | Computed total output duration |
 | `segment_count` | INTEGER | | Number of segments in the edit |
+| `captions_enabled` | BOOLEAN | DEFAULT TRUE | Whether captions are enabled |
+| `crop_mode` | TEXT | DEFAULT 'auto' | Crop mode (auto/manual/none) |
 | `thumbnail_timestamp_ms` | INTEGER | | Thumbnail extraction timestamp |
+| `metadata_title` | TEXT | | Generated title |
+| `metadata_description` | TEXT | | Generated description |
+| `metadata_hashtags` | TEXT | | Generated hashtags |
+| `rejection_feedback` | TEXT | | Feedback from rejected review |
 | `render_id` | TEXT | | FK to renders table |
+| `parent_edit_id` | TEXT | | Parent edit ID for branching |
+| `branch_name` | TEXT | DEFAULT 'main' | Branch name for platform variants |
 | `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |
 | `updated_at` | TEXT | NOT NULL DEFAULT datetime('now') | Last update timestamp |
 
@@ -280,11 +249,37 @@ Created by the `scene_analysis` pipeline stage. Stores per-scene face positions,
 | `segment_order` | INTEGER | NOT NULL | Segment position in timeline |
 | `source_start_ms` | INTEGER | NOT NULL | Source start time in ms |
 | `source_end_ms` | INTEGER | NOT NULL | Source end time in ms |
-| `speed` | REAL | NOT NULL DEFAULT 1.0 | Playback speed (0.25-4.0) |
+| `output_start_ms` | INTEGER | NOT NULL | Output timeline start in ms |
+| `speed` | REAL | DEFAULT 1.0 | Playback speed (0.25-4.0) |
 | `transition_in_type` | TEXT | | Incoming transition type |
 | `transition_in_duration_ms` | INTEGER | | Incoming transition duration |
 | `transition_out_type` | TEXT | | Outgoing transition type |
 | `transition_out_duration_ms` | INTEGER | | Outgoing transition duration |
+
+#### `edit_versions`
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `version_id` | TEXT | PRIMARY KEY | Unique version identifier |
+| `edit_id` | TEXT | NOT NULL, FK -> edits | Owning edit |
+| `parent_version_id` | TEXT | | Parent version for chain |
+| `version_number` | INTEGER | NOT NULL | Sequential version number |
+| `edl_json` | TEXT | NOT NULL | Full EDL snapshot at this version |
+| `change_description` | TEXT | | Description of what changed |
+| `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |
+
+#### `segment_cache`
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `cache_hash` | TEXT | PRIMARY KEY | Hash of segment spec for cache lookup |
+| `project_id` | TEXT | NOT NULL, FK -> project | Owning project |
+| `file_path` | TEXT | NOT NULL | Path to cached rendered segment |
+| `source_hash` | TEXT | NOT NULL | Source video SHA-256 |
+| `segment_spec_json` | TEXT | NOT NULL | Full segment specification |
+| `file_size_bytes` | INTEGER | | Cached file size |
+| `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |
+| `last_used_at` | TEXT | NOT NULL DEFAULT datetime('now') | Last access timestamp |
 
 ### 3.10 Phase 2: Render Tables
 
@@ -296,23 +291,19 @@ Created by the `scene_analysis` pipeline stage. Stores per-scene face positions,
 | `edit_id` | TEXT | NOT NULL, FK -> edits | Source edit |
 | `project_id` | TEXT | NOT NULL, FK -> project | Owning project |
 | `status` | TEXT | NOT NULL DEFAULT 'pending' | Render status (pending/rendering/rendered/failed) |
-| `profile` | TEXT | | Encoding profile used |
+| `profile` | TEXT | NOT NULL | Encoding profile used |
 | `output_path` | TEXT | | Path to rendered video file |
 | `output_sha256` | TEXT | | SHA-256 of rendered file |
 | `file_size_bytes` | INTEGER | | Rendered file size |
 | `duration_ms` | INTEGER | | Output video duration |
-| `resolution_width` | INTEGER | | Output width in pixels |
-| `resolution_height` | INTEGER | | Output height in pixels |
+| `resolution` | TEXT | | Output resolution |
 | `codec` | TEXT | | Video codec used |
-| `bitrate_kbps` | INTEGER | | Video bitrate |
 | `thumbnail_path` | TEXT | | Path to thumbnail image |
-| `thumbnail_timestamp_ms` | INTEGER | | Thumbnail timestamp |
 | `render_duration_ms` | INTEGER | | Render wall-clock time |
-| `render_job_id` | TEXT | | External render job ID |
 | `error_message` | TEXT | | Error description if failed |
-| `started_at` | TEXT | | Render start timestamp |
-| `completed_at` | TEXT | | Render completion timestamp |
+| `provenance_record_id` | TEXT | | Linked provenance record |
 | `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |
+| `completed_at` | TEXT | | Render completion timestamp |
 
 ### 3.11 Phase 2: Audio Assets Table
 
@@ -321,30 +312,50 @@ Created by the `scene_analysis` pipeline stage. Stores per-scene face positions,
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
 | `asset_id` | TEXT | PRIMARY KEY | Unique asset identifier |
+| `edit_id` | TEXT | NOT NULL, FK -> edits | Associated edit |
 | `project_id` | TEXT | NOT NULL, FK -> project | Owning project |
-| `edit_id` | TEXT | FK -> edits | Associated edit (nullable) |
-| `asset_type` | TEXT | NOT NULL | Asset type (music/sfx/voiceover) |
+| `type` | TEXT | NOT NULL | Asset type (music/sfx/voiceover) |
 | `file_path` | TEXT | NOT NULL | Path to audio file |
 | `duration_ms` | INTEGER | NOT NULL | Audio duration in ms |
-| `sample_rate` | INTEGER | | Audio sample rate (Hz) |
+| `sample_rate` | INTEGER | DEFAULT 44100 | Audio sample rate (Hz) |
 | `model_used` | TEXT | | Model that generated the audio |
-| `generation_params_json` | TEXT | | JSON-encoded generation parameters |
+| `generation_params` | TEXT | | JSON-encoded generation parameters |
 | `seed` | INTEGER | | Random seed for reproducibility |
 | `volume_db` | REAL | DEFAULT 0 | Volume adjustment in dB |
 | `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |
+
+### 3.12 Phase 3: Voice Profiles Table
+
+#### `voice_profiles`
+
+Stored in `~/.clipcannon/voice_profiles.db` (separate from project databases).
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `profile_id` | TEXT | PRIMARY KEY | Unique ID (format "vp_*") |
+| `name` | TEXT | NOT NULL UNIQUE | Human-readable profile name |
+| `model_path` | TEXT | NOT NULL | Path to voice model |
+| `training_hours` | REAL | DEFAULT 0 | Hours of training data |
+| `training_projects` | TEXT | DEFAULT '[]' | JSON array of source project IDs |
+| `sample_rate` | INTEGER | DEFAULT 24000 | Audio sample rate |
+| `reference_embedding` | BLOB | | 192-dim ECAPA-VOXCELEB speaker embedding |
+| `verification_threshold` | REAL | DEFAULT 0.80 | SECS threshold for identity gate |
+| `training_status` | TEXT | DEFAULT 'pending' | Status: pending/preparing/training/ready/failed |
+| `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |
+| `updated_at` | TEXT | NOT NULL DEFAULT datetime('now') | Last update timestamp |
 
 ---
 
 ## 4. Vector Tables (sqlite-vec)
 
-Four virtual tables use the `vec0` module from the `sqlite-vec` extension.
-*(Unchanged from Phase 1 -- `vec_frames` float[1152], `vec_semantic` float[768], `vec_emotion` float[1024], `vec_speakers` float[512])*
+Four virtual tables use the `vec0` module from the `sqlite-vec` extension:
+`vec_frames` (float[1152]), `vec_semantic` (float[768]), `vec_emotion` (float[1024]), `vec_speakers` (float[512]).
 
 ---
 
 ## 5. Indexes
 
-Phase 1 indexes (9) plus Phase 2 additions:
+Phase 1 indexes (9) plus Phase 2/3 additions:
 
 | Index Name | Table | Columns | Notes |
 |------------|-------|---------|-------|
@@ -358,9 +369,14 @@ Phase 1 indexes (9) plus Phase 2 additions:
 | `idx_provenance_project` | `provenance` | `project_id, timestamp_utc` | Provenance timeline queries |
 | `idx_provenance_chain` | `provenance` | `project_id, operation` | Provenance chain lookups |
 | `idx_edits_project` | `edits` | `project_id, status` | Phase 2: Edit listing by status |
-| `idx_edit_segments_edit` | `edit_segments` | `edit_id, segment_order` | Phase 2: Ordered segment lookup |
+| `idx_edits_status` | `edits` | `status` | Phase 2: Status-only queries |
+| `idx_edit_segments` | `edit_segments` | `edit_id, segment_order` | Phase 2: Ordered segment lookup |
 | `idx_renders_edit` | `renders` | `edit_id` | Phase 2: Render lookup by edit |
+| `idx_renders_status` | `renders` | `status` | Phase 2: Render status queries |
 | `idx_audio_assets_edit` | `audio_assets` | `edit_id` | Phase 2: Audio asset lookup |
+| `idx_edit_versions_edit` | `edit_versions` | `edit_id, version_number` | Phase 2: Version history lookup |
+| `idx_segment_cache_project` | `segment_cache` | `project_id` | Phase 2: Cache lookup |
+| `idx_voice_profiles_name` | `voice_profiles` | `name` | Phase 3: Profile lookup by name |
 
 ---
 
@@ -389,8 +405,8 @@ storyboards, profanity, highlights
   stems/         -- separated audio stems (vocal, music, etc.)
   frames/        -- extracted key frames
   storyboards/   -- generated storyboard grid images
-  edits/         -- Phase 2: edit working directories
-  renders/       -- Phase 2: rendered output files
+  edits/         -- edit working directories (captions, audio, segments)
+  renders/       -- rendered output files
   analysis.db    -- the SQLite database described in this document
 ```
 
@@ -398,7 +414,7 @@ storyboards, profanity, highlights
 
 ## 8. Query Helper Functions
 
-*(Unchanged from Phase 1 -- `fetch_one`, `fetch_all`, `execute`, `execute_returning_id`, `batch_insert`, `table_exists`, `count_rows`, `transaction`)*
+`fetch_one`, `fetch_all`, `execute`, `execute_returning_id`, `batch_insert`, `table_exists`, `count_rows`, `transaction` context manager.
 
 ---
 
@@ -406,14 +422,26 @@ storyboards, profanity, highlights
 
 ### `migrate_to_v2(db_path)`
 
-Handles upgrading existing Phase 1 databases to Phase 2 schema:
+Handles upgrading Phase 1 databases to Phase 2 schema:
 
 1. Opens a connection with `enable_vec=False`.
 2. Checks current schema version via `get_schema_version()`.
 3. If version is already >= 2, returns immediately (idempotent).
-4. Creates four new tables: `edits`, `edit_segments`, `renders`, `audio_assets`.
-5. Creates four new indexes: `idx_edits_project`, `idx_edit_segments_edit`, `idx_renders_edit`, `idx_audio_assets_edit`.
+4. Creates six new tables: `edits`, `edit_segments`, `renders`, `audio_assets`, `edit_versions`, `segment_cache`.
+5. Creates indexes for Phase 2 tables.
 6. Updates `schema_version` to 2.
 7. Commits and closes.
 
-New projects created via `create_project_db` include all Phase 2 tables from the start.
+### `migrate_to_v3(db_path)`
+
+Handles upgrading Phase 2 databases to Phase 3 schema:
+
+1. Opens a connection with `enable_vec=False`.
+2. Checks current schema version.
+3. If version is already >= 3, returns immediately (idempotent).
+4. Creates `voice_profiles` table.
+5. Creates `idx_voice_profiles_name` index.
+6. Updates `schema_version` to 3.
+7. Commits and closes.
+
+New projects created via `create_project_db` include all Phase 2 and Phase 3 tables from the start.
