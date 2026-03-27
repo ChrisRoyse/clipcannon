@@ -1,0 +1,139 @@
+{
+  "benchmark": "WavLM-Optimized ClonEval Benchmark",
+  "encoder": "WavLMForXVector (microsoft/wavlm-base-plus-sv, 512-dim)",
+  "temperature_sweep": {
+    "0.2": {
+      "mean": 0.9229,
+      "max": 0.9408
+    },
+    "0.3": {
+      "mean": 0.9316,
+      "max": 0.9634
+    },
+    "0.4": {
+      "mean": 0.9166,
+      "max": 0.9223
+    },
+    "0.5": {
+      "mean": 0.9301,
+      "max": 0.9595
+    },
+    "0.6": {
+      "mean": 0.917,
+      "max": 0.9423
+    },
+    "0.7": {
+      "mean": 0.9085,
+      "max": 0.9355
+    },
+    "0.8": {
+      "mean": 0.9112,
+      "max": 0.9519
+    }
+  },
+  "best_temperature": 0.3,
+  "enrollment_comparison": {
+    "single_ref": {
+      "mean": 0.9237,
+      "max": 0.9456
+    },
+    "centroid_2_mics": {
+      "mean": 0.9241,
+      "max": 0.9458
+    },
+    "centroid_50_best": {
+      "mean": 0.9394,
+      "max": 0.9498
+    }
+  },
+  "round_1": {
+    "wavlm_mean": 0.9607,
+    "wavlm_std": 0.0165,
+    "wavlm_min": 0.9138,
+    "wavlm_max": 0.9745,
+    "qwen3_mean": 0.987,
+    "n_sentences": 10,
+    "n_candidates": 12,
+    "per_sentence": [
+      {
+        "text": "The weather outside is absolutely beautiful today.",
+        "wavlm_best": 0.9138,
+        "wavlm_candidates_mean": 0.8861,
+        "wavlm_candidates_max": 0.9138,
+        "qwen3": 0.9867
+      },
+      {
+        "text": "Can you believe how fast technology is advancing these days?",
+        "wavlm_best": 0.964,
+        "wavlm_candidates_mean": 0.9452,
+        "wavlm_candidates_max": 0.964,
+        "qwen3": 0.9866
+      },
+      {
+        "text": "The customer feedback has been overwhelmingly positive so far.",
+        "wavlm_best": 0.9537,
+        "wavlm_candidates_mean": 0.9344,
+        "wavlm_candidates_max": 0.9537,
+        "qwen3": 0.9883
+      },
+      {
+        "text": "Running every morning has completely changed my energy levels.",
+        "wavlm_best": 0.9745,
+        "wavlm_candidates_mean": 0.9611,
+        "wavlm_candidates_max": 0.9745,
+        "qwen3": 0.9851
+      },
+      {
+        "text": "The presentation went really well and the client seemed very impressed.",
+        "wavlm_best": 0.9675,
+        "wavlm_candidates_mean": 0.9481,
+        "wavlm_candidates_max": 0.9675,
+        "qwen3": 0.9884
+      },
+      {
+        "text": "I just finished reading a really interesting book about space exploration.",
+        "wavlm_best": 0.9723,
+        "wavlm_candidates_mean": 0.9545,
+        "wavlm_candidates_max": 0.9723,
+        "qwen3": 0.9896
+      },
+      {
+        "text": "The meeting has been rescheduled to three o'clock tomorrow afternoon.",
+        "wavlm_best": 0.9649,
+        "wavlm_candidates_mean": 0.9435,
+        "wavlm_candidates_max": 0.9649,
+        "qwen3": 0.9866
+      },
+      {
+        "text": "We need to discuss the quarterly budget before the end of the week.",
+        "wavlm_best": 0.9637,
+        "wavlm_candidates_mean": 0.9468,
+        "wavlm_candidates_max": 0.9637,
+        "qwen3": 0.9844
+      },
+      {
+        "text": "The traffic on the highway was absolutely terrible this morning.",
+        "wavlm_best": 0.9637,
+        "wavlm_candidates_mean": 0.9509,
+        "wavlm_candidates_max": 0.9637,
+        "qwen3": 0.9871
+      },
+      {
+        "text": "I'm really excited about the upcoming product launch next month.",
+        "wavlm_best": 0.969,
+        "wavlm_candidates_mean": 0.9506,
+        "wavlm_candidates_max": 0.969,
+        "qwen3": 0.987
+      }
+    ]
+  },
+  "round_2_iterative": {
+    "wavlm_mean": 0.9436,
+    "wavlm_max": 0.9761,
+    "n_sentences": 5
+  },
+  "previous_unoptimized": {
+    "approved_clone": 0.9746,
+    "jimmy_novel": 0.954
+  }
+}
