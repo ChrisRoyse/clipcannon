@@ -12,11 +12,11 @@ All FSV scripts passing. See [11_test_suite.md](11_test_suite.md) for full scrip
 | Server + Integration | `fsv_server_integration.py` | 323 | 323/323 |
 | **FSV Total** | **4 primary scripts** | **750** | **All passing** |
 
-Extended scripts (`manual_fsv_full.py`, `manual_fsv_phase3.py`, `fsv_part1_pipeline.py`, `fsv_parts_3_to_7.py`, `manual_verify.py`) provide additional coverage across all domains.
+Extended scripts (`manual_fsv_full.py`, `manual_fsv_iterative.py`, `manual_fsv_phase3.py`, `fsv_part1_pipeline.py`, `fsv_parts_3_to_7.py`, `manual_verify.py`) provide additional coverage across all domains.
 
 ## Pytest Results
 
-439 tests across 24 files. See [11_test_suite.md](11_test_suite.md) for breakdown.
+427 tests across 24 files. See [11_test_suite.md](11_test_suite.md) for breakdown.
 
 ## Lint
 
@@ -33,5 +33,5 @@ Ruff: Python 3.12, line length 100, rules E/F/W/I/N/UP/ANN/B/SIM/TCH. Source roo
 | Encoding profiles | 7 |
 | Target platforms | 7 |
 | Pytest files | 24 |
-| FSV scripts | 9 |
+| FSV scripts | 10 |
 | Schema version | 3 |

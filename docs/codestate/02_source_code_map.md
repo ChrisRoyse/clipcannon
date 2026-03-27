@@ -69,9 +69,10 @@ src/
             __init__.py                     # Package docstring
             data_prep.py                    # Voice training data preparation: silence-boundary splitting, transcript matching, phonemization, train/val manifests
             inference.py                    # VoiceSynthesizer class: Qwen3-TTS integration with iterative verification loop, reference audio/embedding support, SpeakResult
-            verify.py                       # Multi-gate voice verification: VoiceVerifier with sanity (duration/clipping/SNR/silence), intelligibility (WER via Whisper), identity (SECS via ECAPA-VOXCELEB)
+            verify.py                       # Multi-gate voice verification: VoiceVerifier with Qwen3-TTS ECAPA-TDNN 2048-dim speaker encoder, sanity (duration/clipping/SNR/silence), intelligibility (WER via Whisper, punctuation-stripped), identity (SECS)
             optimize.py                     # SECS-optimized synthesis: best-of-N candidate selection, reference clip scoring, OptimizedSpeakResult
             profiles.py                     # Voice profile SQLite CRUD: create/get/list/update/delete profiles in ~/.clipcannon/voice_profiles.db
+            enhance.py                      # Resemble Enhance post-processing: denoise + latent flow matching, upsamples 24kHz TTS output to 44.1kHz broadcast quality
 
         avatar/                             # Avatar / lip-sync engine (Phase 3)
             lip_sync.py                     # LipSyncEngine: LatentSync 1.6 (ByteDance) diffusion pipeline, VAE + UNet3D + DDIM scheduler, 512x512 output, LipSyncResult
@@ -218,6 +219,7 @@ clipcannon.tools.voice
     -> clipcannon.voice.inference (VoiceSynthesizer)
     -> clipcannon.voice.optimize (optimized_speak)
     -> clipcannon.voice.verify (VoiceVerifier, build_reference_embedding)
+    -> clipcannon.voice.enhance (enhance_speech)  [post-processing in speak/speak_optimized]
 
 clipcannon.tools.avatar
     -> clipcannon.avatar.lip_sync (get_engine, LipSyncEngine)

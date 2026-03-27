@@ -201,11 +201,11 @@ Manage voice profiles. Params: `action` (list/get/create/delete/update), `name`,
 
 ### clipcannon_speak
 
-TTS in cloned voice with iterative verification. Params: `project_id`, `text`, `voice_name`, `speed` (0.5-2.0), `max_attempts` (default 5).
+TTS in cloned voice with iterative verification. Auto-enhances via Resemble Enhance (denoise + 44.1kHz upsample). Params: `project_id`, `text`, `voice_name`, `speed` (0.5-2.0), `max_attempts` (default 5), `enhance` (boolean, default true -- post-process to remove vocoder artifacts).
 
 ### clipcannon_speak_optimized
 
-SECS-optimized TTS with best-of-N selection. Params: `project_id`, `text`, `voice_name`, `n_candidates` (default 8).
+SECS-optimized TTS with best-of-N selection. Auto-enhances via Resemble Enhance. Params: `project_id`, `text`, `voice_name`, `n_candidates` (default 8), `enhance` (boolean, default true -- post-process to remove vocoder artifacts).
 
 ---
 

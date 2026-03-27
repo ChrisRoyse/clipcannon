@@ -34,7 +34,7 @@ Test video: `testdata/2026-03-20 14-43-20.mp4` (209.9s, 2560x1440, 60fps h264).
 
 ---
 
-## Unit Tests (439 total across 24 files)
+## Unit Tests (427 total across 24 files)
 
 | File | Tests | Domain |
 |---|---|---|
@@ -76,6 +76,7 @@ Standalone forensic testing (`python tests/fsv_*.py`). Each script: imports ever
 | `fsv_billing_dashboard.py` | ~84 | HMAC, credits, license server, dashboard |
 | `fsv_server_integration.py` | ~323 | Server integration, all tool dispatch |
 | `manual_fsv_full.py` | ~1180 lines | Comprehensive system-wide verification |
+| `manual_fsv_iterative.py` | -- | Iterative editing verification |
 | `manual_fsv_phase3.py` | ~787 lines | Editing, rendering, audio, new tools |
 | `fsv_part1_pipeline.py` | ~435 lines | Pipeline-focused verification |
 | `fsv_parts_3_to_7.py` | ~731 lines | Multi-domain verification |
@@ -86,7 +87,7 @@ Standalone forensic testing (`python tests/fsv_*.py`). Each script: imports ever
 ## Running
 
 ```bash
-pytest                              # Full suite (439 tests)
+pytest                              # Full suite (427 tests)
 pytest tests/integration/           # Integration only
 python tests/fsv_core_infrastructure.py  # Individual FSV script
 ruff check src/                     # Lint

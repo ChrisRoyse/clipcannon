@@ -338,7 +338,7 @@ Stored in `~/.clipcannon/voice_profiles.db` (separate from project databases).
 | `training_hours` | REAL | DEFAULT 0 | Hours of training data |
 | `training_projects` | TEXT | DEFAULT '[]' | JSON array of source project IDs |
 | `sample_rate` | INTEGER | DEFAULT 24000 | Audio sample rate |
-| `reference_embedding` | BLOB | | 192-dim ECAPA-VOXCELEB speaker embedding |
+| `reference_embedding` | BLOB | | 2048-dim Qwen3-TTS ECAPA-TDNN speaker embedding |
 | `verification_threshold` | REAL | DEFAULT 0.80 | SECS threshold for identity gate |
 | `training_status` | TEXT | DEFAULT 'pending' | Status: pending/preparing/training/ready/failed |
 | `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |

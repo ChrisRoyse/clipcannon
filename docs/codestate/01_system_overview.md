@@ -37,7 +37,7 @@ The MCP server uses stdio transport by default (the `clipcannon` console script)
 | GPU (optional) | `torch>=2.3.0`, `faster-whisper>=1.0.0`, `transformers>=4.40.0`, `sentence-transformers>=3.0.0`, `demucs>=4.0.0`, `librosa>=0.10.0` |
 | Audio (Phase 2) | `pydub` (audio mixing), `pedalboard` (effects processing), `midiutil` (MIDI composition), `pyfluidsynth` (MIDI rendering), `ace-step` (AI music generation) |
 | Video (Phase 2) | `mediapipe` (face detection for smart cropping), `opencv-python` (scene analysis, frame processing), `rembg` (subject extraction) |
-| Voice (Phase 3) | `speechbrain` (ECAPA-VOXCELEB speaker encoder), Qwen3-TTS (voice synthesis) |
+| Voice (Phase 3) | Qwen3-TTS (voice synthesis), `marksverdhei/Qwen3-Voice-Embedding-12Hz-1.7B` (2048-dim ECAPA-TDNN speaker encoder), `resemble-enhance` (audio denoising + bandwidth extension) |
 | Avatar (Phase 3) | LatentSync 1.6 (ByteDance diffusion-based lip-sync) |
 
 ML dependencies are in the `[ml]` optional extra and are not required for the MCP server to start. Phase 2 audio/video dependencies are in the `[phase2]` optional extra. Phase 3 voice/avatar reuses the `[ml]` group.
@@ -131,8 +131,8 @@ ML dependencies are in the `[ml]` optional extra and are not required for the MC
 |------|-------------|
 | `clipcannon_prepare_voice_data` | Extract vocal stems from ingested projects, split at silence boundaries, match with transcript, produce training manifests. |
 | `clipcannon_voice_profiles` | Manage voice profiles: list, get, create, delete, update. Stores speaker embeddings and verification thresholds. |
-| `clipcannon_speak` | Synthesize speech in a cloned voice via Qwen3-TTS with iterative multi-gate verification (sanity, intelligibility, identity). |
-| `clipcannon_speak_optimized` | SECS-optimized synthesis: generate N candidates, score by speaker encoder cosine similarity, return best match. |
+| `clipcannon_speak` | Synthesize speech in a cloned voice via Qwen3-TTS with iterative multi-gate verification (sanity, intelligibility, identity). Auto-enhances via Resemble Enhance (denoise + 44.1kHz upsample). |
+| `clipcannon_speak_optimized` | SECS-optimized synthesis: generate N candidates, score by speaker encoder cosine similarity, return best match. Auto-enhances via Resemble Enhance. |
 
 ### Avatar (1 tool)
 
@@ -198,7 +198,7 @@ Each project's `analysis.db` uses schema version 3 and contains:
 
 **Vector tables** (sqlite-vec `vec0`): `vec_frames` (float[1152]), `vec_semantic` (float[768]), `vec_emotion` (float[1024]), `vec_speakers` (float[512])
 
-**Phase 3 table (1)**: `voice_profiles` -- stores voice profile metadata, speaker embeddings, verification thresholds. Located in `~/.clipcannon/voice_profiles.db` (separate from project databases).
+**Phase 3 table (1)**: `voice_profiles` -- stores voice profile metadata, 2048-dim Qwen3-TTS ECAPA-TDNN speaker embeddings, verification thresholds. Located in `~/.clipcannon/voice_profiles.db` (separate from project databases).
 
 Schema version: 3 (migrated from v1 -> v2 -> v3 via `migrate_to_v2()` and `migrate_to_v3()`). Connection pragmas: WAL journal mode, NORMAL synchronous, 64MB cache, foreign keys ON, temp store in memory.
 
@@ -271,7 +271,7 @@ Cross-stream intelligence tools for finding optimal editing moments. Purpose-awa
 
 ### Voice Engine (`src/clipcannon/voice/`)
 
-Voice cloning pipeline with data preparation (silence-boundary splitting, transcript matching, phonemization, train/val manifests), voice profile management (SQLite CRUD with ECAPA-VOXCELEB 192-dim speaker embeddings), Qwen3-TTS voice synthesis with iterative multi-gate verification (sanity -> intelligibility -> identity), and SECS-optimized best-of-N candidate selection.
+Voice cloning pipeline with data preparation (silence-boundary splitting, transcript matching, phonemization, train/val manifests), voice profile management (SQLite CRUD with 2048-dim Qwen3-TTS ECAPA-TDNN speaker embeddings), Qwen3-TTS voice synthesis with iterative multi-gate verification (sanity -> intelligibility -> identity), SECS-optimized best-of-N candidate selection, and Resemble Enhance post-processing (denoise + latent flow matching to upsample 24kHz TTS output to 44.1kHz broadcast quality).
 
 ### Avatar Engine (`src/clipcannon/avatar/`)
 
