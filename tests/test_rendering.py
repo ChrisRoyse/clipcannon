@@ -80,8 +80,6 @@ class TestSoftwareFallback:
             audio_codec="aac",
             audio_bitrate="192k",
             audio_sample_rate=44100,
-            max_duration_ms=60000,
-            min_duration_ms=5000,
             movflags="+faststart",
         )
         sw = get_software_fallback(profile)
@@ -107,8 +105,6 @@ class TestEncodingProfileFields:
             "audio_codec",
             "audio_bitrate",
             "audio_sample_rate",
-            "max_duration_ms",
-            "min_duration_ms",
             "movflags",
         ]
         for field in required:
@@ -119,19 +115,17 @@ class TestPlatformProfiles:
     """Test platform-specific profile configurations."""
 
     def test_tiktok_vertical(self) -> None:
-        """TikTok vertical: 1080x1920, 30fps, max 60s."""
+        """TikTok vertical: 1080x1920, 30fps."""
         p = get_profile("tiktok_vertical")
         assert p.width == 1080
         assert p.height == 1920
         assert p.fps == 30
-        assert p.max_duration_ms == 60000
 
     def test_youtube_standard(self) -> None:
-        """YouTube standard: 1920x1080, max 720000ms."""
+        """YouTube standard: 1920x1080."""
         p = get_profile("youtube_standard")
         assert p.width == 1920
         assert p.height == 1080
-        assert p.max_duration_ms == 720000
 
     def test_linkedin_square(self) -> None:
         """LinkedIn: 1080x1080 (square)."""

@@ -1029,8 +1029,6 @@ async def clipcannon_preview_segment(
         audio_codec="aac",
         audio_bitrate="128k",
         audio_sample_rate=44100,
-        max_duration_ms=600000,
-        min_duration_ms=0,
         movflags="+faststart",
     )
 

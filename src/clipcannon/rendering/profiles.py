@@ -1,8 +1,8 @@
 """Platform encoding profiles for ClipCannon rendering.
 
 Defines FFmpeg encoding parameters for each supported platform.
-Each profile specifies resolution, codec, bitrate, duration limits,
-and audio settings. Provides lookup and software fallback utilities.
+Each profile specifies resolution, codec, bitrate, and audio settings.
+Provides lookup and software fallback utilities.
 """
 
 from __future__ import annotations
@@ -29,8 +29,6 @@ class EncodingProfile:
         audio_codec: FFmpeg audio codec name.
         audio_bitrate: Audio bitrate (e.g. "192k").
         audio_sample_rate: Audio sample rate in Hz.
-        max_duration_ms: Platform maximum duration in milliseconds.
-        min_duration_ms: Platform minimum duration in milliseconds.
         movflags: FFmpeg movflags for MP4 output.
     """
 
@@ -46,8 +44,6 @@ class EncodingProfile:
     audio_codec: str
     audio_bitrate: str
     audio_sample_rate: int
-    max_duration_ms: int
-    min_duration_ms: int
     movflags: str
 
 
@@ -68,8 +64,6 @@ _PROFILES: dict[str, EncodingProfile] = {
         audio_codec="aac",
         audio_bitrate="192k",
         audio_sample_rate=44100,
-        max_duration_ms=60000,
-        min_duration_ms=5000,
         movflags="+faststart",
     ),
     "instagram_reels": EncodingProfile(
@@ -85,8 +79,6 @@ _PROFILES: dict[str, EncodingProfile] = {
         audio_codec="aac",
         audio_bitrate="192k",
         audio_sample_rate=44100,
-        max_duration_ms=90000,
-        min_duration_ms=3000,
         movflags="+faststart",
     ),
     "youtube_shorts": EncodingProfile(
@@ -102,8 +94,6 @@ _PROFILES: dict[str, EncodingProfile] = {
         audio_codec="aac",
         audio_bitrate="192k",
         audio_sample_rate=48000,
-        max_duration_ms=180000,
-        min_duration_ms=1000,
         movflags="+faststart",
     ),
     "youtube_standard": EncodingProfile(
@@ -119,8 +109,6 @@ _PROFILES: dict[str, EncodingProfile] = {
         audio_codec="aac",
         audio_bitrate="192k",
         audio_sample_rate=48000,
-        max_duration_ms=720000,
-        min_duration_ms=10000,
         movflags="+faststart",
     ),
     "youtube_4k": EncodingProfile(
@@ -136,8 +124,6 @@ _PROFILES: dict[str, EncodingProfile] = {
         audio_codec="aac",
         audio_bitrate="192k",
         audio_sample_rate=48000,
-        max_duration_ms=720000,
-        min_duration_ms=10000,
         movflags="+faststart",
     ),
     "facebook": EncodingProfile(
@@ -153,8 +139,6 @@ _PROFILES: dict[str, EncodingProfile] = {
         audio_codec="aac",
         audio_bitrate="192k",
         audio_sample_rate=44100,
-        max_duration_ms=60000,
-        min_duration_ms=3000,
         movflags="+faststart",
     ),
     "linkedin": EncodingProfile(
@@ -170,8 +154,6 @@ _PROFILES: dict[str, EncodingProfile] = {
         audio_codec="aac",
         audio_bitrate="192k",
         audio_sample_rate=44100,
-        max_duration_ms=180000,
-        min_duration_ms=3000,
         movflags="+faststart",
     ),
 }

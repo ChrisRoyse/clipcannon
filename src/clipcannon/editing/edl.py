@@ -16,19 +16,6 @@ if TYPE_CHECKING:
 
 from pydantic import BaseModel, Field, field_validator
 
-# ============================================================
-# Platform duration limits (min_s, max_s)
-# ============================================================
-PLATFORM_DURATION_LIMITS: dict[str, tuple[int, int]] = {
-    "tiktok": (5, 180),
-    "instagram_reels": (5, 90),
-    "youtube_shorts": (5, 180),
-    "youtube_standard": (30, 600),
-    "youtube_4k": (30, 600),
-    "facebook": (5, 90),
-    "linkedin": (10, 600),
-}
-
 # Valid transition type literals
 TransitionType = Literal[
     "fade",
@@ -668,7 +655,7 @@ def validate_edl(
     """Validate an EDL against project data and platform constraints.
 
     Checks source hash, segment ordering, overlap, transition limits,
-    speed range, and platform duration limits.
+    and speed range.
 
     Args:
         edl: The EditDecisionList to validate.
@@ -811,23 +798,6 @@ def validate_edl(
                     f"exceeds 50% of shorter adjacent segment "
                     f"({shorter}ms)"
                 )
-
-    # --- Platform duration limits ---
-    total_ms = compute_total_duration(segments)
-    limits = PLATFORM_DURATION_LIMITS.get(edl.target_platform)
-    if limits:
-        min_s, max_s = limits
-        total_s = total_ms / 1000.0
-        if total_s < min_s:
-            errors.append(
-                f"Total output duration ({total_s:.1f}s) below platform "
-                f"minimum ({min_s}s) for {edl.target_platform}"
-            )
-        if total_s > max_s:
-            errors.append(
-                f"Total output duration ({total_s:.1f}s) exceeds platform "
-                f"maximum ({max_s}s) for {edl.target_platform}"
-            )
 
     return errors
 

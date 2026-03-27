@@ -1104,10 +1104,6 @@ async def test_encoding_profiles_detailed() -> None:
         p = get_profile(pname)
         record(f"{pname} fps=30", p.fps == 30, f"actual={p.fps}")
 
-    # Verify duration limits
-    tiktok = get_profile("tiktok_vertical")
-    record("tiktok min=5s", tiktok.min_duration_ms == 5000, f"actual={tiktok.min_duration_ms}")
-    record("tiktok max=60s", tiktok.max_duration_ms == 60000, f"actual={tiktok.max_duration_ms}")
 
 
 async def main() -> None:

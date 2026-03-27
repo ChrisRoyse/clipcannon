@@ -1,0 +1,2623 @@
+File Name: northstarprd copy 1.md
+File Path: docs2/northstarrefinery/northstarprd copy 1.md
+Contents:
+
+# PRD: North Star Refinery & Calibration System
+
+---
+
+## PRD Metadata
+
+| Field | Value |
+|:------|:------|
+| **PRD ID** | PRD-2025-NSR-001 |
+| **Version** | 2.1 |
+| **Effective Date** | 2025-12-06 |
+| **Owner** | Lead Data Scientist / System Architect |
+| **Status** | Approved |
+| **Last Updated** | 2025-12-06T08:00:00Z |
+| **Related Documents** | `cognitive-core` crate, `cognitive-inference` crate, CUDA 13.1 Reference |
+| **Schema Version** | 2 (Chronemic + VAK support) |
+
+---
+
+## 1. Executive Summary
+
+**Product Name:** North Star Refinery
+**Target User:** Lead Data Scientist / System Architect
+**Purpose:** A dedicated standalone GUI application designed to ingest raw raw psychological data, compute "North Star" centroids for the 7 Primary Hogshead Archetypes, mathematically derive the 42 Secondary Archetypes, and fine-tune these coordinates in 5-dimensional embedding space.
+**Output:** The authoritative `hogshead_reference_vectors.bin` file used by the Cognitive Radar runtime.
+
+---
+
+## 1.1 Problem Statement
+
+### Current State
+The Cognitive Radar runtime requires pre-computed Reference Vectors (North Stars) for 49 Hogshead Archetypes and 3 VAK modalities. Currently, creating these vectors requires:
+- Manual collection and organization of training audio/text samples
+- Custom Python scripts for embedding extraction
+- Ad-hoc statistical calculations for centroid computation
+- No visualization of vector quality or cluster separation
+- No validation mechanism before runtime deployment
+
+### Pain Points
+
+| Pain Point | Impact | Frequency |
+|:-----------|:-------|:----------|
+| Manual audio editing in external tools (Audacity) | 2-4 hours per archetype | Every calibration |
+| No way to detect "toxic" samples skewing centroids | Corrupted Reference Vectors → runtime misclassification | Unknown until runtime failure |
+| No visualization of 768-dim vectors | Cannot verify cluster quality | Every calibration |
+| Binary export requires manual struct alignment | Runtime crashes from schema mismatch | ~30% of exports |
+| No reproducibility guarantee | Different runs produce different vectors | Every run |
+| No VAK profile synthesis capability | Missing modality detection in runtime | Not currently possible |
+
+### Opportunity
+A dedicated calibration tool that:
+1. **Reduces calibration time** from 8-12 hours to <1 hour through automation
+2. **Eliminates human error** via statistical outlier detection and validation gates
+3. **Provides mathematical proof** of vector quality before deployment
+4. **Ensures bitwise reproducibility** for regulatory compliance
+5. **Synthesizes VAK profiles** from archetype training data
+6. **Exemplar Calibration**: Ingest successful debt resolution call recordings to create "High-EQ" North Stars. This ensures reference vectors represent the ideal version of an archetype (e.g., "Competent Power" rather than "Aggressive Power") to guide the runtime toward resolution rather than simple mirroring.
+
+### Consequences of Not Solving
+- Runtime misclassification rates >15% (currently acceptable: <5%)
+- No way to audit or reproduce calibration decisions
+- Manual process blocks scaling to new domains/languages
+- No VAK modality support in production
+
+---
+
+## 1.2 Target Users and Personas
+
+| Persona | Role | Goals | Pain Points | Usage Frequency |
+|:--------|:-----|:------|:------------|:----------------|
+| **Dr. Sarah Chen** | Lead Data Scientist | Create accurate, reproducible Reference Vectors; validate cluster quality; export production-ready binaries | Current process is manual and error-prone; no visualization; no validation | Weekly during calibration sprints |
+| **Marcus Williams** | ML Engineer | Integrate new audio/text models; debug vector quality issues; ensure schema compatibility with runtime | No visibility into intermediate embeddings; schema mismatches cause crashes | Bi-weekly for model updates |
+| **Jessica Torres** | Product Manager | Approve calibration for production deployment; understand confidence levels without diving into math | Cannot interpret cosine distances; needs executive dashboard | Monthly for release approval |
+
+---
+
+## 1.3 User Stories
+
+### US-NSR-001: Primary Archetype Training (Priority: MUST)
+```
+As a Lead Data Scientist
+I want to ingest audio and text samples organized by Primary Advantage
+So that I can compute accurate centroids for the 7 Hogshead Archetypes
+```
+**Acceptance Criteria:**
+- [ ] AC-001: User can drag-and-drop files into 7 distinct buckets (Power, Passion, Prestige, Trust, Mystique, Innovation, Alert)
+- [ ] AC-002: System preprocesses audio using identical VAD/normalization as runtime
+- [ ] AC-003: System extracts embeddings from all 5 models (Nomic, WavLM, Wav2Vec2, RoBERTa, BERT)
+- [ ] AC-004: UI displays progress bar during batch GPU processing
+- [ ] AC-005: Chronemic features (WPM, Latency, Jitter, Overlap) extracted from audio
+
+### US-NSR-002: Secondary Archetype Generation (Priority: MUST)
+```
+As a Lead Data Scientist
+I want to mathematically derive 42 Secondary Archetypes from Primary centroids
+So that I can cover all Hogshead personality combinations
+```
+**Acceptance Criteria:**
+- [ ] AC-006: System generates 42 secondary archetypes using weighted vector addition
+- [ ] AC-007: User can adjust Primary/Secondary mixing weights (default 0.7/0.3)
+- [ ] AC-008: Recalculation completes in <100ms when sliders are adjusted
+- [ ] AC-009: All 49 archetypes are displayed in a 7x7 matrix grid
+
+### US-NSR-003: Cluster Visualization (Priority: MUST)
+```
+As a Lead Data Scientist
+I want to visualize the 49 North Stars in 3D space
+So that I can verify they are distinct and well-separated
+```
+**Acceptance Criteria:**
+- [ ] AC-010: 3D scatter plot using UMAP or t-SNE projection
+- [ ] AC-011: 49 North Stars rendered as fixed anchor points
+- [ ] AC-012: Training samples rendered as clouds around their respective anchors
+- [ ] AC-013: UI maintains 60 FPS even during heavy computation (Green Context isolation)
+
+### US-NSR-004: Binary Export (Priority: MUST)
+```
+As a Lead Data Scientist
+I want to export the calibrated vectors to the exact binary format required by runtime
+So that the Cognitive Radar can load and use my North Stars
+```
+**Acceptance Criteria:**
+- [ ] AC-014: Export produces `hogshead_reference_vectors.bin` in Little Endian format
+- [ ] AC-015: Pre-flight validation checks all 52 Reference Sets (49 archetypes + 3 VAK)
+- [ ] AC-016: Schema version header (0x4847 + version byte) prepended to file
+- [ ] AC-017: Atomic write (temp file → rename) prevents corruption
+- [ ] AC-018: JSON summary report generated alongside binary
+
+### US-NSR-005: VAK Profile Synthesis (Priority: SHOULD)
+```
+As a Lead Data Scientist
+I want to synthesize Visual/Auditory/Kinesthetic Reference Vectors from archetype compositions
+So that the runtime can identify user learning modalities
+```
+**Acceptance Criteria:**
+- [ ] AC-019: VAK profiles synthesized using archetype compositions (Visual=Innovation+Power, etc.)
+- [ ] AC-020: Speed offsets adjustable (Visual=+1.5σ WPM, Kinesthetic=-1.0σ WPM)
+- [ ] AC-021: VAK orthogonality verified (minimum 30° angular distance)
+- [ ] AC-022: VAK profiles included in binary export
+
+### US-NSR-006: Automated Validation (Priority: SHOULD)
+```
+As a Lead Data Scientist
+I want to run Leave-One-Out Cross-Validation automatically
+So that I can prove my North Stars will classify correctly in production
+```
+**Acceptance Criteria:**
+- [ ] AC-023: Ghost Protocol runs LOOCV with 10% holdout
+- [ ] AC-024: Confusion matrix displayed for all 7 Primary Archetypes
+- [ ] AC-025: Global accuracy score calculated and displayed
+- [ ] AC-026: Validation completes in <10 seconds (CUDA Graph acceleration)
+
+### US-NSR-007: Manager-Friendly Dashboard (Priority: COULD)
+```
+As a Product Manager
+I want a simplified traffic-light dashboard
+So that I can approve calibration without understanding vector math
+```
+**Acceptance Criteria:**
+- [ ] AC-027: Green/Yellow/Red status indicator for overall health
+- [ ] AC-028: Plain-language explanations ("Vectors are distinct. Ready for use.")
+- [ ] AC-029: Export button disabled when status is Red
+
+---
+
+
+
+---
+
+File Name: northstarprd copy 2.md
+File Path: docs2/northstarrefinery/northstarprd copy 2.md
+Contents:
+
+## 2. User Experience (UX) Philosophy
+
+**"Glass Box" Data Science:** Unlike the runtime system which automates decisions, this tool must expose **every intermediate float value**. The user must see the raw embeddings, the averaged centroids, the distance matrices, and the mixing weights.
+
+**Workflow Loop:**
+1.  **Ingest** (Drag & Drop Raw Audio/Text)
+2.  **Forge** (Calculate Primaries & Mix Secondaries)
+3.  **Visualize** (3D UMAP, Distance Heatmaps)
+4.  **Test** (Upload "Mystery" samples to verify classification)
+5.  **Export** (Binary serialization)
+
+---
+
+
+
+---
+
+File Name: northstarprd copy 3.md
+File Path: docs2/northstarrefinery/northstarprd copy 3.md
+Contents:
+
+## 3. Functional Requirements
+
+### 3.1 Module A: The Ingestion Engine
+**Goal:** Easy loading of raw ground-truth data for the 7 Primary Advantages.
+
+*   **REQ-ING-001: Structured Import with Gender Tagging.**
+    *   UI must provide 7 distinct "Buckets" (Power, Passion, Prestige, Trust, Mystique, Innovation, Alert).
+    *   Each Bucket accepts two streams: **Audio Files** (.wav, .mp3) and **Text Data** (.txt, .json).
+    *   **Gender Tagging for Audio Files:**
+        *   The UI for Audio Files ingestion MUST allow the user to tag files as **Male** or **Female**.
+        *   **Auto-Detection Option:** The system provides a "Detect Gender" button that runs the WavLM-based gender classifier on the audio file and auto-populates the gender tag.
+        *   **Manual Override:** The user can manually override the auto-detected gender tag if the classifier is incorrect.
+        *   **Validation:** Audio files without a gender tag MUST NOT be processed. The UI displays a warning: *"Gender tag required for audio files. Select Male or Female."*
+        *   **Text Files:** Text files remain gender-neutral and do not require gender tagging.
+*   **REQ-ING-002: Mirror Preprocessing.**
+    *   **CRITICAL:** The Refinery MUST use the *exact* same Audio Preprocessor (VAD, Normalization, Resampling) and Text Preprocessor as the runtime Cognitive Radar.
+    *   *Validation:* UI must show "Preprocessed Waveform" vs "Raw Waveform" to confirm VAD is working.
+*   **REQ-ING-002a: cuFFT DX Audio Pipeline.**
+    *   **Feature Used:** *cuFFT Device Extensions (Blackwell Performance Update)*.
+    *   **Implementation:** Perform Spectrogram extraction and VAD energy calculations using the updated Blackwell-optimized cuFFT libraries directly in device memory.
+    *   **Benefit:** Zero-copy audio processing. Audio loads from disk directly to GPU memory (via GDS if available, or pinned memory) and is processed without CPU round-trips.
+*   **REQ-ING-003: Batch Vectorization.**
+    *   System runs inference on all imported files using the 5 core models (Nomic, WavLM, Wav2Vec2, RoBERTa, BERT).
+    *   UI displays a progress bar for GPU batch processing.
+*   **REQ-ING-004: Synthetic Data Generator (The "Lazy Button").**
+    *   **Problem Solved:** Writing 100 sentences for "Prestige" vs "Power" is tedious.
+    *   **Solution:** A built-in prompt interface to Qwen (local LLM) to generate training data.
+    *   **Input:** User selects an Archetype (e.g., "Mystique") and Context (e.g., "Debt Negotiation").
+    *   **Action:** System prompts Qwen: *"Generate 50 distinct, short sentences that a 'Mystique' personality would say during a successful debt negotiation where they de-escalate tension while maintaining firm boundaries."*
+    *   **Review:** User reviews the list, unchecks "bad" generations, and clicks "Import to Stream A."
+    *   **Benefit:** Generates 100s of samples in seconds instead of manual typing. Training data focuses on resolution-oriented, high-EQ exemplars rather than generic personality traits.
+*   **REQ-ING-005: Smart Audio Slicer (Auto-Segmenter).**
+    *   **Problem Solved:** Manual audio editing in Audacity to chop 20 minutes of interviews into 5-second clips.
+    *   **Solution:** Upload one long file, and the system chops it automatically.
+    *   **Action:** When a long audio file (>10s) is dropped, the system runs VAD (Voice Activity Detection).
+    *   **Result:** Slices audio into "Speech Chunks" (3-7 seconds long).
+    *   **UI:** Shows a "Filmstrip" of chunks. User can delete coughing/silence, then click "Import All."
+    *   **Benefit:** Ingests raw podcasts/interviews instantly.
+*   **REQ-ING-006: Data Augmentation Pipeline (Robustness Training).**
+    *   **Problem Solved:** Training data is typically clean studio audio. Real users will be on noisy microphones with background interference. Clean-trained North Stars fail to match noisy real-world input.
+    *   **Solution:** A checkbox "Augment Data" during ingestion.
+    *   **Logic:** For every clean audio file, generate 3 variants:
+        1.  **Low Noise:** Add 5% white noise.
+        2.  **Cafe Noise:** Overlay faint background chatter.
+        3.  **Gain Shift:** Reduce volume by -6dB.
+    *   **Math:** The North Star Centroid is calculated using the Clean + Augmented versions together.
+    *   **Benefit:** Creates "Heavy" Anchors that are stable even when the user is in a noisy environment.
+
+*   **REQ-ING-007: Chronemic Feature Extraction Pipeline.**
+    *   **Context:** Unlike embeddings which come from neural models, Chronemics are computed from metadata (timestamps and transcripts). This is the **6th Embedding Stream** required by the Runtime.
+    *   **Hardware:** Executes on **Green Context A** (Audio Lane) using the VAD output. Zero-copy memory access allows timestamp calculation during the VAD pass.
+    *   **Calculation Logic (Per Audio Sample):**
+        1.  **Input:** Audio Waveform + Text Transcript + VAD Timestamps (Start/End of speech chunks).
+        2.  **WPM (Words Per Minute):**
+            *   Formula: `(Transcript Word Count / Total Speech Duration in Minutes)`
+            *   **CRITICAL:** Use *speech duration* (sum of VAD chunks), NOT total audio duration. Silence must not skew WPM.
+            *   Example: 150 words in 60 seconds of speech = 150 WPM (even if audio file is 90 seconds with 30 seconds of silence).
+        3.  **Latency (Average Silence Gap):**
+            *   Calculate the duration of all gaps between VAD Speech Chunks.
+            *   Filter: Only count gaps > 200ms (ignore micro-pauses from breathing).
+            *   Return the `Mean` of qualifying gaps in milliseconds.
+            *   Example: Gaps of [50ms, 320ms, 180ms, 450ms] → Mean of [320ms, 450ms] = 385ms.
+        4.  **Jitter (Pace Variance):**
+            *   Calculate the duration of every Speech Chunk from VAD.
+            *   Return the `Standard Deviation` of these durations.
+            *   High jitter = erratic/anxious speech (Power/Alert archetypes).
+            *   Low jitter = steady/measured speech (Trust/Mystique archetypes).
+        5.  **Overlap Ratio:**
+            *   For Reference Training Data: Force to `0.0` (single-speaker monologues).
+            *   For Runtime (multi-speaker): Calculate as `(overlapping_speech_ms / total_speech_ms)`.
+    *   **Output:** Appends `[f32; 4]` vector (`[wpm, latency, jitter, overlap]`) to the `RawSample` struct.
+    *   **UI Display:** Show a "Chronemic Stats" panel in the Source Inspector:
+        *   **Speed Meter:** Visual gauge showing WPM (color-coded: <100=Slow/Blue, 100-160=Normal/Green, >160=Fast/Red).
+        *   **Silence Pattern:** Bar chart showing distribution of pause durations.
+    *   **Validation:**
+        *   If WPM < 50 or WPM > 300, flag sample as "Anomalous Timing" (likely VAD error or non-speech audio).
+        *   If Latency > 5000ms (5 seconds average), flag as "High Latency Warning".
+
+*   **REQ-ING-007a: Chronemic Extraction CUDA Implementation.**
+    *   **Feature Used:** *Green Context A (Audio Lane)* with zero-copy memory access.
+    *   **Pipeline Integration:** Chronemic calculations occur *inline* with VAD processing:
+        1.  VAD kernel outputs speech chunk timestamps to shared memory.
+        2.  Chronemic kernel (same SM partition) immediately consumes timestamps.
+        3.  No PCIe round-trip required.
+    *   **Kernel Pseudocode:**
+    ```cuda
+    __global__ void chronemic_extract(
+        const VADTimestamp* chunks,
+        int chunk_count,
+        const char* transcript,
+        int word_count,
+        ChronemicVector* output
+    ) {
+        // Calculate total speech duration (parallel reduction)
+        float total_speech_ms = parallel_sum(chunks, chunk_count);
+
+        // WPM = (word_count / total_speech_ms) * 60000
+        output->wpm = (word_count / total_speech_ms) * 60000.0f;
+
+        // Calculate gaps between chunks
+        float* gaps = extract_gaps(chunks, chunk_count);
+        float* filtered_gaps = filter_gaps_gt(gaps, 200.0f); // >200ms only
+        output->latency = parallel_mean(filtered_gaps);
+
+        // Jitter = std_dev of chunk durations
+        float* durations = extract_durations(chunks, chunk_count);
+        output->jitter = parallel_std_dev(durations);
+
+        // Overlap forced to 0.0 for training data
+        output->overlap = 0.0f;
+    }
+    ```
+    *   **Benefit:** Chronemic extraction adds <1ms to the audio processing pipeline.
+
+### 3.2 Module B: The Forge (Calculation Core)
+**Goal:** Calculate centroids, mathematically generate secondary profiles, compute cultural baselines, and synthesize VAK reference vectors.
+
+*   **REQ-FORGE-001: Primary Centroid Calculation (6-Stream with Gender Separation).**
+    *   For each of the 7 Buckets, calculate the Mean Vector for all **6** embedding spaces (Semantic, Tone, Emotion, Style, Action, **Chronemic**).
+    *   **Gender-Specific Centroid Calculation for Audio Streams:**
+        *   For **Tone (Stream B)** and **Emotion (Stream C)**, the system MUST calculate **two separate centroids** per Bucket:
+            *   **Male Centroid:** Derived exclusively from samples tagged as `Gender::Male`.
+            *   **Female Centroid:** Derived exclusively from samples tagged as `Gender::Female`.
+        *   **Semantic, Style, Action, and Chronemic streams** calculate a single unified centroid (gender-neutral).
+    *   **Minimum Sample Requirement per Gender:**
+        *   Each gender category within a Bucket MUST have at least 3 samples for centroid calculation.
+        *   If a gender category has fewer than 3 samples, the UI displays: *"Warning: Insufficient [Male/Female] samples in [Bucket]. Add at least 3 samples for reliable centroid."*
+    *   **Chronemic Centroid Calculation:**
+        *   Calculate mean and standard deviation for each of the 4 chronemic dimensions (WPM, Latency, Jitter, Overlap) across all samples in the bucket.
+        *   Store the mean values as the centroid's chronemic vector.
+    *   *Visual:* Show standard deviation/variance within the bucket for each gender. If "Power Male" audio samples have high variance, the centroid is unstable (Data Quality Warning).
+
+**REQ-FORGE-001a: Gender-Specific Centroid Storage Structure**
+
+The calculated centroids are stored in the `NorthStarReferenceSet` struct with gender-specific fields for audio streams:
+
+```rust
+/// Centroid calculation result for a single Bucket (Primary Advantage)
+pub struct BucketCentroidResult {
+    pub advantage: Advantage,
+
+    // Gender-Neutral Streams (calculated from all samples)
+    pub semantic_centroid: [f32; 768],
+    pub style_centroid: f32,
+    pub action_centroid: [f32; 42],
+    pub chronemic_centroid: [f32; 4],
+
+    // Gender-Specific Audio Streams
+    pub tone_centroid_male: [f32; 512],
+    pub tone_centroid_female: [f32; 512],
+    pub emotion_centroid_male: [f32; 1024],
+    pub emotion_centroid_female: [f32; 1024],
+
+    // Quality metrics per gender
+    pub male_sample_count: u32,
+    pub female_sample_count: u32,
+    pub tone_variance_male: f32,
+    pub tone_variance_female: f32,
+    pub emotion_variance_male: f32,
+    pub emotion_variance_female: f32,
+}
+```
+*   **REQ-FORGE-002: The Mixing Matrix (49 Generator) (Tile Accelerated).**
+    *   Generate the 42 Secondary Archetypes using Weighted Vector Addition.
+    *   **Formula:** `Target = Normalize( (Primary * W1) + (Secondary * W2) )`.
+    *   *UI Control:* "Mixing Sliders." Allow the Data Scientist to adjust `W1` (default 0.7) and `W2` (default 0.3) globally or per-archetype to fine-tune the blend.
+*   **REQ-FORGE-002a: Tile-Based Vector Mixing.**
+    *   **Feature Used:** *CUDA Tile IR*.
+    *   **Logic:** Instead of looping through vectors with standard SIMT threads, map the 7 Primary Reference Vectors as "Tiles" in the L2 Cache.
+    *   **Operation:** Perform the weighted mix (`0.7*P + 0.3*S`) using Tile-level instructions.
+    *   **Benefit:** Extremely fast "Recalculate" speeds. When you move a slider in the UI, the 49 North Stars update in real-time (sub-millisecond latency) because the data never leaves the GPU registers/cache.
+*   **REQ-FORGE-003: Z-Score Outlier Auto-Pruning (Toxic Sample Detector).**
+    *   **Problem Solved:** One bad file (background noise, actor stuttering, wrong tone) in a batch of 50 skews the centroid significantly. Finding that one file manually is impossible.
+    *   **Solution:** Automated statistical outlier detection before centroid finalization.
+    *   **Logic:** Before finalizing a centroid, the system calculates a temporary centroid. It then measures the distance of every sample from that center.
+    *   **Action:** Any sample with a distance > **2.5 Standard Deviations** (Sigma) from the mean is automatically flagged as "Toxic."
+    *   **UI:** These files are highlighted in **Red** in the Source list with an "Exclude?" toggle.
+    *   **Benefit:** Keeps North Stars pure without manual hunting for bad samples.
+*   **REQ-FORGE-004: Bitwise Reproducibility.**
+    *   **Feature Used:** *CCCL 3.1 Deterministic Reductions*.
+    *   **Problem:** Floating point math is non-associative. Parallel reduction (calculating the mean of 100 vectors) can result in slightly different North Star coordinates run-to-run. This is unacceptable for a "Standard."
+    *   **Implementation:** Use `cub::DeviceReduce` with the `Run-to-run` determinism guarantee flag.
+    *   **Benefit:** Your North Star coordinates are mathematically absolute constants.
+
+*   **REQ-FORGE-005: Cultural Baseline Extraction (Z-Score Prep).**
+    *   **Problem:** The Runtime needs to know what "Normal" is to calculate Z-Scores using the formula: `Z = (Value - Mean) / StdDev`. Without baseline statistics, the Runtime cannot normalize chronemic data for cross-cultural comparison.
+    *   **Action:** After all samples are ingested, the Forge MUST calculate the **Global Mean** and **Global Standard Deviation** for each chronemic dimension across the *entire dataset*.
+    *   **Calculation Logic:**
+        1.  Collect all WPM values from every ingested sample (regardless of archetype).
+        2.  Calculate: `mean_wpm = sum(all_wpm) / count`
+        3.  Calculate: `std_dev_wpm = sqrt(sum((wpm - mean_wpm)^2) / count)`
+        4.  Repeat for Latency, Jitter (Overlap is always 0.0 for training).
+    *   **Output:** A `CulturalBaseline` struct containing:
+        ```rust
+        CulturalBaseline {
+            mean_wpm: f32,        // e.g., 145.0
+            std_dev_wpm: f32,     // e.g., 28.5
+            mean_latency: f32,    // e.g., 450.0 ms
+            std_dev_latency: f32, // e.g., 180.0 ms
+            mean_jitter: f32,     // e.g., 0.35
+            std_dev_jitter: f32,  // e.g., 0.12
+            sample_count: u32,    // Total samples used
+        }
+        ```
+    *   **UI Panel:** "Cultural Baseline Stats" in The Forge tab:
+        *   Display calculated Global Mean WPM (e.g., "145 WPM") with visual range indicator.
+        *   Display Global Mean Latency (e.g., "450ms average silence").
+        *   **Override Controls:** Allow the Data Scientist to manually override these values if the training data is biased:
+            *   "Force Baseline WPM to: [___]" (e.g., set to 150 if you know your training data speaks faster than the general population).
+            *   "Force Baseline Latency to: [___]" (e.g., set to 400ms for faster-paced cultures).
+        *   **Warning:** "Override Mode Active" indicator when manual values are used.
+    *   **Export:** This baseline is included in the binary header so the Runtime can apply Z-Score normalization.
+
+*   **REQ-FORGE-006: The VAK Refinery (Visual/Auditory/Kinesthetic Synthesis).**
+    *   **Goal:** Create 3 specific Reference Vectors for Visual, Auditory, and Kinesthetic modalities. The Runtime uses these to identify the user's preferred learning/communication style.
+    *   **Problem:** We don't have dedicated "Visual learner" audio files. VAK profiles must be synthesized from archetype compositions.
+    *   **Method:** Use **Archetype Composition** with hardcoded psychology rules based on VAK theory:
+
+    *   **VAK Profile Definitions:**
+
+        | VAK Type | Semantic Source | Chronemic Profile | Tone Profile | Rationale |
+        |:---|:---|:---|:---|:---|
+        | **Visual** | Centroid of Innovation + Power | WPM = `Mean + (1.5 * StdDev)` (Fast) | High Energy | Visualizers speak quickly, use "see/look/picture" language |
+        | **Auditory** | Centroid of Passion + Prestige | WPM = `Mean` (Moderate) | Clear, Resonant | Auditory learners match pace, use "hear/sound/listen" language |
+        | **Kinesthetic** | Centroid of Trust + Mystique | WPM = `Mean - (1.0 * StdDev)` (Slow) | Warm, Low | Kinesthetics speak slowly, use "feel/grasp/touch" language |
+
+    *   **Synthesis Algorithm:**
+        ```rust
+        fn synthesize_vak_profile(
+            vak_type: VakModality,
+            archetypes: &HashMap<Advantage, NorthStarReferenceSet>,
+            baseline: &CulturalBaseline,
+        ) -> NorthStarReferenceSet {
+            match vak_type {
+                VakModality::Visual => {
+                    // Semantic: Average of Innovation + Power
+                    let semantic = average_vectors(
+                        &archetypes[&Advantage::Innovation].semantic,
+                        &archetypes[&Advantage::Power].semantic,
+                    );
+                    // Chronemic: Fast pace
+                    let chronemic = [
+                        baseline.mean_wpm + (1.5 * baseline.std_dev_wpm), // Fast WPM
+                        baseline.mean_latency - (0.5 * baseline.std_dev_latency), // Short pauses
+                        baseline.mean_jitter, // Normal jitter
+                        0.0, // No overlap
+                    ];
+                    // ... compose other streams
+                }
+                VakModality::Auditory => {
+                    // Semantic: Average of Passion + Prestige
+                    let semantic = average_vectors(
+                        &archetypes[&Advantage::Passion].semantic,
+                        &archetypes[&Advantage::Prestige].semantic,
+                    );
+                    // Chronemic: Moderate pace
+                    let chronemic = [
+                        baseline.mean_wpm, // Average WPM
+                        baseline.mean_latency, // Average pauses
+                        baseline.mean_jitter * 0.8, // Slightly lower jitter (rhythmic)
+                        0.0,
+                    ];
+                }
+                VakModality::Kinesthetic => {
+                    // Semantic: Average of Trust + Mystique
+                    let semantic = average_vectors(
+                        &archetypes[&Advantage::Trust].semantic,
+                        &archetypes[&Advantage::Mystique].semantic,
+                    );
+                    // Chronemic: Slow pace
+                    let chronemic = [
+                        baseline.mean_wpm - (1.0 * baseline.std_dev_wpm), // Slow WPM
+                        baseline.mean_latency + (1.0 * baseline.std_dev_latency), // Long pauses
+                        baseline.mean_jitter * 0.5, // Low jitter (steady)
+                        0.0,
+                    ];
+                }
+            }
+        }
+        ```
+
+    *   **UI Control: "VAK Tuner" Panel:**
+        *   Three expandable sections (Visual / Auditory / Kinesthetic).
+        *   **Source Archetypes:** Dropdown to change which archetypes compose the VAK profile (e.g., swap "Innovation" for "Alert" in Visual).
+        *   **Speed Offset Slider:** Adjust the WPM multiplier (default: +1.5σ for Visual, 0 for Auditory, -1.0σ for Kinesthetic).
+        *   **Preview Button:** Plays a synthetic audio sample at the calculated WPM/Latency to "hear" the profile.
+        *   **Lock Toggle:** Once satisfied, lock the VAK profile to prevent accidental changes.
+
+    *   **Validation:**
+        *   After synthesis, verify that the 3 VAK vectors have cosine distance > 0.3 from each other (they must be distinct).
+        *   If VAK profiles overlap too much, UI displays warning: *"VAK differentiation too low. Adjust speed offsets or source archetypes."*
+
+    *   **Benefit:** Creates 3 scientifically-grounded VAK North Stars that the Runtime uses for modality identification, synthesized from your archetype training data without requiring separate VAK-specific audio.
+
+### 3.3 Module C: The Proving Ground (Testing & Validation)
+**Goal:** Verify the coordinate system works on new data.
+
+*   **REQ-TEST-001: Mystery Injection.**
+    *   Allow upload of a "Test File" (Audio or Text) that was *not* in the training set.
+*   **REQ-TEST-002: Live Classification.**
+    *   System embeds the test file and calculates Cosine Similarity against all 49 generated North Stars.
+    *   *Visual:* A ranked list of the Top 5 matches with confidence scores.
+*   **REQ-TEST-003: VAK Validation.**
+    *   Dedicated test zone for Visual/Auditory/Kinesthetic text inputs to verify VAK vector separation.
+*   **REQ-TEST-004: The Ghost Protocol (Auto-Validation).**
+    *   **Problem Solved:** Manually testing one file at a time is slow. You need to know: "If I ran this on 100 random people, how often would it be right?"
+    *   **Solution:** Leave-One-Out Cross-Validation (LOOCV).
+    *   **Action:** When clicked, the system runs a simulation:
+        1.  It temporarily removes **10%** of your training data from the centroid calculation.
+        2.  It calculates North Stars using the remaining **90%**.
+        3.  It treats the removed 10% as "Unknown Users."
+        4.  It attempts to classify them.
+    *   **Output:** **Confusion Matrix.**
+        *   *"When the input was actually 'Power', the system guessed 'Power' 95% of the time and 'Prestige' 5% of the time."*
+    *   **Value:** Ultimate proof that your system is working perfectly before you ever run the real app.
+    *   **Benefit:** Simulates thousands of tests to prove reliability.
+*   **REQ-TEST-004a: Tile-Based Cross-Validation & CUDA Graph Execution.**
+    *   **Feature Used:** *Nsight Compute Tile Profiling* and *CUDA Graphs with Device-Side Node Profiling*.
+    *   **Implementation:** The "Ghost Protocol" (LOOCV) requires training and testing 100+ times rapidly. This simulation loop is written as a custom **CUDA Tile Kernel**.
+    *   **CUDA Graph Capture:** Capture the entire validation loop (Split Data → Calc Reference Vector → Classify → Record Score) into a single **CUDA Graph**. Upload the Graph to the GPU once. Trigger it with a single CPU signal.
+    *   **Benefit:** Reduces the "Ghost Protocol" runtime from minutes to seconds. The validation runs at "Hardware Speed" with zero CPU intervention. The progress bar zips from 0% to 100% almost instantly, making stress testing feel like a lightweight operation.
+
+### 3.4 Module D: Visualization & Analytics
+**Goal:** See the math.
+
+*   **REQ-VIZ-001: 3D Galaxy View.**
+    *   Project 768d/512d vectors down to 3D using UMAP or t-SNE.
+    *   Render the 49 North Stars as fixed points.
+    *   Render the Ingested Samples as small dots clouding around the North Stars.
+    *   *Success Metric:* Distinct clusters with minimal overlap.
+*   **REQ-VIZ-002: Confusion Matrix / Distance Heatmap.**
+    *   A 49x49 grid showing the cosine distance between every archetype.
+    *   *Alert:* Highlight any two archetypes with distance < 0.05 (Too similar, risk of hallucination).
+*   **REQ-VIZ-003: Cluster Health Telemetry (Silhouette Score).**
+    *   **Problem Solved:** Looking at 3D dots is subjective. You need a number that proves your North Stars are distinct.
+    *   **Solution:** The **Silhouette Coefficient** measures how similar an object is to its own cluster (cohesion) compared to other clusters (separation).
+    *   **Metric: Global Separation Score (0.0 - 1.0).**
+        *   *High (>0.7):* Perfect North Stars.
+        *   *Low (<0.3):* Your Archetypes overlap too much.
+    *   **Metric: VAK Orthogonality.**
+        *   Measures the angle between Visual, Auditory, and Kinesthetic vectors. Ideally, they should be ~90 degrees (orthogonal) to each other in Semantic space.
+    *   **UI Display:** A "Health Bar" at the top of the Visualize tab. If it's Red, the tool prevents Export.
+    *   **Benefit:** Mathematical proof that profiles are distinct (no guessing from visual inspection).
+*   **REQ-VIZ-004: Ghost Overlay (A/B Version Comparison).**
+    *   **Problem Solved:** You tweak weights for "Trust" and hit recalculate. Did it improve? Or did you break "Mystique"? Remembering the previous state is impossible.
+    *   **Solution:** Snapshot-based differential analysis.
+    *   **UI:** A "Snapshot" button in the visualization toolbar.
+    *   **Action:** Saves the current coordinate state as "Version A."
+    *   **Visual:** When you tweak parameters (creating Version B), the UI renders **Version A** as faint "Ghost Dots" and **Version B** as solid dots with trail lines connecting them.
+    *   **Benefit:** Visual drift tracking: *"Changing the semantic weight moved 'Trust' closer to 'Passion' by 5%."*
+*   **REQ-VIZ-005: Semantic Token Heatmap (Keyword Influence Analyzer).**
+    *   **Problem Solved:** Your Semantic Vector for "Innovation" is positioned somewhere specific. Why? Is it because of "Create"? "New"? "Disrupt"? You need to know which words are doing the heavy lifting.
+    *   **Solution:** Explainable AI (XAI) through occlusion testing.
+    *   **Action:** In the "Inspector" view for the Semantic Stream.
+    *   **Logic:** The system runs an occlusion test (removes one word, checks how much the vector moves).
+    *   **UI:** Displays training sentences with words highlighted by **Weight**.
+        *   *Example:* "**Disrupt** the **status quo** immediately." → "Disrupt" is bright red (High Impact), "the" is gray (No Impact).
+    *   **Benefit:** Reveals accidental bias (e.g., if "Monday" appears in 5 sentences, the model might incorrectly associate "Monday" = "Power").
+
+*   **REQ-VIZ-006: Chronemic Distribution Analyzer (Speed vs Silence Plot).**
+    *   **Purpose:** Visualize the temporal characteristics of your training data to verify that archetype-specific timing patterns are captured correctly.
+    *   **Visual:** A **Scatter Plot** with:
+        *   **X-Axis:** WPM (Words Per Minute) - Speech Speed
+        *   **Y-Axis:** Latency (Average Silence Gap in ms)
+    *   **Data Points:**
+        *   Plot every ingested audio sample as a dot.
+        *   Color-code by Primary Advantage (Power=Red, Trust=Blue, Mystique=Purple, etc.).
+        *   Size dots by sample duration (longer samples = larger dots).
+    *   **Expected Distribution:**
+        *   **Power/Alert samples:** Should cluster in the **Bottom-Right** (Fast speech, short pauses).
+        *   **Trust/Mystique samples:** Should cluster in the **Top-Left** (Slow speech, long pauses).
+        *   **Passion samples:** Should appear in the **Right-Center** (Fast but with dramatic pauses).
+    *   **Quadrant Labels:**
+        | Quadrant | WPM | Latency | Expected Archetypes |
+        |:---|:---|:---|:---|
+        | Top-Left | Low (<120) | High (>500ms) | Trust, Mystique |
+        | Top-Right | High (>150) | High (>500ms) | Passion (dramatic pauses) |
+        | Bottom-Left | Low (<120) | Low (<300ms) | Alert (terse, measured) |
+        | Bottom-Right | High (>150) | Low (<300ms) | Power, Innovation |
+    *   **Interaction:**
+        *   **Click a dot:** Plays the corresponding audio sample (verify VAD calculated speed correctly).
+        *   **Lasso Selection:** Select multiple dots to view aggregate statistics.
+        *   **Zoom:** Focus on specific quadrants for detailed analysis.
+    *   **Overlay: Archetype Centroids.**
+        *   Show the 7 Primary Archetype centroids as large labeled markers.
+        *   Draw convex hulls around samples belonging to each archetype.
+    *   **Success Criteria:**
+        *   Minimal overlap between archetype clusters.
+        *   Each archetype's centroid is near the center of its sample cloud.
+    *   **Alert Conditions:**
+        *   If "Power" samples have average WPM < 130: *"Warning: Power samples speak slower than expected. Verify training data."*
+        *   If "Trust" samples have average WPM > 160: *"Warning: Trust samples speak faster than expected. This may reduce archetype distinction."*
+
+*   **REQ-VIZ-007: VAK Orthogonality Scope (3D VAK Vector View).**
+    *   **Purpose:** Ensure the 3 VAK Reference Sets (Visual, Auditory, Kinesthetic) are sufficiently distinct from each other in vector space. If they overlap, the Runtime will misclassify user modalities.
+    *   **Visual:** A dedicated **3D Vector View** showing only the 3 VAK North Stars:
+        *   **Visual:** Rendered as a large blue sphere.
+        *   **Auditory:** Rendered as a large green sphere.
+        *   **Kinesthetic:** Rendered as a large orange sphere.
+    *   **Geometric Analysis:**
+        *   Draw lines connecting each pair of VAK spheres.
+        *   Display the **angle** between each pair:
+            *   Visual↔Auditory: θ₁
+            *   Auditory↔Kinesthetic: θ₂
+            *   Kinesthetic↔Visual: θ₃
+        *   **Ideal:** All angles should be ~60° (equilateral triangle in semantic space).
+        *   **Minimum:** All angles must be > 30° for reliable classification.
+    *   **Distance Metrics Table:**
+        | Pair | Cosine Distance | Angular Distance | Status |
+        |:---|:---|:---|:---|
+        | Visual ↔ Auditory | 0.42 | 65° | ✓ Good |
+        | Auditory ↔ Kinesthetic | 0.38 | 58° | ✓ Good |
+        | Kinesthetic ↔ Visual | 0.25 | 32° | ⚠ Low |
+    *   **Alert System:**
+        *   **Green (>45°):** *"VAK profiles are well-differentiated."*
+        *   **Yellow (30°-45°):** *"VAK differentiation is marginal. Consider adjusting VAK Tuner settings."*
+        *   **Red (<30°):** *"VAK COLLISION DETECTED. Visual and Kinesthetic profiles are too similar. The Runtime will misclassify users. Action Required: Increase semantic keyword weight or adjust speed offsets in the VAK Tuner."*
+    *   **Projection Options:**
+        *   Toggle between "Semantic Space" (768d projected to 3D) and "Chronemic Space" (4d projected to 2D).
+        *   In Chronemic Space, VAK profiles should form a clear triangle when plotted by WPM vs Latency.
+    *   **Interactive Adjustment:**
+        *   Click on a VAK sphere to open the VAK Tuner panel.
+        *   Adjust source archetypes or speed offsets.
+        *   Watch the sphere move in real-time to visualize the impact.
+    *   **Benefit:** Mathematical proof that your VAK system will correctly distinguish Visual, Auditory, and Kinesthetic users before deployment.
+
+#### 3.5 Module E: The Export & Serialization Engine
+**Goal:** Serialize the calculated state into the strict binary format required by the runtime, including all **52 Reference Sets** (49 Archetypes + 3 VAK) and the **Cultural Baseline** for Z-Score normalization.
+
+*   **REQ-EXP-001: Strict Schema Compliance (Updated for 6-Stream + VAK)**
+    *   The system MUST serialize the data into a `HogsheadBinaryPackage` struct containing:
+        1.  `archetypes: HashMap<u8, NorthStarReferenceSet>` - The 49 Hogshead Archetypes.
+        2.  `vak_profiles: HashMap<VakModality, NorthStarReferenceSet>` - The 3 VAK Reference Sets.
+        3.  `baseline: CulturalBaseline` - The cultural baseline statistics for Z-Score normalization.
+        4.  `schema_version: u8` - Version 2 (added Chronemic + VAK support).
+    *   The serialization format MUST be **Little Endian** (standard for x86_64/Bincode) to ensure compatibility with the Runtime architecture.
+    *   **Constraint:** The `NorthStarReferenceSet` struct definition in this tool MUST be byte-for-byte identical to the struct in the Runtime crate (`cognitive-core`), including the new `chronemic: [f32; 4]` field.
+
+*   **REQ-EXP-002: Pre-Flight Integrity Check (Updated for 52 Arrays)**
+    *   Before allowing export, the system MUST run a comprehensive validation pass:
+        1.  **Archetype Count Check:** Are there exactly 49 keys in the archetypes HashMap? (Panic if < 49).
+        2.  **VAK Count Check:** Are there exactly 3 keys in the vak_profiles HashMap (Visual, Auditory, Kinesthetic)? (Panic if < 3).
+        3.  **6-Stream Vector Check:** For ALL 52 Reference Sets:
+            *   Semantic: 768 dimensions, non-zero values.
+            *   Tone: 512 dimensions, non-zero values.
+            *   Emotion: 1024 dimensions, non-zero values.
+            *   Style: Scalar value (can be 0.0-1.0).
+            *   Action: 42 dimensions, valid probability distribution (sums to ~1.0).
+            *   **Chronemic: 4 dimensions, non-zero values** (NEW).
+        4.  **Cultural Baseline Check:**
+            *   `mean_wpm` must be between 80-220 (reasonable speech range).
+            *   `std_dev_wpm` must be > 0 (avoid division by zero in Runtime).
+            *   `sample_count` must be > 0.
+        5.  **VAK Orthogonality Check:**
+            *   Minimum angular distance between any two VAK profiles must be > 30°.
+            *   If < 30°: Block export with error *"VAK profiles too similar. Runtime will misclassify users."*
+
+*   **REQ-EXP-003: Atomic Write**
+    *   The file export should write to a temporary file first (e.g., `.tmp`) and rename it to `hogshead_reference_vectors.bin` only upon successful completion to prevent file corruption.
+
+*   **REQ-EXP-004: Binary Schema Version Header (New)**
+    *   The binary file MUST begin with a 4-byte header:
+        *   Bytes 0-1: Magic number `0x4847` ("HG" for Hogshead).
+        *   Byte 2: Schema version (currently `0x02` for v2 with Chronemic + VAK).
+        *   Byte 3: Reserved for future flags.
+    *   **Purpose:** Allows the Runtime to detect and reject incompatible binary files.
+    *   **Backward Compatibility:** Runtime should gracefully error if schema version < 2: *"Binary file missing Chronemic/VAK data. Please regenerate with North Star Refinery v2.0+"*
+
+*   **REQ-EXP-005: Export Summary Report (New)**
+    *   Upon successful export, generate a human-readable summary file (`hogshead_reference_vectors.json`) containing:
+        ```json
+        {
+            "schema_version": 2,
+            "export_timestamp": "2025-12-06T08:15:00Z",
+            "archetype_count": 49,
+            "vak_count": 3,
+            "cultural_baseline": {
+                "mean_wpm": 145.2,
+                "std_dev_wpm": 28.5,
+                "mean_latency_ms": 450.0,
+                "std_dev_latency_ms": 180.0,
+                "sample_count": 847
+            },
+            "vak_orthogonality": {
+                "visual_auditory_angle": 65.2,
+                "auditory_kinesthetic_angle": 58.7,
+                "kinesthetic_visual_angle": 72.1,
+                "minimum_angle": 58.7,
+                "status": "PASS"
+            },
+            "checksum_sha256": "a1b2c3d4e5f6..."
+        }
+        ```
+    *   **Purpose:** Allows verification without loading the binary file.
+
+#### 3.6 Module F: The Math Wizard (Auto-Optimization)
+**Goal:** Automatically find the mixing weights that maximize the distance between different archetypes.
+
+*   **REQ-OPT-001: The "Maximize Separation" Button**
+    *   **Problem:** You don't know if the Primary/Secondary mix should be 70/30, 65/35, or 60/40.
+    *   **Action:** When clicked, the system runs a **Grid Search**.
+    *   **Logic:**
+        1.  It simulates mixing the archetypes at every increment (0.60, 0.61, 0.62... up to 0.90).
+        2.  For each increment, it calculates the **Global Silhouette Score** (how distinct the 49 points are).
+        3.  It selects the specific weight that produces the highest score.
+    *   **Result:** The system automatically sets the sliders to the mathematically perfect ratio. You do zero guessing.
+
+*   **REQ-OPT-002: Dynamic Contrast Enhancement (The "Squash" Function)**
+    *   **Problem:** Raw vectors are often "fuzzy" and bunched together.
+    *   **Action:** Add a "Contrast" slider that applies a mathematical **Sigmoid** function to the final vectors.
+    *   **Math:** $Vector_{new} = \frac{1}{1 + e^{-k(Vector_{old})}}$ (where $k$ is contrast).
+    *   **Effect:** This pushes values closer to 0 or 1, making the vectors "sharper" and easier for the runtime to classify.
+    *   **UX:** You drag one slider called "Contrast," and the clusters on the screen physically move apart.
+
+*   **REQ-OPT-003: Custom Metric Sandbox (cuTile Python).**
+    *   **Feature Used:** *cuTile Python (Numba JIT Compiler)*.
+    *   **The Problem:** Right now, the PRD hardcodes "Cosine Similarity" and "Weighted Mixing." As a Data Scientist, you might want to experiment: *"What if I use Mahalanobis distance for the Tone stream? What if I use a non-linear mixing function?"* You shouldn't have to recompile Rust code to test a math hypothesis.
+    *   **UI:** A "Scripting Console" tab in the Math Wizard.
+    *   **Action:** Allows you to write a Python function for vector mixing or distance calculation.
+    *   **Backend:** The system JIT-compiles this Python code into **CUDA Tile IR** at runtime and executes it on the GPU.
+    *   **Benefit:** You get Python's ease of use with the RTX 5090's raw hardware speed. You can prototype complex mixing logic instantly without touching the Rust codebase.
+
+---
+
+## 3.7 Non-Functional Requirements (NFRs)
+
+### NFR-001: Performance
+
+| Metric | Target | Measurement Method | Priority |
+|:-------|:-------|:-------------------|:---------|
+| **Centroid Recalculation Latency** | <100ms after slider adjustment | Timestamp delta from input to render | MUST |
+| **Batch Embedding Inference** | >500 samples/minute on RTX 5090 | GPU throughput counter | MUST |
+| **UI Framerate** | ≥60 FPS during heavy computation | FPS counter in Three.js | MUST |
+| **Ghost Protocol (LOOCV)** | <10 seconds for 1000 samples | End-to-end benchmark | SHOULD |
+| **Binary Export** | <2 seconds for complete validation + write | Timer from button click to completion | MUST |
+| **UMAP Projection** | <5 seconds for 10,000 points | GPU compute timer | SHOULD |
+
+### NFR-002: Reliability
+
+| Metric | Target | Measurement Method | Priority |
+|:-------|:-------|:-------------------|:---------|
+| **Bitwise Reproducibility** | 100% identical outputs across runs | SHA256 comparison of binary exports | MUST |
+| **File Corruption Prevention** | 0% corruption rate | Atomic write verification | MUST |
+| **VRAM Overflow Protection** | Graceful degradation to CPU fallback | Memory monitoring with threshold alerts | SHOULD |
+| **Session Recovery** | Resume from last checkpoint after crash | State serialization test | SHOULD |
+
+### NFR-003: Scalability
+
+| Metric | Target | Measurement Method | Priority |
+|:-------|:-------|:-------------------|:---------|
+| **Maximum Training Samples** | 10,000+ per archetype | Load test with synthetic data | SHOULD |
+| **Visualization Capacity** | 50,000 points in 3D view with FP8 storage | Stress test with max load | SHOULD |
+| **Concurrent Model Inference** | 5 models running simultaneously via Grouped GEMM | GPU utilization monitoring | MUST |
+
+### NFR-004: Security
+
+| Metric | Target | Measurement Method | Priority |
+|:-------|:-------|:-------------------|:---------|
+| **Python Sandbox Isolation** | No filesystem access from cuTile scripts | Sandboxing verification | MUST |
+| **Binary Integrity** | SHA256 checksum in export JSON | Hash verification | MUST |
+| **Model Path Validation** | Only allow configured model directories | Path traversal test | MUST |
+
+### NFR-005: Usability
+
+| Metric | Target | Measurement Method | Priority |
+|:-------|:-------|:-------------------|:---------|
+| **Manager Dashboard Clarity** | Non-technical users can approve in <5 minutes | User testing | SHOULD |
+| **Error Messages** | All errors include actionable guidance | Error message audit | MUST |
+| **Keyboard Accessibility** | All primary actions via keyboard | Accessibility audit | COULD |
+
+---
+
+## 3.8 Edge Cases and Error Handling
+
+### EC-ING: Ingestion Edge Cases
+
+| ID | Edge Case | Expected Behavior | Priority |
+|:---|:----------|:------------------|:---------|
+| EC-ING-001 | Audio file is <0.5 seconds | Reject with error: "Audio too short (minimum 0.5s required)" | MUST |
+| EC-ING-002 | Audio file is >30 minutes | Show warning, offer auto-segmentation | SHOULD |
+| EC-ING-003 | Audio is non-speech (music, noise) | VAD returns no speech chunks, flag as "No Speech Detected" | MUST |
+| EC-ING-004 | Audio sample rate ≠ 16kHz | Auto-resample with quality warning if >48kHz downsampling | MUST |
+| EC-ING-005 | Text file is empty | Reject with error: "Empty file cannot be processed" | MUST |
+| EC-ING-006 | Text contains only non-Latin characters | Process normally (Nomic supports multilingual) but warn if training data is mixed-language | SHOULD |
+| EC-ING-007 | Duplicate file dropped | Detect by hash, prompt "File already imported. Replace?" | SHOULD |
+| EC-ING-008 | Corrupted audio file (invalid header) | Catch decode error, display "Invalid audio format" | MUST |
+
+### EC-FORGE: Forge Edge Cases
+
+| ID | Edge Case | Expected Behavior | Priority |
+|:---|:----------|:------------------|:---------|
+| EC-FORGE-001 | Bucket has only 1 sample | Block centroid calculation with "Minimum 5 samples required per archetype" | MUST |
+| EC-FORGE-002 | All samples are identical (variance = 0) | Display warning "Zero variance detected - samples may be duplicates" | MUST |
+| EC-FORGE-003 | >50% of samples flagged as toxic | Display warning "Majority of samples are outliers. Review training data quality." | SHOULD |
+| EC-FORGE-004 | Primary weight slider set to 1.0 | Secondary weight becomes 0.0, all 42 secondaries become identical to primaries | MUST handle gracefully |
+| EC-FORGE-005 | Chronemic extraction fails (no transcript) | Set chronemic vector to [0,0,0,0], flag as "Chronemic data unavailable" | MUST |
+
+### EC-VAK: VAK Edge Cases
+
+| ID | Edge Case | Expected Behavior | Priority |
+|:---|:----------|:------------------|:---------|
+| EC-VAK-001 | VAK angular distance <30° | Block export, display "VAK COLLISION: Visual and [X] profiles are too similar" | MUST |
+| EC-VAK-002 | User selects same archetype for both VAK sources | Display warning "Same archetype selected twice - VAK profile will be less distinct" | SHOULD |
+| EC-VAK-003 | Speed offset results in WPM <50 or >300 | Clamp to valid range with warning "Speed offset adjusted to stay within valid range" | MUST |
+
+### EC-EXP: Export Edge Cases
+
+| ID | Edge Case | Expected Behavior | Priority |
+|:---|:----------|:------------------|:---------|
+| EC-EXP-001 | <49 archetypes calculated | Block export with "Missing archetypes: [list]" | MUST |
+| EC-EXP-002 | Disk full during write | Atomic write fails, temp file cleaned up, error displayed | MUST |
+| EC-EXP-003 | Export path contains non-ASCII characters | Handle with UTF-8 encoding, warn on Windows if path >260 chars | SHOULD |
+| EC-EXP-004 | User attempts to overwrite existing file | Prompt "File exists. Overwrite?" with cancel option | MUST |
+
+### EC-VIZ: Visualization Edge Cases
+
+| ID | Edge Case | Expected Behavior | Priority |
+|:---|:----------|:------------------|:---------|
+| EC-VIZ-001 | >50,000 points to render | Subsample with warning "Showing 50,000 of [N] points for performance" | SHOULD |
+| EC-VIZ-002 | All 49 archetypes collapse to single point | Display "CRITICAL: All archetypes are identical. Training data may be corrupted." | MUST |
+| EC-VIZ-003 | GPU memory exhausted during UMAP | Fallback to CPU UMAP with progress indicator and warning | SHOULD |
+
+---
+
+## 3.9 Success Metrics and KPIs
+
+### Quantitative Metrics
+
+| KPI | Target | Measurement Method | Reporting Frequency |
+|:----|:-------|:-------------------|:--------------------|
+| **Calibration Time** | <1 hour end-to-end (vs 8-12 hours baseline) | Session timer from first import to final export | Per session |
+| **Classification Accuracy (Ghost Protocol)** | >95% on holdout set | Confusion matrix diagonal sum / total | Per calibration |
+| **Silhouette Score** | >0.7 (distinct clusters) | Automated calculation in Visualize tab | Per calibration |
+| **VAK Orthogonality** | All pairs >45° angular distance | Automated calculation in VAK Tuner | Per calibration |
+| **Toxic Sample Detection Rate** | >90% of true outliers flagged | Manual review of flagged samples | Quarterly audit |
+| **Export Success Rate** | >99% (no corruption or schema errors) | Export logs analysis | Monthly |
+| **Bitwise Reproducibility Rate** | 100% across runs | Automated CI test with hash comparison | Every build |
+
+### Qualitative Metrics
+
+| KPI | Target | Measurement Method | Reporting Frequency |
+|:----|:-------|:-------------------|:--------------------|
+| **Manager Approval Confidence** | "Easy to understand" rating >4/5 | Post-calibration survey | Quarterly |
+| **Data Scientist Satisfaction** | NPS >50 | User survey | Quarterly |
+| **Time to First Successful Export** | <30 minutes for new users | Onboarding session tracking | Per new user |
+
+---
+
+## 3.10 Scope Boundaries
+
+### In Scope
+
+- Ingestion of audio (.wav, .mp3) and text (.txt, .json) training samples
+- Embedding extraction using 5 pre-trained models (Nomic, WavLM, Wav2Vec2, RoBERTa, BERT)
+- Chronemic feature extraction from audio (WPM, Latency, Jitter, Overlap)
+- Primary centroid calculation (7 Hogshead Advantages)
+- Secondary archetype generation (42 combinations) via weighted mixing
+- VAK profile synthesis from archetype compositions
+- Cultural baseline calculation for Z-Score normalization
+- 3D visualization using UMAP/t-SNE projection
+- Distance matrix heatmap visualization
+- Cross-validation (Ghost Protocol) for accuracy verification
+- Binary export in exact runtime-compatible format
+- Manager-friendly traffic light dashboard
+
+### Out of Scope
+
+| Item | Rationale | Future Phase? |
+|:-----|:----------|:--------------|
+| **Runtime inference** | This is a calibration tool, not the production runtime | No |
+| **Model fine-tuning/training** | Uses pre-trained models only | Phase 3 |
+| **Multi-language GUI** | English-only for v1 | Phase 2 |
+| **Cloud deployment** | Desktop application only | Under consideration |
+| **User authentication** | Single-user desktop tool | Phase 2 if multi-user needed |
+| **Database storage** | File-based project saves only | Phase 2 |
+| **Real-time audio capture** | Uses pre-recorded files only | Not planned |
+| **Custom model integration** | Fixed set of 5 models | Phase 3 |
+
+---
+
+## 3.11 Agent Implementation Details
+
+### 3.11.1 Autonomy Level
+
+| Component | Autonomy Level | Human Oversight Required |
+|:----------|:---------------|:-------------------------|
+| **File Ingestion** | Full Autonomy | None - automatic processing |
+| **Embedding Extraction** | Full Autonomy | None - deterministic model inference |
+| **Toxic Sample Detection** | Advisory | Human reviews flagged samples before exclusion |
+| **Centroid Calculation** | Full Autonomy | None - deterministic math |
+| **Mixing Weight Optimization** | Advisory | Human approves grid search results |
+| **VAK Synthesis** | Advisory | Human configures source archetypes and offsets |
+| **Export Validation** | Gate | Export blocked if validation fails |
+| **Binary Export** | Requires Approval | Human clicks Export button |
+
+### 3.11.2 Tool Access for AI Agent
+
+The implementing AI agent has access to:
+
+| Tool Category | Specific Tools | Purpose |
+|:--------------|:---------------|:--------|
+| **File System** | Read (audio/text files), Write (binary exports, JSON reports) | Data ingestion and export |
+| **GPU Compute** | CUDA kernels, cuBLAS, cuFFT, cub::DeviceReduce | Embedding extraction, matrix operations |
+| **Python Runtime** | Numba JIT for cuTile | Custom distance metrics in sandbox |
+| **UI Framework** | Tauri IPC, React state management | User interface rendering |
+| **Visualization** | Three.js, UMAP library | 3D cluster visualization |
+
+### 3.11.3 Capability Assumptions
+
+The AI agent implementing this PRD is assumed to have:
+
+1. **Rust Proficiency:** Expert-level knowledge of Rust, including:
+   - Async programming with Tokio
+   - GPU programming with rust-cuda or cudarc
+   - Tauri framework for desktop applications
+   - Serde for serialization/deserialization
+
+2. **CUDA Proficiency:** Working knowledge of:
+   - Green Contexts (CUDA 13.1)
+   - cuBLAS Grouped GEMM
+   - cuFFT Device Extensions
+   - CUDA Graphs with device-side launch
+   - CCCL 3.1 deterministic reductions
+
+3. **ML/Embedding Proficiency:** Ability to:
+   - Load and run inference with HuggingFace models (Nomic, WavLM, Wav2Vec2, RoBERTa, BERT)
+   - Implement mean pooling and L2 normalization
+   - Calculate cosine similarity and distance matrices
+
+4. **Frontend Proficiency:** Experience with:
+   - React with TypeScript
+   - Three.js for 3D visualization
+   - Recharts for 2D charts
+   - Zustand for state management
+
+### 3.11.4 Implementation Checkpoints
+
+| Checkpoint | Description | Validation Criteria | Human Action |
+|:-----------|:------------|:--------------------|:-------------|
+| **CP-001** | Project Skeleton | Tauri app builds, React renders, GPU detected | Approve architecture |
+| **CP-002** | Ingestion Engine | Files ingest, embeddings extract, progress shows | Verify sample processing |
+| **CP-003** | Forge Core | Centroids calculate, mixing works, sliders update | Approve math correctness |
+| **CP-004** | Visualization | 3D view renders, heatmap displays, 60 FPS achieved | Approve visual quality |
+| **CP-005** | Testing Module | Ghost Protocol runs, confusion matrix displays | Approve accuracy metrics |
+| **CP-006** | Export Engine | Binary exports, JSON report generated, runtime loads file | Final acceptance |
+
+---
+
+## 3.12 Guardrails and Constraints
+
+### Technical Constraints
+
+| Constraint | Rationale | Enforcement |
+|:-----------|:----------|:------------|
+| **NorthStarReferenceSet struct must match cognitive-core** | Runtime compatibility | Compile-time type checking, CI test |
+| **All audio resampled to 16kHz** | Model requirement | Preprocessing pipeline enforces |
+| **Nomic embeddings require task prefixes** | Model design | Prefix injected automatically |
+| **Binary format must be Little Endian** | x86_64 compatibility | bincode configuration |
+| **Schema version header required** | Forward compatibility | Validation blocks export without header |
+
+### Business Constraints
+
+| Constraint | Rationale | Enforcement |
+|:-----------|:----------|:------------|
+| **Cannot train/fine-tune models** | Uses pre-trained models only | No training APIs exposed |
+| **Cannot connect to external services** | Offline desktop tool | No network calls in application |
+| **Export requires all 52 Reference Sets** | Runtime minimum requirement | Pre-flight validation |
+| **Manager approval required for production deployment** | Governance | Traffic light must be Green |
+
+### Safety Guardrails
+
+| Guardrail | Description | Trigger Condition |
+|:----------|:------------|:------------------|
+| **Export Block on Validation Failure** | Cannot export if pre-flight checks fail | Any REQ-EXP-002 check fails |
+| **VAK Collision Prevention** | Cannot export if VAK profiles too similar | Angular distance <30° |
+| **Toxic Sample Warning** | Highlights outliers before centroid finalization | Sample >2.5σ from mean |
+| **Silhouette Score Alert** | Warns if clusters are poorly separated | Score <0.3 |
+| **VRAM Overflow Protection** | Graceful degradation before GPU crash | VRAM usage >90% |
+| **Python Sandbox Isolation** | cuTile scripts cannot access filesystem | Sandboxed execution environment |
+
+---
+
+## 3.13 Risks and Mitigations
+
+| Risk ID | Risk Description | Probability | Impact | Mitigation Strategy |
+|:--------|:-----------------|:------------|:-------|:--------------------|
+| RISK-001 | Training data bias leads to skewed centroids | Medium | High | Toxic sample detection + human review + data augmentation |
+| RISK-002 | CUDA 13.1 unavailable on target hardware | Low | Critical | Fallback paths for CUDA 12.x (without Green Contexts) |
+| RISK-003 | Schema mismatch with runtime causes crashes | Medium | Critical | Version header + CI tests with runtime crate |
+| RISK-004 | Non-deterministic floating point breaks reproducibility | Medium | High | CCCL 3.1 deterministic reductions + hash verification |
+| RISK-005 | User exports without validation (bypasses UI) | Low | High | Pre-flight checks in export function, not just UI |
+| RISK-006 | VAK profiles too similar for reliable classification | Medium | Medium | Orthogonality validation + export block |
+| RISK-007 | Python sandbox escape in cuTile | Low | Critical | Sandboxed execution + no filesystem access |
+| RISK-008 | Large dataset exceeds VRAM capacity | Medium | Medium | FP8 storage + graceful fallback to CPU |
+| RISK-009 | UI freezes during heavy computation | High (without mitigation) | Medium | Green Context SM partitioning (17/170 for UI) |
+| RISK-010 | Manager approves without understanding | Medium | Low | Traffic light dashboard + plain language explanations |
+
+---
+
+## 3.14 Human Oversight Checkpoints
+
+| Phase | Checkpoint | Human Decision Required | Escalation Path |
+|:------|:-----------|:-----------------------|:----------------|
+| **Ingestion** | Sample Review | Approve/reject flagged outliers | Lead Data Scientist |
+| **Forge** | Centroid Approval | Verify cluster quality in 3D view | Lead Data Scientist |
+| **Forge** | Mixing Weight Selection | Accept auto-optimized weights or adjust manually | Lead Data Scientist |
+| **VAK** | Profile Configuration | Approve source archetype selections and speed offsets | Lead Data Scientist |
+| **Validation** | Ghost Protocol Results | Review confusion matrix and accuracy score | Lead Data Scientist |
+| **Export** | Pre-Deployment Approval | Final sign-off on production readiness | Product Manager |
+| **Production** | Runtime Integration | Verify binary loads correctly in production | ML Engineer |
+
+---
+
+
+
+---
+
+File Name: northstarprd copy 4.md
+File Path: docs2/northstarrefinery/northstarprd copy 4.md
+Contents:
+
+## 4. UI/UX Design Specifications
+
+**Tech Stack:** React (Frontend) + Tauri (Rust Bindings) + Three.js (3D) + Recharts (2D).
+
+### 4.1 Layout Overview
+The application is divided into 4 main Tabs: **Sources**, **Forge**, **Visualize**, **Test**.
+
+### 4.2 Tab 1: Sources (Data Management)
+*   **Sidebar:** List of 7 Primary Advantages.
+*   **Main Area:** Split view (Audio / Text).
+*   **Action:** Drag-and-drop zone.
+*   **Data List:** Table showing file name, duration/length, and **Processing Status** (Pending, Embedded, Error).
+*   **Inspector:** Click a file to see its extracted vectors (raw float arrays) for debugging.
+
+### 4.3 Tab 2: The Forge (Generation)
+*   **Control Panel:**
+    *   Sliders for "Primary Weight" (0.5 to 1.0).
+    *   Button: "Recalculate Centroids".
+*   **Matrix View:**
+    *   A grid showing 7 Columns (Primaries) x 7 Rows (Secondaries).
+    *   Each cell shows the generated Archetype Name (e.g., "Power + Passion = The Catalyst").
+    *   Clicking a cell opens the **Vector DNA** modal.
+*   **REQ-UI-007: Auditory Reference Playback.**
+    *   **Problem Solved:** When fine-tuning the "Tone" vector, you might forget what "Trust" sounds like vs "Passion."
+    *   **Solution:** A small play button next to each Primary Archetype centroid.
+    *   **Action:** Next to each Primary Archetype in the Forge, add a "Play Reference" button.
+    *   **Behavior:** It plays the **Medoid** audio clip (the single clip from your dataset that is mathematically closest to the calculated centroid).
+    *   **Benefit:** Allows you to "Hear the Math." If the "Power" centroid sounds weak, you know your data is bad.
+
+*   **Cultural Baseline Stats Panel (New):**
+    *   **Location:** Right sidebar of The Forge tab.
+    *   **Display Elements:**
+        *   **Global WPM:** Large number display (e.g., "145 WPM") with normal range indicator.
+        *   **Global Latency:** Large number display (e.g., "450ms") with normal range indicator.
+        *   **Sample Count:** Total number of samples used for baseline calculation.
+        *   **Distribution Sparklines:** Mini histograms showing WPM and Latency distributions.
+    *   **Override Controls:**
+        *   Toggle: "Use Calculated Values" / "Manual Override"
+        *   When in override mode:
+            *   Input field: "Force WPM Baseline: [___]"
+            *   Input field: "Force Latency Baseline: [___]"
+            *   Warning banner: "⚠ Override Mode Active - Baseline values are manually set"
+        *   Reset button: "Restore Calculated Values"
+    *   **Tooltip:** Explains that these values are used by the Runtime for Z-Score normalization.
+
+*   **VAK Tuner Panel (New):**
+    *   **Location:** Collapsible panel below the Matrix View.
+    *   **Structure:** Three expandable accordion sections:
+        *   **Visual Profile:**
+            *   Source Archetypes: Dropdown selectors for Primary (default: Innovation) + Secondary (default: Power).
+            *   Speed Offset: Slider from -2σ to +3σ (default: +1.5σ).
+            *   Preview: "Play Visual Voice" button.
+            *   Stats: Shows calculated WPM, Latency, and cosine distances to other VAK profiles.
+        *   **Auditory Profile:**
+            *   Source Archetypes: Dropdown selectors (default: Passion + Prestige).
+            *   Speed Offset: Slider (default: 0σ).
+            *   Preview: "Play Auditory Voice" button.
+        *   **Kinesthetic Profile:**
+            *   Source Archetypes: Dropdown selectors (default: Trust + Mystique).
+            *   Speed Offset: Slider (default: -1.0σ).
+            *   Preview: "Play Kinesthetic Voice" button.
+    *   **Global Controls:**
+        *   "Recalculate VAK" button.
+        *   "Lock All VAK Profiles" toggle (prevents accidental changes after validation).
+    *   **Validation Status:**
+        *   Shows the minimum angular distance between VAK profiles.
+        *   Color-coded: Green (>45°), Yellow (30-45°), Red (<30°).
+
+### 4.4 Tab 3: Visualize (Deep Analysis)
+*   **The Universe (3D):**
+    *   Large central canvas.
+    *   Controls to toggle view between Embedding Spaces (Show: Semantic Only / Tone Only / All).
+*   **View Mode Toggle (New):**
+    *   **Segmented Control:** "Archetypes | VAK | Chronemics"
+    *   **Archetypes Mode (Default):**
+        *   Shows all 49 archetype North Stars as dots.
+        *   Shows ingested sample clouds around each archetype.
+    *   **VAK Mode:**
+        *   Hides the 49 archetype dots.
+        *   Shows only the 3 large VAK Reference Spheres (Visual, Auditory, Kinesthetic).
+        *   Displays angular distance lines between spheres.
+        *   Shows VAK Orthogonality metrics panel.
+    *   **Chronemics Mode:**
+        *   Switches to 2D Scatter Plot (WPM vs Latency).
+        *   Shows all samples color-coded by archetype.
+        *   Overlays quadrant labels and archetype centroids.
+*   **The Heatmap:**
+    *   A massive density plot. Red squares indicate dangerous similarity. Green squares indicate good separation.
+    *   Hovering a square shows the specific distance metric (e.g., "Distance: 0.23").
+    *   **VAK Row (New):** When in VAK mode, shows a 3x3 sub-matrix for VAK pairwise distances.
+
+### 4.5 Tab 4: The Proving Ground (Testing)
+*   **Input:** "Drop file to Test".
+*   **Output:** "The Radar." A radial chart showing the file's pull toward the 7 primaries.
+*   **Scoreboard:**
+    1.  **Identity:** The Dictator (98%)
+    2.  **VAK:** Visual (84%)
+    3.  **Vector Distances:** [Expandable list of distances to all 49]
+
+#### 4.6 Global Controls & Export
+The application header contains the "Finalize" workflow.
+
+*   **Integrity Status Indicator:**
+    *   **Red (Unready):** "Data Missing (38/49 Archetypes generated)."
+    *   **Yellow (Warning):** "High Variance Detected in 'Trust' Centroid."
+    *   **Green (Ready):** "All 49 Archetypes Validated."
+*   **Export Button:**
+    *   Clicking "Export .bin" opens a file dialog.
+    *   **Success State:** Shows a modal: *"hogshead_reference_vectors.bin successfully created. Checksum: [SHA256_HASH]."*
+    *   **Error State:** Highlights the specific Archetype causing the validation failure.
+
+#### 4.7 The "Mathless" Dashboard (Simplified View)
+**Goal:** Hide the vectors, show the health.
+
+*   **REQ-UI-008: The Traffic Light System**
+    Instead of showing you raw cosine distances (e.g., "0.2452"), the UI translates math into colors:
+    *   **Green Light:** "Vectors are Orthogonal (Distinct). Ready for use."
+    *   **Yellow Light:** "Slight Overlap (Power/Prestige). Add 5 more audio samples to Power."
+    *   **Red Light:** "Collision Detected. These profiles are identical. Delete bad data."
+
+*   **The "Math-Free" Workflow Summary:**
+    With these additions, your workflow changes from "Data Scientist" to "Manager":
+    1.  **Drop** audio/text files into the buckets.
+    2.  Click **"Auto-Optimize."** (The system runs the math, finds the best weights, and prunes outliers).
+    3.  Look at the **Traffic Light**.
+        *   If **Green**: Click "Export."
+        *   If **Red**: The system tells you exactly which file to delete.
+
+    This removes 100% of the manual calculation and guesswork. The system does the math; you just approve the result.
+
+---
+
+File Name: northstarprd copy 5.md
+File Path: docs2/northstarrefinery/northstarprd copy 5.md
+Contents:
+
+## 5. Technical Architecture (Rust Backend)
+
+This tool reuses the `cognitive-inference` and `cognitive-core` crates but wraps them in a batch-processing logic.
+
+### 5.1 Crate Structure
+```
+nsr/
+├── Cargo.toml
+├── src-tauri/           # The Rust Backend
+│   ├── src/
+│   │   ├── ingestion/   # File loading, VAD, preprocessing
+│   │   ├── inference/   # Batch running models (WavLM/Nomic/etc)
+│   │   ├── math/        # Centroid calc, Weighted mixing, UMAP projection
+│   │   ├── state/       # Managing the in-memory dataset
+│   │   └── main.rs      # Tauri commands
+│   └── tauri.conf.json
+├── src/                 # The React Frontend
+│   ├── components/      # UI Widgets
+│   ├── three/           # 3D Visualization logic
+│   └── stores/          # Zustand state management
+```
+
+### 5.1.1 Embedding Models Location
+
+All embedding models used by the North Star Refinery are stored locally at:
+```
+/home/cabdru/leapable/src/models/
+```
+
+Each model resides in its own dedicated directory:
+
+| Model | Directory | Purpose | Embedding Dimension |
+|:---|:---|:---|:---|
+| **Nomic Embed Text v1** | `/src/models/nomic-embed-text-v1/` | Stream A: Semantic embeddings | 768 |
+| **WavLM Base Plus SV** | `/src/models/wavlm-base-plus-sv/` | Stream B: Tone/Speaker verification | 512 |
+| **Wav2Vec2 Emotion** | `/src/models/wav2vec2-emotion/` | Stream C: Emotion detection | 1024 |
+| **RoBERTa Formality** | `/src/models/roberta-formality/` | Stream D: Style/Formality classification | 1 (scalar) |
+| **BERT Dialog Act** | `/src/models/bert-dialog-act/` | Stream E: Dialog action classification | 42 |
+
+**Note:** The Chronemic stream (Stream F, 4 dimensions) is computed from temporal analysis rather than a dedicated embedding model.
+
+---
+
+### 5.1.2 Model Technical Specifications
+
+This section provides comprehensive implementation details for each embedding model. **CRITICAL:** All models must be used exactly as specified to ensure vector space compatibility with the Runtime.
+
+---
+
+#### 5.1.2.1 Nomic Embed Text v1 (Stream A: Semantic)
+
+**Source:** [nomic-ai/nomic-embed-text-v1](https://huggingface.co/nomic-ai/nomic-embed-text-v1)
+**Paper:** "Nomic Embed: Training a Reproducible Long Context Text Embedder" (arXiv:2402.01613)
+
+| Specification | Value |
+|:---|:---|
+| **Output Dimension** | 768 (fixed) |
+| **Context Length** | 8192 tokens (native support via rotary position embeddings) |
+| **Base Architecture** | nomic-bert-2048 (BERT-based encoder) |
+| **Parameters** | ~137M |
+| **License** | Apache 2.0 |
+
+**CRITICAL: Task Instruction Prefixes (Mandatory)**
+
+The model requires task-specific prefixes prepended to all input text. Failure to use prefixes will result in degraded embedding quality.
+
+| Use Case | Prefix | Example |
+|:---|:---|:---|
+| **Document Embedding** | `search_document: ` | `search_document: The user expressed confidence in the proposal.` |
+| **Query Embedding** | `search_query: ` | `search_query: How does Power archetype speak?` |
+| **Clustering** | `clustering: ` | `clustering: I believe we should proceed immediately.` |
+| **Classification** | `classification: ` | `classification: Let me think about that carefully.` |
+
+**Implementation (Rust/Python):**
+```python
+from sentence_transformers import SentenceTransformer
+import torch.nn.functional as F
+
+model = SentenceTransformer("nomic-ai/nomic-embed-text-v1", trust_remote_code=True)
+
+# For archetype training data (use search_document prefix)
+texts = ["search_document: I demand results immediately."]
+embeddings = model.encode(texts)
+
+# CRITICAL: L2 normalize for cosine similarity
+embeddings = F.normalize(torch.tensor(embeddings), p=2, dim=1)
+```
+
+**For Long Context (8192 tokens):**
+```python
+from transformers import AutoTokenizer, AutoModel
+
+tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased', model_max_length=8192)
+model = AutoModel.from_pretrained(
+    'nomic-ai/nomic-embed-text-v1',
+    trust_remote_code=True,
+    rotary_scaling_factor=2  # Required for 8192 context
+)
+```
+
+**Output Processing:**
+1. Extract hidden states from model output
+2. Apply mean pooling across token dimension
+3. **L2 normalize** the final embedding (mandatory for cosine similarity)
+
+---
+
+#### 5.1.2.2 WavLM Base Plus SV (Stream B: Tone/Speaker)
+
+**Source:** [microsoft/wavlm-base-plus-sv](https://huggingface.co/microsoft/wavlm-base-plus-sv)
+**Paper:** "WavLM: Large-Scale Self-Supervised Pre-Training for Full Stack Speech Processing" (arXiv:2110.13900)
+
+| Specification | Value |
+|:---|:---|
+| **Output Dimension** | 512 (X-Vector embeddings) |
+| **Hidden Size** | 768 |
+| **Sampling Rate** | **16kHz (CRITICAL)** |
+| **Input Type** | Raw audio waveform (float array) |
+| **Training Data** | 60k hrs Libri-Light + 10k hrs GigaSpeech + 24k hrs VoxPopuli |
+| **Fine-tuning Data** | VoxCeleb1 (speaker verification) |
+| **License** | MIT |
+
+**Architecture Features:**
+- **Gated Relative Position Bias:** Enhanced positional encoding for recognition tasks
+- **X-Vector Head:** Speaker embedding extraction with Additive Margin Softmax loss
+- **Utterance Mixing:** Self-supervised training with overlapped utterance augmentation
+
+**CRITICAL: Audio Preprocessing**
+```python
+# All audio MUST be resampled to 16kHz before inference
+import librosa
+
+def preprocess_audio(audio_path):
+    waveform, sr = librosa.load(audio_path, sr=16000)  # Force 16kHz
+    return waveform
+```
+
+**Implementation:**
+```python
+from transformers import Wav2Vec2FeatureExtractor, WavLMForXVector
+import torch
+
+feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained('microsoft/wavlm-base-plus-sv')
+model = WavLMForXVector.from_pretrained('microsoft/wavlm-base-plus-sv')
+
+# Process audio (must be 16kHz)
+inputs = feature_extractor(
+    audio_array,  # Raw waveform as float array
+    sampling_rate=16000,
+    padding=True,
+    return_tensors="pt"
+)
+
+# Extract 512-dim speaker embeddings
+with torch.no_grad():
+    embeddings = model(**inputs).embeddings  # Shape: [batch, 512]
+
+# L2 normalize for cosine similarity
+embeddings = torch.nn.functional.normalize(embeddings, dim=-1)
+```
+
+**Speaker Similarity Threshold:** 0.86 (cosine similarity for same-speaker detection)
+
+---
+
+#### 5.1.2.3 Wav2Vec2 Emotion (Stream C: Emotion)
+
+**Source:** [wav2vec2-emotion](https://huggingface.co/models?search=wav2vec2+emotion) (local fine-tuned model)
+**Base Architecture:** wav2vec2-large (facebook/wav2vec2-large-960h or similar)
+**Paper:** "wav2vec 2.0: A Framework for Self-Supervised Learning of Speech Representations" (arXiv:2006.11477)
+
+| Specification | Value |
+|:---|:---|
+| **Hidden State Dimension** | **1024** (wav2vec2-large architecture) |
+| **Transformer Layers** | 24 |
+| **Sampling Rate** | **16kHz (CRITICAL)** |
+| **Input Type** | Raw audio waveform (float array) |
+| **Output** | Pooled hidden states for emotion representation |
+| **License** | MIT (base model) |
+
+**Architecture Note:**
+The PRD specifies using wav2vec2-large (1024-dim) rather than wav2vec2-base (768-dim) or pruned variants. The larger model provides richer emotional feature extraction critical for distinguishing archetype communication patterns.
+
+| Variant | Hidden Size | Layers | Use Case |
+|:---|:---|:---|:---|
+| wav2vec2-base | 768 | 12 | Lightweight, faster inference |
+| **wav2vec2-large** | **1024** | **24** | **North Star Refinery (recommended)** |
+| wav2vec2-large-robust-12 | 768 | 12 | Pruned, emotion-specific |
+
+**CRITICAL: The NorthStarReferenceSet struct requires 1024-dim emotion vectors. Use wav2vec2-large.**
+
+**Implementation:**
+```python
+from transformers import Wav2Vec2Processor, Wav2Vec2Model
+import torch
+
+# Use wav2vec2-large for 1024-dim output
+processor = Wav2Vec2Processor.from_pretrained('facebook/wav2vec2-large-960h')
+model = Wav2Vec2Model.from_pretrained('/path/to/wav2vec2-emotion')  # Fine-tuned local model
+
+# Audio must be 16kHz
+inputs = processor(audio_array, sampling_rate=16000, return_tensors="pt", padding=True)
+
+with torch.no_grad():
+    outputs = model(**inputs)
+    # Use last_hidden_state for embeddings
+    hidden_states = outputs.last_hidden_state  # [batch, seq, 1024]
+    # Mean pooling across time dimension
+    embeddings = hidden_states.mean(dim=1)  # [batch, 1024]
+    # L2 normalize
+    embeddings = torch.nn.functional.normalize(embeddings, dim=-1)
+```
+
+**Emotion-Relevant Features Captured:**
+- **Prosodic contours:** Pitch variation, rhythm, tempo
+- **Spectral characteristics:** Voice quality, breathiness, tension
+- **Temporal dynamics:** Pauses, speech rate changes, emphasis patterns
+
+**Archetype Emotion Signatures:**
+
+| Archetype | Expected Emotion Profile |
+|:---|:---|
+| **Power** | High dominance, moderate arousal, neutral-positive valence |
+| **Passion** | High arousal, high valence, expressive variation |
+| **Mystique** | Low arousal, measured pace, neutral valence |
+| **Alert** | High arousal, urgency markers, variable valence |
+| **Trust** | Moderate arousal, positive valence, steady rhythm |
+
+---
+
+#### 5.1.2.4 RoBERTa Formality (Stream D: Style)
+
+**Source:** [s-nlp/roberta-base-formality-ranker](https://huggingface.co/s-nlp/roberta-base-formality-ranker)
+
+| Specification | Value |
+|:---|:---|
+| **Output Type** | Binary classification score (formal probability) |
+| **Output Range** | 0.0 (informal) to 1.0 (formal) |
+| **Hidden Size** | 768 |
+| **Vocab Size** | 50,265 |
+| **Max Position** | 512 tokens |
+| **Parameters** | ~125M |
+| **License** | CC BY-NC-SA 4.0 |
+
+**Training Data:**
+- **GYAFC Corpus:** Grammarly's Yahoo Answers Formality Corpus (Rao & Tetreault, 2018)
+- **Pavlick-Tetreault Corpus:** Online formality annotations (2016)
+
+**Data Augmentation Applied:**
+- Uppercase/lowercase conversion
+- Punctuation removal
+- Sentence-ending dot addition
+- *Purpose:* Reduce over-reliance on superficial features (capitalization, punctuation)
+
+**Performance:**
+| Metric | GYAFC | GYAFC (normalized) |
+|:---|:---|:---|
+| ROC AUC | 0.9779 | 0.9234 |
+| Accuracy | 0.9087 | 0.8218 |
+
+**Implementation:**
+```python
+from transformers import pipeline
+
+classifier = pipeline(
+    "text-classification",
+    model="s-nlp/roberta-base-formality-ranker"
+)
+
+# Returns formality score
+result = classifier("I believe this proposal merits careful consideration.")
+# [{'label': 'LABEL_1', 'score': 0.95}]  # High formality
+
+# For the scalar value used in NorthStarReferenceSet:
+formality_score = result[0]['score'] if result[0]['label'] == 'LABEL_1' else (1 - result[0]['score'])
+```
+
+**Alternative (Direct Model Access):**
+```python
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
+
+tokenizer = AutoTokenizer.from_pretrained("s-nlp/roberta-base-formality-ranker")
+model = AutoModelForSequenceClassification.from_pretrained("s-nlp/roberta-base-formality-ranker")
+
+inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+with torch.no_grad():
+    logits = model(**inputs).logits
+    formality_score = torch.softmax(logits, dim=-1)[0][1].item()  # Probability of formal class
+```
+
+---
+
+#### 5.1.2.5 BERT Dialog Act (Stream E: Action)
+
+**Source:** Fine-tuned BERT on SWDA (Switchboard Dialog Act Corpus)
+**Reference:** [SILICONE Benchmark](https://huggingface.co/datasets/silicone) | [SWDA Documentation](https://compprag.christopherpotts.net/swda.html)
+
+| Specification | Value |
+|:---|:---|
+| **Output Dimension** | 42 classes (probability distribution) |
+| **Hidden Size** | 768 |
+| **Classification Type** | Multi-class (softmax over 42 dialog acts) |
+| **Training Data** | Switchboard Dialog Act Corpus (205k utterances, 1.4M words) |
+| **Taxonomy** | SWBD-DAMSL (collapsed from 220 original tags) |
+
+**The 42 Dialog Act Classes (SWBD-DAMSL Taxonomy):**
+
+| Index | Tag | Name | Example |
+|:---|:---|:---|:---|
+| 0 | `sd` | Statement-non-opinion | "Me, I'm in the legal department." |
+| 1 | `b` | Acknowledge (Backchannel) | "Uh-huh." |
+| 2 | `sv` | Statement-opinion | "I think it's great." |
+| 3 | `aa` | Agree/Accept | "That's exactly it." |
+| 4 | `%` | Abandoned/Turn-Exit | "So, -" |
+| 5 | `ba` | Appreciation | "I can imagine." |
+| 6 | `qy` | Yes-No-Question | "Do you have special training?" |
+| 7 | `x` | Non-verbal | "[Laughter], [Throat_clearing]" |
+| 8 | `ny` | Yes answers | "Yes." |
+| 9 | `fc` | Conventional-closing | "Well, it's been nice talking to you." |
+| 10 | `%` | Uninterpretable | "But, uh, yeah" |
+| 11 | `qw` | Wh-Question | "Well, how old are you?" |
+| 12 | `nn` | No answers | "No." |
+| 13 | `bk` | Response Acknowledgement | "Oh, okay." |
+| 14 | `h` | Hedge | "I don't know if I'm making sense." |
+| 15 | `qy^d` | Declarative Yes-No-Question | "So you can afford a house?" |
+| 16 | `fo_o_fw_by_bc` | Other | "Well give me a break, you know." |
+| 17 | `bh` | Backchannel in question form | "Is that right?" |
+| 18 | `^q` | Quotation | "You can't be pregnant and have cats" |
+| 19 | `bf` | Summarize/reformulate | "Oh, you mean you switched schools." |
+| 20 | `na` | Affirmative non-yes answers | "It is." |
+| 21 | `ad` | Action-directive | "Why don't you go first" |
+| 22 | `^2` | Collaborative Completion | "Who aren't contributing." |
+| 23 | `b^m` | Repeat-phrase | "Oh, fajitas" |
+| 24 | `qo` | Open-Question | "How about you?" |
+| 25 | `qh` | Rhetorical-Questions | "Who would steal a newspaper?" |
+| 26 | `^h` | Hold before answer/agreement | "I'm drawing a blank." |
+| 27 | `ar` | Reject | "Well, no" |
+| 28 | `ng` | Negative non-no answers | "Uh, not a whole lot." |
+| 29 | `br` | Signal-non-understanding | "Excuse me?" |
+| 30 | `no` | Other answers | "I don't know" |
+| 31 | `fp` | Conventional-opening | "How are you?" |
+| 32 | `qrr` | Or-Clause | "or is it more of a company?" |
+| 33 | `arp_nd` | Dispreferred answers | "Well, not so much that." |
+| 34 | `t3` | 3rd-party-talk | "My goodness, Diane, get down." |
+| 35 | `oo_co_cc` | Offers, Options, Commits | "I'll have to check that out" |
+| 36 | `t1` | Self-talk | "What's the word I'm looking for" |
+| 37 | `bd` | Downplayer | "That's all right." |
+| 38 | `aap_am` | Maybe/Accept-part | "Something like that" |
+| 39 | `^g` | Tag-Question | "Right?" |
+| 40 | `qw^d` | Declarative Wh-Question | "You are what kind of buff?" |
+| 41 | `fa` | Apology | "I'm sorry." |
+
+**Implementation:**
+```python
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
+
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+model = AutoModelForSequenceClassification.from_pretrained(
+    "/path/to/bert-dialog-act",  # Local model path
+    num_labels=42
+)
+
+inputs = tokenizer(utterance, return_tensors="pt", truncation=True, max_length=128)
+with torch.no_grad():
+    logits = model(**inputs).logits
+    # Get probability distribution over 42 classes
+    action_probs = torch.softmax(logits, dim=-1)[0]  # Shape: [42]
+```
+
+**Archetype-Relevant Dialog Acts:**
+
+| Archetype | High-Probability Acts | Rationale |
+|:---|:---|:---|
+| **Power** | `ad` (directive), `sv` (opinion), `ar` (reject) | Commanding, opinionated, decisive |
+| **Passion** | `ba` (appreciation), `sv` (opinion), `aa` (agree) | Enthusiastic, expressive |
+| **Mystique** | `h` (hedge), `qw` (wh-question), `no` (other answer) | Reserved, analytical, questioning |
+| **Trust** | `aa` (agree), `bk` (acknowledge), `bf` (summarize) | Supportive, confirming |
+| **Innovation** | `qo` (open-question), `qh` (rhetorical), `sv` (opinion) | Creative, questioning assumptions |
+
+---
+
+### 5.1.3 Model Loading Configuration (Rust)
+
+The following Rust struct defines the configuration for loading all embedding models:
+
+```rust
+pub struct EmbeddingModelConfig {
+    /// Path to nomic-embed-text-v1 model directory
+    pub semantic_model_path: PathBuf,  // /src/models/nomic-embed-text-v1/
+    /// Path to wavlm-base-plus-sv model directory
+    pub tone_model_path: PathBuf,      // /src/models/wavlm-base-plus-sv/
+    /// Path to wav2vec2-emotion model directory
+    pub emotion_model_path: PathBuf,   // /src/models/wav2vec2-emotion/
+    /// Path to roberta-formality model directory
+    pub style_model_path: PathBuf,     // /src/models/roberta-formality/
+    /// Path to bert-dialog-act model directory
+    pub action_model_path: PathBuf,    // /src/models/bert-dialog-act/
+}
+
+impl Default for EmbeddingModelConfig {
+    fn default() -> Self {
+        let base = PathBuf::from("/home/cabdru/leapable/src/models");
+        Self {
+            semantic_model_path: base.join("nomic-embed-text-v1"),
+            tone_model_path: base.join("wavlm-base-plus-sv"),
+            emotion_model_path: base.join("wav2vec2-emotion"),
+            style_model_path: base.join("roberta-formality"),
+            action_model_path: base.join("bert-dialog-act"),
+        }
+    }
+}
+```
+
+---
+
+### 5.1.4 Critical Implementation Notes
+
+1. **Audio Sampling Rate:** ALL audio models (WavLM, Wav2Vec2) require **16kHz** input. Resample all audio before inference.
+
+2. **Text Prefixes:** Nomic embeddings require task-specific prefixes. Use `search_document:` for training samples and `search_query:` for test/inference samples.
+
+3. **Normalization:** All vector outputs should be L2-normalized before cosine similarity calculations.
+
+4. **Batch Processing:** All models support batched inference. For the Refinery, batch sizes of 16-32 are recommended for optimal GPU utilization.
+
+5. **Model Output Summary:**
+
+| Stream | Model | Raw Output | Final Vector Size | Post-Processing |
+|:---|:---|:---|:---|:---|
+| A (Semantic) | Nomic | [batch, seq, 768] | 768 | Mean pool → L2 norm |
+| B (Tone) | WavLM | [batch, 512] | 512 | L2 norm |
+| C (Emotion) | Wav2Vec2-Large | [batch, seq, 1024] | 1024 | Mean pool → L2 norm |
+| D (Style) | RoBERTa | [batch, 2] | 1 (scalar) | Softmax → formal prob |
+| E (Action) | BERT | [batch, 42] | 42 | Softmax |
+| F (Chronemic) | N/A (computed) | N/A | 4 | Temporal analysis |
+
+---
+
+### 5.1.5 References
+
+- **Nomic Embed:** Nussbaum et al., "Nomic Embed: Training a Reproducible Long Context Text Embedder" (2024) - [arXiv:2402.01613](https://arxiv.org/abs/2402.01613)
+- **WavLM:** Chen et al., "WavLM: Large-Scale Self-Supervised Pre-Training for Full Stack Speech Processing" (2021) - [arXiv:2110.13900](https://arxiv.org/abs/2110.13900)
+- **Wav2Vec2:** Baevski et al., "wav2vec 2.0: A Framework for Self-Supervised Learning of Speech Representations" (2020) - [arXiv:2006.11477](https://arxiv.org/abs/2006.11477)
+- **RoBERTa Formality:** s-nlp, "roberta-base-formality-ranker" - [HuggingFace](https://huggingface.co/s-nlp/roberta-base-formality-ranker)
+- **SWDA Taxonomy:** Jurafsky et al., "Switchboard SWBD-DAMSL Coders Manual" (1997) - [Stanford](https://web.stanford.edu/~jurafsky/ws97/manual.august1.html)
+- **SILICONE Benchmark:** [HuggingFace Datasets](https://huggingface.co/datasets/silicone)
+
+### 5.2 Core Rust Structs (The State)
+
+```rust
+// The complete dataset held in memory during calibration
+pub struct RefineryState {
+    // Raw samples organized by Primary Advantage
+    pub raw_samples: HashMap<Advantage, Vec<RawSample>>,
+    // The calculated 7 centroids
+    pub primary_centroids: HashMap<Advantage, NorthStarReferenceSet>,
+    // The generated 49 archetypes
+    pub generated_archetypes: HashMap<ArchetypeId, NorthStarReferenceSet>,
+    // The 3 VAK Reference Sets (Visual, Auditory, Kinesthetic)
+    pub vak_reference_sets: HashMap<VakModality, NorthStarReferenceSet>,
+    // Cultural baseline for Z-Score normalization
+    pub cultural_baseline: CulturalBaseline,
+    // Configuration for mixing
+    pub mixing_config: MixingConfig,
+}
+
+pub struct RawSample {
+    pub id: String,
+    pub source_type: SourceType, // Audio | Text
+    /// Gender tag for audio samples (required for audio, None for text)
+    /// Used to separate male/female audio samples for gender-specific centroid calculation
+    pub gender_tag: Option<Gender>,
+    pub advantage: Advantage,
+    pub vectors: HexaModalVectors, // The 6 stream outputs (including Chronemic)
+    pub chronemic_raw: ChronemicRaw, // Raw chronemic measurements
+}
+
+/// Gender classification for audio sample tagging and runtime detection
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum Gender {
+    Male,
+    Female,
+}
+
+impl Gender {
+    /// Returns the opposite gender
+    pub fn opposite(&self) -> Self {
+        match self {
+            Gender::Male => Gender::Female,
+            Gender::Female => Gender::Male,
+        }
+    }
+}
+
+/// Source type for raw samples
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceType {
+    /// Audio file (.wav, .mp3) - requires gender_tag
+    Audio,
+    /// Text file (.txt, .json) - gender_tag is None
+    Text,
+}
+
+impl RawSample {
+    /// Validate that audio samples have a gender tag
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.source_type == SourceType::Audio && self.gender_tag.is_none() {
+            return Err(ValidationError::MissingGenderTag(self.id.clone()));
+        }
+        Ok(())
+    }
+}
+
+/// Raw chronemic measurements extracted from audio samples
+pub struct ChronemicRaw {
+    pub wpm: f32,           // Words per minute (calculated post-VAD)
+    pub latency_ms: f32,    // Average silence gap in milliseconds
+    pub jitter: f32,        // Standard deviation of speech chunk durations
+    pub overlap_ratio: f32, // Ratio of overlapping speech (0.0 for single-speaker)
+}
+
+/// Cultural baseline statistics for Z-Score normalization
+/// These values represent the "normal" for the training dataset
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CulturalBaseline {
+    pub mean_wpm: f32,          // Global mean WPM across all samples
+    pub std_dev_wpm: f32,       // Standard deviation of WPM
+    pub mean_latency: f32,      // Global mean latency (ms)
+    pub std_dev_latency: f32,   // Standard deviation of latency
+    pub mean_jitter: f32,       // Global mean jitter
+    pub std_dev_jitter: f32,    // Standard deviation of jitter
+    pub sample_count: u32,      // Number of samples used to calculate baseline
+}
+
+impl CulturalBaseline {
+    /// Calculate Z-Score for a given WPM value
+    pub fn z_score_wpm(&self, wpm: f32) -> f32 {
+        (wpm - self.mean_wpm) / self.std_dev_wpm
+    }
+
+    /// Calculate Z-Score for a given latency value
+    pub fn z_score_latency(&self, latency: f32) -> f32 {
+        (latency - self.mean_latency) / self.std_dev_latency
+    }
+}
+
+/// VAK Modality identifiers
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum VakModality {
+    Visual = 0,
+    Auditory = 1,
+    Kinesthetic = 2,
+}
+
+pub struct MixingConfig {
+    pub primary_weight: f32, // Default 0.7
+    pub secondary_weight: f32, // Default 0.3
+}
+
+/// The Final Binary File Structure (Runtime Contract)
+/// Contains all data needed by the Cognitive Radar runtime
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HogsheadBinaryPackage {
+    /// The 49 Hogshead Archetypes (7 Primary + 42 Secondary)
+    pub archetypes: HashMap<u8, NorthStarReferenceSet>,
+    /// The 3 VAK Reference Sets (Visual, Auditory, Kinesthetic)
+    pub vak_profiles: HashMap<VakModality, NorthStarReferenceSet>,
+    /// Cultural baseline for Runtime Z-Score calculations
+    pub baseline: CulturalBaseline,
+    /// Schema version for forward compatibility
+    pub schema_version: u8, // Current: 2 (added Chronemic + VAK)
+}
+
+impl HogsheadBinaryPackage {
+    /// Validate the package contains all required data
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        // Must have exactly 49 archetypes
+        if self.archetypes.len() != 49 {
+            return Err(ValidationError::ArchetypeCount(self.archetypes.len()));
+        }
+        // Must have exactly 3 VAK profiles
+        if self.vak_profiles.len() != 3 {
+            return Err(ValidationError::VakCount(self.vak_profiles.len()));
+        }
+        // Validate each archetype has all 6 streams
+        for (id, ns) in &self.archetypes {
+            Self::validate_reference_set(*id, ns)?;
+        }
+        Ok(())
+    }
+
+    fn validate_reference_set(id: u8, ns: &NorthStarReferenceSet) -> Result<(), ValidationError> {
+        // Check chronemic vector is populated
+        if ns.chronemic.iter().all(|&v| v == 0.0) {
+            return Err(ValidationError::EmptyChronemic(id));
+        }
+        Ok(())
+    }
+}
+```
+
+### 5.3 Key Tauri Commands (Frontend <-> Backend API)
+
+*   `import_files(files: Vec<Path>, advantage: Advantage)` -> Returns `TaskID` (Async batch process).
+*   `get_embedding_status(task_id: String)` -> Returns progress %.
+*   `calculate_centroids()` -> Triggers the math, returns `RefineryState`.
+*   `update_mixing_weights(primary: f32)` -> Re-runs generation, returns updated vectors.
+*   `classify_test_sample(path: String)` -> runs the "Runtime Logic" on a file and returns classification.
+*   `export_binary(path: String)` -> Serializes `RefineryState.generated_archetypes` to `hogshead_reference_vectors.bin`.
+*   `get_umap_points()` -> Returns reduced XYZ coordinates for 3D viz.
+
+#### 5.4 Shared Serialization Contract
+To ensure the `.bin` file created here works in the main app, the following Struct MUST be defined exactly as follows (using the `bincode` crate for serialization):
+
+```rust
+// DEPENDENCY: bincode = "1.3"
+// DEPENDENCY: serde = { version = "1.0", features = ["derive"] }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NorthStarReferenceSet {
+    pub archetype_id: u8, // Maps to ArchetypeId enum
+    // Stream A: Nomic (768)
+    pub semantic: [f32; 768],
+    // Stream B: WavLM (512)
+    pub tone: [f32; 512],
+    // Stream C: Wav2Vec2 (1024)
+    pub emotion: [f32; 1024],
+    // Stream D: RoBERTa scalar
+    pub style: f32,
+    // Stream E: BERT (42)
+    pub action: [f32; 42],
+    // Stream F: Chronemic (4)
+    pub chronemic: [f32; 4],
+}
+
+// The Export Function Signature
+pub fn export_to_bin(
+    data: &HashMap<u8, NorthStarReferenceSet>, 
+    path: &Path
+) -> Result<(), Box<dyn Error>> {
+    let mut file = BufWriter::new(File::create(path)?);
+    bincode::serialize_into(&mut file, data)?;
+    Ok(())
+}
+```
+
+### 5.5 Target Hardware Specifications
+
+The North Star Refinery is optimized for the following reference hardware configuration:
+
+| Component | Specification |
+|:---|:---|
+| **GPU** | NVIDIA GeForce RTX 5090 (Blackwell GB202) |
+| **VRAM** | 32GB GDDR7 @ 28 Gbps |
+| **Memory Bandwidth** | 1,792 GB/s |
+| **CUDA Cores** | 21,760 |
+| **Tensor Cores** | 680 (5th generation) |
+| **Streaming Multiprocessors** | 170 SMs |
+| **Boost Clock** | 2,467 MHz |
+| **Compute Capability** | 10.x (Blackwell) |
+| **CPU** | AMD Ryzen 9 9950X3D (16C/32T, 5.7 GHz, 192MB L3) |
+| **System RAM** | 128GB DDR5 @ 3592 MT/s |
+
+**Tensor Core Performance (RTX 5090):**
+- **FP8** (E4M3/E5M2): 3,851 TFLOPS (native)
+- **FP4**: 7,702 TFLOPS (Blackwell exclusive)
+- **FP16/BF16**: 1,936 TFLOPS
+- **TF32**: 968 TFLOPS
+
+---
+
+### 5.6 CUDA 13.1 Acceleration Layer (RTX 5090 Blackwell Native)
+
+This section defines how the application leverages CUDA 13.1's Blackwell-specific features to solve the biggest pain points of building a high-performance, GUI-heavy data science tool: **UI Freezing during calculation** and **Batch Inference Latency**.
+
+**Required CUDA Toolkit:**
+```
+CUDA Toolkit:        13.1
+CUDA Driver:         R570+ (minimum)
+cuBLAS:              13.1
+cuFFT:               13.1
+CCCL:                3.1
+Nsight Compute:      2025.4
+```
+
+
+
+---
+
+File Name: northstarprd copy 6.md
+File Path: docs2/northstarrefinery/northstarprd copy 6.md
+Contents:
+
+---
+
+#### 5.6.1 REQ-CUDA-001: Green Context Partitioning (Spatial Isolation)
+
+*   **Feature Used:** *Green Contexts (Runtime API Exposure)*.
+*   **Problem:** Calculating Reference Vectors or running UMAP for 3D visualization usually spikes GPU usage to 100%, causing the UI (rendering the 3D galaxy) to stutter or freeze.
+*   **Implementation:** The Refinery runs on two distinct Green Contexts:
+    1.  **Context A (Visualization Lane - 17 SMs / 10%):** Dedicated strictly to the Three.js/OpenGL rendering loop. Guarantees 60FPS UI smoothness even while heavy math runs.
+    2.  **Context B (The Forge Lane - 153 SMs / 90%):** Dedicated to Batch Inference and Matrix Math.
+*   **Benefit:** "Silky smooth" UI responsiveness regardless of workload.
+
+**Implementation Pattern:**
+
+```cpp
+#include <cuda_runtime.h>
+
+void setup_green_contexts() {
+    int device_id = 0;
+    cudaInitDevice(device_id);
+
+    // Step 1: Get available SMs (170 total on RTX 5090)
+    cudaDevResource_t total_sm_resource;
+    cudaDeviceGetDevResource(&total_sm_resource, device_id, cudaDevResourceTypeSm);
+
+    // Step 2: Split SMs (10% viz = 17 SMs, 90% compute = 153 SMs)
+    cudaDevResource_t viz_sm_resource, compute_sm_resource;
+    cudaDevResourceSMSplit(
+        &viz_sm_resource,       // 10% SMs for UI
+        &compute_sm_resource,   // 90% SMs for compute
+        &total_sm_resource,
+        0.1f                    // viz fraction
+    );
+
+    // Step 3: Create resource descriptors
+    cudaDevResourceDesc_t viz_desc, compute_desc;
+    cudaDevResourceGenerateDesc(&viz_desc, &viz_sm_resource, 1);
+    cudaDevResourceGenerateDesc(&compute_desc, &compute_sm_resource, 1);
+
+    // Step 4: Create green contexts
+    cudaExecutionContext_t viz_ctx, compute_ctx;
+    cudaGreenCtxCreate(&viz_ctx, viz_desc, device_id, 0);
+    cudaGreenCtxCreate(&compute_ctx, compute_desc, device_id, 0);
+
+    // Step 5: Create streams for each context
+    cudaStream_t viz_stream, compute_stream;
+    cudaStreamCreateWithEC(&viz_stream, viz_ctx, cudaStreamDefault, 0);
+    cudaStreamCreateWithEC(&compute_stream, compute_ctx, cudaStreamDefault, 0);
+
+    // Now launch work on separate streams - they run in parallel without contention!
+    // Visualization (OpenGL/Three.js rendering)
+    render_3d_galaxy<<<grid_viz, block_viz, 0, viz_stream>>>(viz_args);
+
+    // Heavy computation (batch inference, UMAP, etc.)
+    batch_inference_kernel<<<grid_compute, block_compute, 0, compute_stream>>>(compute_args);
+}
+```
+
+**Key API Functions:**
+- `cudaDeviceGetDevResource()` - Get available SMs from device
+- `cudaDevResourceSMSplit()` - Partition SMs by fraction
+- `cudaDevResourceGenerateDesc()` - Create resource descriptor
+- `cudaGreenCtxCreate()` - Provision green context
+- `cudaStreamCreateWithEC()` - Create stream bound to context
+
+---
+
+#### 5.6.2 REQ-CUDA-002: Grouped GEMM for Hexa-Modal Inference
+
+*   **Feature Used:** *cuBLAS Grouped GEMM (Blackwell Exclusive)*.
+*   **Problem:** You are running 5 different models (Nomic, WavLM, Wav2Vec2, RoBERTa, BERT). Traditionally, these run sequentially (Serial Stream).
+*   **Implementation:** Use Grouped GEMM to fuse the linear algebra layers of these disparate models into single kernel launches where possible.
+*   **Benefit:** Increases batch ingestion speed by ~4x. You can drop 1,000 files and they process instantly.
+
+**Implementation Pattern (49 Secondary Archetype Mixing):**
+
+```cpp
+#include <cublas_v2.h>
+
+void mix_all_secondaries_grouped(
+    cublasHandle_t handle,
+    float *d_primaries,       // [7][768] - 7 primary archetypes
+    float *d_secondaries,     // [49][768] - 49 secondary outputs
+    float primary_weight,     // 0.7
+    float secondary_weight    // 0.3
+) {
+    int num_groups = 49;
+
+    // Setup arrays for grouped operation
+    std::vector<cublasOperation_t> transa(num_groups, CUBLAS_OP_N);
+    std::vector<cublasOperation_t> transb(num_groups, CUBLAS_OP_N);
+    std::vector<int> m(num_groups, 768);  // vector dimension
+    std::vector<int> n(num_groups, 1);
+    std::vector<int> k(num_groups, 1);
+    std::vector<float> alpha(num_groups, primary_weight);
+    std::vector<float> beta(num_groups, secondary_weight);
+    std::vector<int> lda(num_groups, 768);
+    std::vector<int> ldb(num_groups, 768);
+    std::vector<int> ldc(num_groups, 768);
+    std::vector<int> group_sizes(num_groups, 1);
+
+    // Setup pointers for each combination (7x7 = 49)
+    std::vector<const float*> A_ptrs(num_groups);
+    std::vector<const float*> B_ptrs(num_groups);
+    std::vector<float*> C_ptrs(num_groups);
+
+    int idx = 0;
+    for (int i = 0; i < 7; i++) {
+        for (int j = 0; j < 7; j++) {
+            A_ptrs[idx] = d_primaries + i * 768;  // Primary A
+            B_ptrs[idx] = d_primaries + j * 768;  // Primary B
+            C_ptrs[idx] = d_secondaries + idx * 768;
+            idx++;
+        }
+    }
+
+    // SINGLE kernel launch for ALL 49 operations!
+    cublasSgemmGroupedBatched(
+        handle,
+        transa.data(), transb.data(),
+        m.data(), n.data(), k.data(),
+        alpha.data(),
+        A_ptrs.data(), lda.data(),
+        B_ptrs.data(), ldb.data(),
+        beta.data(),
+        C_ptrs.data(), ldc.data(),
+        num_groups,
+        group_sizes.data()
+    );
+}
+```
+
+---
+
+#### 5.6.3 REQ-CUDA-003: Native FP8 Tensor Storage
+
+*   **Feature Used:** *Blackwell Tensor Core FP8 Support*.
+*   **Problem:** The RTX 5090 has 32GB VRAM, but visualizing 49 Reference Vectors plus thousands of raw samples in 3D using FP32 (32-bit floats) consumes memory bandwidth unnecessarily.
+*   **Implementation:** Store all raw sample vectors in VRAM using the **FP8 (E4M3 or E5M2)** data format.
+*   **Visual Impact:** This reduces memory footprint by 4x compared to FP32.
+*   **Benefit:** You can load **4x more historical data** into the "Galaxy View" visualization without lag.
+
+**FP8 Format Selection:**
+| Format | Exponent | Mantissa | Use Case |
+|:---|:---|:---|:---|
+| **E4M3** | 4 bits | 3 bits | Higher precision, smaller range |
+| **E5M2** | 5 bits | 2 bits | Larger dynamic range |
+
+**Scaling Modes (CUDA 13.1):**
+| Mode | Description | Speed |
+|:---|:---|:---|
+| Tensor-wide | Single scale for entire tensor | Baseline |
+| 1D Channel | Scale per row/column | 1.25x faster |
+| 1D Block (16) | 16-element blocks | 1.5x faster |
+| 1D Block (32) | 32-element blocks | 1.6x faster |
+| **2D Block** | 2D tiles (best accuracy) | **1.75x faster** |
+
+**Implementation with cuBLASLt:**
+```cpp
+// Enable FP8 accumulation
+int32_t use_fp8 = 1;
+cublasLtMatmulDescSetAttribute(
+    matmul_desc,
+    CUBLASLT_MATMUL_DESC_FP8_FAST_ACCUM,
+    &use_fp8,
+    sizeof(use_fp8)
+);
+
+// Set block scaling for accuracy
+cublasLtMatmulDescSetAttribute(
+    matmul_desc,
+    CUBLASLT_MATMUL_MATRIX_SCALE_PER_BATCH_SCALAR_32F,
+    scale_ptr,
+    sizeof(float*)
+);
+```
+
+---
+
+#### 5.6.4 REQ-CUDA-004: CUDA Tile Programming for Vector Mixing
+
+*   **Feature Used:** *CUDA Tile IR / cuTile Python*.
+*   **Problem:** Traditional SIMT programming requires manual thread management for vector operations. Tile programming abstracts this complexity.
+*   **Implementation:** Use CUDA Tile IR or cuTile Python for high-level tile-based operations that automatically utilize Tensor Cores.
+
+**Tile IR Conceptual Model:**
+```
+Traditional SIMT:  Thread → operates on single element
+Tile Programming:  Tile Kernel → operates on entire tile (multi-dimensional array)
+```
+
+**cuTile Python Implementation (REQ-OPT-003 Custom Metric Sandbox):**
+
+```python
+import cuda.tile as ct
+import cupy as cp
+
+TILE_SIZE = 768  # Semantic vector dimension
+
+@ct.kernel
+def cosine_distance_kernel(vec_a, vec_b, result):
+    """
+    User-defined distance metric executed on GPU via Tile IR.
+    JIT-compiled to native Blackwell instructions.
+    """
+    bid = ct.bid(0)
+
+    # Load 768-dim vectors as tiles
+    a = ct.load(vec_a, index=(bid,), shape=(TILE_SIZE,))
+    b = ct.load(vec_b, index=(bid,), shape=(TILE_SIZE,))
+
+    # Cosine similarity (uses Tensor Cores automatically)
+    dot_product = ct.sum(a * b)
+    norm_a = ct.sqrt(ct.sum(a * a))
+    norm_b = ct.sqrt(ct.sum(b * b))
+    similarity = dot_product / (norm_a * norm_b)
+    distance = 1.0 - similarity
+
+    # Store result
+    ct.store(result, index=(bid,), tile=distance)
+
+def compute_distances(vectors_a: cp.ndarray, vectors_b: cp.ndarray) -> cp.ndarray:
+    """Host-side launch function."""
+    num_pairs = vectors_a.shape[0]
+    result = cp.empty(num_pairs, dtype=cp.float32)
+
+    grid = (ct.cdiv(num_pairs, 1), 1, 1)
+    ct.launch(cp.cuda.get_current_stream(), grid, cosine_distance_kernel,
+              (vectors_a, vectors_b, result))
+
+    return result
+```
+
+**Tile IR Type Syntax:**
+```cuda
+tile<f32>              // scalar float
+tile<768xf32>          // 1D vector (768 elements) - semantic embedding
+tile<512xf32>          // 1D vector (512 elements) - tone embedding
+tile<64x64xf32>        // 2D matrix
+tile<2x128x128xf16>    // batched 2D matrices (FP16)
+```
+
+**Tile IR Matrix Multiply-Accumulate (Tensor Cores):**
+```cuda
+%result = mmaf %lhs, %rhs, %acc :
+    tile<MxKxf16>,      // A matrix (FP16)
+    tile<KxNxf16>,      // B matrix (FP16)
+    tile<MxNxf32>       // accumulator (FP32)
+```
+
+---
+
+#### 5.6.5 REQ-CUDA-005: cuFFT Device Extensions (Zero-Copy Audio)
+
+*   **Feature Used:** *cuFFTDx (Device-Side FFT)*.
+*   **Problem:** Traditional audio processing requires CPU-GPU round-trips for spectrogram extraction.
+*   **Implementation:** Execute FFT directly inside CUDA kernels, enabling Load → FFT → VAD → Store in a single kernel.
+
+**Implementation Pattern:**
+
+```cpp
+#include <cufftdx.hpp>
+
+// Define FFT type (1024-point R2C, Blackwell SM 100)
+using FFT_1K = decltype(
+    cufftdx::Size<1024>() +
+    cufftdx::Type<cufftdx::fft_type::r2c>() +
+    cufftdx::Direction<cufftdx::fft_direction::forward>() +
+    cufftdx::Precision<float>() +
+    cufftdx::SM<100>()  // Blackwell compute capability
+);
+
+__global__ void audio_preprocessing_kernel(
+    float *audio_files,        // [N][samples] - batch of audio (GPU resident)
+    float *spectrograms,       // [N][freq_bins] - output spectrograms
+    float *vad_energy,         // [N] - voice activity energy per file
+    int num_files,
+    int samples_per_file
+) {
+    int file_id = blockIdx.x;
+    if (file_id >= num_files) return;
+
+    extern __shared__ char smem[];
+
+    // Load audio frame
+    float *audio_frame = audio_files + file_id * samples_per_file;
+
+    // FFT buffer in registers
+    FFT_1K::value_type fft_buffer[FFT_1K::storage_size];
+
+    // Copy audio to FFT buffer
+    for (int i = threadIdx.x; i < 1024; i += blockDim.x) {
+        fft_buffer[i] = audio_frame[i];
+    }
+    __syncthreads();
+
+    // Execute FFT in device code (no CPU round-trip!)
+    FFT_1K().execute(fft_buffer, smem);
+    __syncthreads();
+
+    // Compute magnitude spectrogram and VAD energy
+    float energy_sum = 0.0f;
+    for (int i = threadIdx.x; i < 512; i += blockDim.x) {
+        float real = fft_buffer[i].x;
+        float imag = fft_buffer[i].y;
+        float magnitude = sqrtf(real * real + imag * imag);
+
+        spectrograms[file_id * 512 + i] = magnitude;
+        energy_sum += magnitude;
+    }
+
+    // Warp reduction for VAD energy
+    energy_sum = warpReduceSum(energy_sum);
+    if (threadIdx.x == 0) {
+        vad_energy[file_id] = energy_sum;
+    }
+}
+```
+
+**Benefit:** Audio preprocessing adds <1ms per file. No CPU involvement after initial GPU upload.
+
+---
+
+#### 5.6.6 REQ-CUDA-006: Deterministic Reductions (CCCL 3.1)
+
+*   **Feature Used:** *CCCL 3.1 Deterministic Reductions*.
+*   **Problem:** Standard parallel reductions are non-deterministic due to floating-point non-associativity. Running centroid calculation twice may produce different results.
+*   **Implementation:** Use `cub::DeviceReduce` with `run_to_run` determinism flag.
+
+**Determinism Modes:**
+| Mode | Guarantee | Performance | Use Case |
+|:---|:---|:---|:---|
+| `not_guaranteed` | None (fastest) | Baseline | Prototyping |
+| `gpu_to_gpu` | Same GPU, bitwise identical | 1.2x slower | Production |
+| **`run_to_run`** | **Across runs/GPUs, bitwise identical** | **1.5x slower** | **North Star Refinery** |
+
+**Implementation Pattern:**
+
+```cpp
+#include <cub/device/device_reduce.cuh>
+
+void calculate_centroid_deterministic(
+    float *d_samples,      // [num_samples][dim] - all samples
+    float *d_centroid,     // [dim] - output centroid
+    int num_samples,
+    int dim                // 768 for semantic, 512 for tone, etc.
+) {
+    for (int d = 0; d < dim; d++) {
+        // Extract dimension d from all samples
+        float *d_dim_values;
+        cudaMalloc(&d_dim_values, num_samples * sizeof(float));
+        extract_dimension<<<...>>>(d_samples, d_dim_values, d, dim, num_samples);
+
+        // Deterministic sum with run-to-run guarantee
+        float *d_sum;
+        cudaMalloc(&d_sum, sizeof(float));
+
+        void *d_temp = nullptr;
+        size_t temp_bytes = 0;
+
+        // Get temp storage size
+        cub::DeviceReduce::Sum(d_temp, temp_bytes, d_dim_values, d_sum, num_samples);
+        cudaMalloc(&d_temp, temp_bytes);
+
+        // Execute with CRITICAL determinism flag
+        cub::DeviceReduce::Sum<
+            float*, float*, cub::Sum,
+            cub::DeterminismMode::run_to_run  // Bitwise reproducible
+        >(d_temp, temp_bytes, d_dim_values, d_sum, num_samples);
+
+        // Compute mean
+        float sum_host;
+        cudaMemcpy(&sum_host, d_sum, sizeof(float), cudaMemcpyDeviceToHost);
+        float mean = sum_host / num_samples;
+        cudaMemcpy(d_centroid + d, &mean, sizeof(float), cudaMemcpyHostToDevice);
+
+        cudaFree(d_dim_values);
+        cudaFree(d_sum);
+        cudaFree(d_temp);
+    }
+}
+```
+
+**Result:** North Star coordinates are **mathematically absolute constants** (bitwise identical across runs).
+
+---
+
+#### 5.6.7 REQ-CUDA-007: CUDA Graphs with Device-Side Launch
+
+*   **Feature Used:** *CUDA Graphs + Device-Side Graph Launch*.
+*   **Problem:** Ghost Protocol (LOOCV) requires running 100+ validation iterations. Sequential kernel launches create CPU bottleneck.
+*   **Implementation:** Capture validation workflow as CUDA Graph, launch from device kernel.
+
+**Graph Capture:**
+
+```cpp
+cudaGraph_t validation_graph;
+cudaGraphExec_t validation_exec;
+cudaStream_t temp_stream;
+cudaStreamCreate(&temp_stream);
+
+// Begin capture
+cudaStreamBeginCapture(temp_stream, cudaStreamCaptureModeGlobal);
+
+// Capture validation workflow (these are NOT executed yet)
+split_data_kernel<<<grid, block, 0, temp_stream>>>(split_args);
+calc_reference_kernel<<<grid, block, 0, temp_stream>>>(ref_args);
+classify_samples_kernel<<<grid, block, 0, temp_stream>>>(classify_args);
+record_accuracy_kernel<<<grid, block, 0, temp_stream>>>(accuracy_args);
+
+// End capture
+cudaStreamEndCapture(temp_stream, &validation_graph);
+
+// Instantiate (optimize for execution)
+cudaGraphInstantiate(&validation_exec, validation_graph, nullptr, nullptr, 0);
+```
+
+**Device-Side Launch (CUDA 13.1 Feature):**
+
+```cpp
+// Device kernel that launches graphs without CPU involvement
+__global__ void ghost_protocol_device_runner(
+    cudaGraphExec_t graph,
+    int num_iterations,
+    float *d_accuracy_scores
+) {
+    for (int i = threadIdx.x; i < num_iterations; i += blockDim.x) {
+        // Launch graph FROM DEVICE - no CPU round-trip!
+        cudaGraphLaunch(graph, 0);
+
+        // Record accuracy (in-kernel)
+        d_accuracy_scores[i] = /* ... */;
+    }
+}
+
+// Host launch
+cudaGraphExec_t *d_graph;
+cudaMalloc(&d_graph, sizeof(cudaGraphExec_t));
+cudaMemcpy(d_graph, &validation_exec, sizeof(cudaGraphExec_t), cudaMemcpyHostToDevice);
+
+ghost_protocol_device_runner<<<1, 100>>>(*d_graph, 100, d_scores);
+cudaDeviceSynchronize();  // Completes in SECONDS instead of minutes!
+```
+
+**Limitation:** Maximum 120 graphs submitted per device.
+
+---
+
+### 5.7 CUDA 13.1 Impact Summary
+
+| Feature | CUDA 13.1 Tech | PRD Requirement | Benefit |
+|:---|:---|:---|:---|
+| **Green Contexts** | Spatial SM Partitioning (170 SMs) | REQ-CUDA-001 | 60FPS UI guaranteed (17 SMs viz, 153 SMs compute) |
+| **Grouped GEMM** | cuBLAS Blackwell | REQ-CUDA-002 | ~4x faster multi-model inference |
+| **FP8 Storage** | Blackwell Tensor Cores (3.8 TFLOPS) | REQ-CUDA-003 | 4x more data in 32GB VRAM |
+| **CUDA Tile IR** | Tile-Based Programming | REQ-CUDA-004 | Sub-ms mixing slider response |
+| **cuFFT DX** | Device Extensions | REQ-CUDA-005 | Zero-copy audio pipeline |
+| **Deterministic Reductions** | CCCL 3.1 | REQ-CUDA-006 | Bitwise reproducible North Stars |
+| **CUDA Graphs** | Device-Side Launch | REQ-CUDA-007 | Ghost Protocol in seconds |
+| **cuTile Python** | Numba JIT Compiler | REQ-OPT-003 | Python math at C++ speeds |
+
+This transforms the tool from a "Rust Application" into a **"Blackwell Native Application"** optimized for the RTX 5090's 170 SMs, 32GB GDDR7, and 5th-generation Tensor Cores.
+
+---
+
+
+---
+
+File Name: northstarprd copy 7.md
+File Path: docs2/northstarrefinery/northstarprd copy 7.md
+Contents:
+
+
+## 6. Implementation Guide: The Fine-Tuning Loop
+
+This is the specific workflow for the Data Scientist using the tool.
+
+### Step 1: Baseline Generation
+1.  Load 20 generic "Power" text sentences.
+2.  Load 20 generic "Power" audio clips.
+3.  Click **Forge**.
+4.  Go to **Visualize**. Look at the "Power" cluster.
+5.  *Observation:* The audio cluster is too spread out (Standard Deviation > 0.5).
+6.  *Action:* Go back to **Sources**. Identify the 3 audio clips that are outliers (poor recording quality or wrong tone). Delete them.
+7.  Click **Forge** again.
+8.  *Result:* Cluster tightens. Centroid is now accurate.
+
+### Step 2: Mixing Calibration
+1.  Look at the derived archetype "The Catalyst" (Passion + Innovation).
+2.  In the **Visualize** tab, "The Catalyst" is overlapping heavily with "The Rockstar" (Innovation + Passion).
+3.  *Diagnosis:* The distinction between Primary and Secondary is too weak with a 70/30 split.
+4.  *Action:* Adjust **Mixing Slider** to 80/20.
+5.  *Result:* The two archetypes separate in vector space. The heatmap turns from Red to Green.
+
+### Step 3: VAK Tuning
+1.  Load "Visual" text samples.
+2.  Click **Test**. Upload a sentence: "I see what you mean."
+3.  *Result:* System classifies as Auditory.
+4.  *Diagnosis:* The Semantic keyword weights are off.
+5.  *Action:* Manually adjust the **Semantic Weight** in the settings or add more specific "Visual" training data to pull the centroid.
+
+---
+
+## 7. Data Visualization Details
+
+### 7.1 The "DNA Strand" View (Vector Inspector)
+When a user clicks on a specific calculated North Star, show a "DNA Barcode":
+*   **Row 1 (Semantic):** A heatmap strip of the 768 dimensions (Blue=Low, Red=High).
+*   **Row 2 (Tone):** A heatmap strip of 512 dimensions.
+*   **Row 3 (Stats):**
+    *   Valence Target: 0.8
+    *   Arousal Target: 0.6
+    *   Style Formality: 0.9
+
+### 7.2 The Distance Matrix
+A vital tool for proving the system works.
+*   **X-Axis:** 49 Archetypes.
+*   **Y-Axis:** 49 Archetypes.
+*   **Cell Color:** calculated by `1.0 - cosine_similarity(A, B)`.
+*   **Goal:** A bright diagonal line (Self=0 distance) and dark colors everywhere else. Bright spots off-diagonal indicate model confusion.
+
+---
+
+## 8. Development Roadmap
+
+1.  **Phase 1 (Skeleton):** Setup Tauri + React. Build the file ingestion drag-and-drop. Wire up the `cognitive-inference` crate to run on the ingest.
+2.  **Phase 2 (Math):** Implement the Centroid and Mixing logic in Rust. Create the binary exporter.
+3.  **Phase 3 (Viz):** Implement the Distance Matrix (easy) and the 3D Scatter Plot (harder, requires WASM UMAP or server-side reduction).
+4.  **Phase 4 (Interaction):** Connect the sliders to the math for real-time updates.
+5.  **Phase 5 (Testing):** Build the "Mystery File" upload processor.
+
+## 9. Force Multiplier Features Summary
+
+These "Easy Mode" additions transform the tool from a "Calculator" into a **"Laboratory"** that does the heavy lifting for you.
+
+| Feature | Requirement | Problem Solved | Benefit |
+|:---|:---|:---|:---|
+| **Synthetic Text Gen** | REQ-ING-004 | Writer's Block / Tedious typing | Generates 100s of samples in seconds. |
+| **Auto-Segmenter** | REQ-ING-005 | Manual audio editing | Ingests raw podcasts/interviews instantly. |
+| **Data Augmentation** | REQ-ING-006 | Clean audio fails in noisy environments | Creates robust "Heavy" Anchors stable in real-world noise. |
+| **Toxic Sample Detector** | REQ-FORGE-003 | One bad file skews entire centroid | Auto-flags outliers >2.5σ from mean for exclusion. |
+| **Maximize Separation** | REQ-OPT-001 | Manual weight guessing (70/30? 65/35?) | Grid search finds mathematically perfect ratio automatically. |
+| **Contrast Enhancement** | REQ-OPT-002 | Fuzzy, bunched vectors | Sigmoid function sharpens vectors for cleaner classification. |
+| **Ghost Protocol** | REQ-TEST-004 | Manual "Mystery File" testing | Simulates thousands of tests to prove reliability. |
+| **Silhouette Score** | REQ-VIZ-003 | Subjective visual checking | Mathematical proof that profiles are distinct. |
+| **Ghost Overlay** | REQ-VIZ-004 | Can't remember previous state after tweaking | A/B comparison with visual drift tracking. |
+| **Keyword Heatmap** | REQ-VIZ-005 | Unknown word influence on vectors | XAI reveals which tokens drive positioning. |
+| **Reference Playback** | REQ-UI-007 | Abstract numbers | Lets you hear what the "Average Power Person" sounds like. |
+| **Traffic Light System** | REQ-UI-008 | Raw cosine distances are meaningless | Color-coded health status with actionable guidance. |
+| **Green Context GPU** | REQ-CUDA-001 | UI freezes during calculation | 60FPS guaranteed (17/170 SMs for UI). |
+| **Grouped GEMM** | REQ-CUDA-002 | Sequential multi-model inference | ~4x faster batch ingestion. |
+| **FP8 Storage** | REQ-CUDA-003 | VRAM limits on visualization | 4x more data in 32GB VRAM. |
+| **CUDA Tile IR** | REQ-CUDA-004 | Slider latency | Sub-millisecond recalculation. |
+| **cuFFT DX Pipeline** | REQ-CUDA-005 | CPU audio round-trips | Zero-copy GPU audio pipeline. |
+| **Deterministic Math** | REQ-CUDA-006 | Run-to-run variation | Bitwise reproducible Reference Vectors. |
+| **CUDA Graph Launch** | REQ-CUDA-007 | Slow LOOCV | Ghost Protocol in seconds (device-side). |
+| **cuTile Python** | REQ-OPT-003 | Hardcoded math functions | JIT-compile Python to Blackwell GPU. |
+
+---
+
+## 11. Gold Standard PRD Structure
+
+The **North Star Refinery** is now a self-correcting, robust laboratory covering:
+
+1.  **Ingestion:**
+    *   Drag & Drop (+ Auto-Slicing)
+    *   Synthetic Text Gen (Lazy Mode)
+    *   **Augmentation (Noise Injection)**
+    *   **cuFFT DX Audio Pipeline** (Zero-copy GPU processing)
+2.  **Forge:**
+    *   Centroid Calculation
+    *   Mixing Matrix
+    *   **Toxic Sample Pruning**
+    *   **Tile-Based Vector Mixing** (Sub-ms recalculation)
+    *   **Deterministic Reductions** (Bitwise reproducibility)
+3.  **Math Wizard (Auto-Optimization):**
+    *   **Maximize Separation (Grid Search)**
+    *   **Contrast Enhancement (Sigmoid Squash)**
+    *   **Python Kernel Sandbox** (cuTile JIT for custom math)
+4.  **Visualization:**
+    *   3D Galaxy View
+    *   Cluster Health (Silhouette)
+    *   **Ghost Overlay (A/B Compare)**
+    *   **Keyword Heatmap (XAI)**
+    *   **FP8 Native Storage** (4x more data in VRAM)
+5.  **Testing:**
+    *   Mystery File Upload
+    *   Ghost Protocol (Auto-Validation)
+    *   **CUDA Graph Execution** (Instant validation)
+6.  **Export:**
+    *   Strict Binary Schema
+7.  **Mathless Dashboard:**
+    *   **Traffic Light System** (Green/Yellow/Red health status)
+    *   **Zero-Math Workflow** (Drop → Auto-Optimize → Approve)
+8.  **CUDA 13.1 Acceleration Layer (Blackwell Native):**
+    *   **Green Context Partitioning** (10% UI / 90% Math SM split)
+    *   **Grouped GEMM** (~4x multi-model throughput)
+    *   **FP8 Tensor Storage** (4x visualization capacity)
+
+This covers **Data Creation**, **Data Cleaning**, **Model Robustness**, **Auto-Optimization**, **Visualization**, **Comparability**, **Explainability**, **Validation**, **Manager-Friendly UX**, and **Blackwell-Native GPU Acceleration**. Almost every variable of human error and manual calculation has been removed, and the application is optimized specifically for the **NVIDIA RTX 5090**.
+
+---
+
+## 12. Success Criteria for Delivery
+
+### 12.1 Definition of Done (DoD) Checklist
+
+Before this PRD is considered complete, the implementing AI agent must verify ALL of the following:
+
+#### Functional Completeness
+
+| Criterion | Verification Method | Status |
+|:----------|:--------------------|:-------|
+| [ ] All 7 Primary Advantages can accept audio/text samples | Manual test: drop files into each bucket | |
+| [ ] Embeddings extracted from all 5 models (Nomic, WavLM, Wav2Vec2, RoBERTa, BERT) | Unit test: verify vector dimensions | |
+| [ ] Chronemic features (WPM, Latency, Jitter, Overlap) extracted correctly | Unit test with known audio | |
+| [ ] All 42 Secondary Archetypes generated via weighted mixing | Integration test: verify 49 total archetypes | |
+| [ ] VAK profiles synthesized with configurable parameters | Manual test: adjust VAK Tuner | |
+| [ ] Cultural baseline calculated from training data | Unit test: verify mean/std_dev values | |
+| [ ] Toxic sample detection flags outliers >2.5σ | Unit test with synthetic outliers | |
+| [ ] 3D visualization renders 49 North Stars at 60 FPS | Performance test during heavy computation | |
+| [ ] Ghost Protocol completes LOOCV and displays confusion matrix | End-to-end test | |
+| [ ] Binary export produces valid `hogshead_reference_vectors.bin` | Runtime load test with cognitive-core | |
+| [ ] JSON summary report generated with checksums | File existence and format validation | |
+
+#### Non-Functional Completeness
+
+| Criterion | Verification Method | Status |
+|:----------|:--------------------|:-------|
+| [ ] Centroid recalculation <100ms after slider adjustment | Latency benchmark | |
+| [ ] Batch inference >500 samples/minute | Throughput benchmark | |
+| [ ] UI maintains 60 FPS during computation | FPS counter in Three.js | |
+| [ ] Binary exports are bitwise reproducible across runs | SHA256 hash comparison | |
+| [ ] Ghost Protocol completes in <10 seconds for 1000 samples | End-to-end timing | |
+| [ ] All error messages include actionable guidance | Error message audit | |
+
+#### Edge Case Coverage
+
+| Criterion | Verification Method | Status |
+|:----------|:--------------------|:-------|
+| [ ] Short audio (<0.5s) rejected with clear error | Edge case test | |
+| [ ] Long audio (>30min) offers auto-segmentation | Edge case test | |
+| [ ] Empty buckets block export with clear error | Edge case test | |
+| [ ] VAK collision (<30°) blocks export | Edge case test | |
+| [ ] Corrupted audio files handled gracefully | Edge case test | |
+| [ ] Disk full during export handled with cleanup | Edge case test | |
+
+#### Integration Verification
+
+| Criterion | Verification Method | Status |
+|:----------|:--------------------|:-------|
+| [ ] Exported binary loads in cognitive-core crate | Integration test with runtime | |
+| [ ] Schema version header detected by runtime | Byte-level verification | |
+| [ ] All 52 Reference Sets present in binary | Deserialization test | |
+| [ ] Cultural baseline used correctly for Z-Score | Runtime classification test | |
+
+### 12.2 Final Sign-Off Requirements
+
+| Role | Approval Required For | Sign-Off Method |
+|:-----|:----------------------|:----------------|
+| **Lead Data Scientist** | Functional completeness, math correctness | Acceptance test execution |
+| **ML Engineer** | Runtime integration, schema compatibility | Integration test suite |
+| **Product Manager** | UX completeness, manager dashboard clarity | UAT session |
+| **QA Engineer** | Edge case coverage, error handling | Test report review |
+
+---
+
+## Appendix A: Glossary
+
+### Domain-Specific Terms
+
+| Term | Definition |
+|:-----|:-----------|
+| **Advantage** | One of the 7 primary Hogshead personality dimensions (Power, Passion, Prestige, Trust, Mystique, Innovation, Alert) |
+| **Archetype** | A specific personality profile. 7 Primary Archetypes correspond 1:1 with Advantages. 42 Secondary Archetypes are combinations of two Primaries. |
+| **Centroid** | The mean vector calculated from all training samples belonging to a single Archetype. Represents the "center" of that personality in embedding space. |
+| **Chronemics** | The study of time in communication. In this context, temporal features extracted from speech: WPM, Latency, Jitter, Overlap. |
+| **Cognitive Radar** | The production runtime system that uses North Star Reference Vectors to classify user personality from audio/text input. |
+| **Cultural Baseline** | Global statistics (mean WPM, mean latency, etc.) used to normalize chronemic data via Z-Scores for cross-cultural comparison. |
+| **Ghost Protocol** | Leave-One-Out Cross-Validation (LOOCV) automated testing to prove classification accuracy before deployment. |
+| **Hogshead** | Sally Hogshead's Fascination Advantage framework, the psychological model underlying the 49 archetypes. |
+| **North Star** | A reference vector representing the ideal position of an archetype in embedding space. Used as classification targets. |
+| **Reference Set** | The complete 6-stream vector set for a single archetype (Semantic, Tone, Emotion, Style, Action, Chronemic). |
+| **Reference Vector** | Another term for North Star. The authoritative centroid for a single archetype. |
+| **Secondary Archetype** | A combination of two Primary Archetypes, created via weighted vector mixing (e.g., Power + Passion = "The Catalyst"). |
+| **Silhouette Score** | A metric measuring how similar samples are to their own cluster vs other clusters. Range: -1 to 1, higher is better. |
+| **Toxic Sample** | An outlier sample that deviates >2.5 standard deviations from the centroid, potentially skewing results. |
+| **VAK** | Visual, Auditory, Kinesthetic - three learning/communication modalities identified in psychology. |
+
+### Technical Terms
+
+| Term | Definition |
+|:-----|:-----------|
+| **bincode** | A Rust crate for compact binary serialization, used for the export format. |
+| **CCCL** | CUDA Core Compute Libraries - includes cub (primitives) and thrust (algorithms). |
+| **Cosine Similarity** | A measure of similarity between two vectors, calculated as the cosine of the angle between them. Range: -1 to 1. |
+| **cuBLAS** | CUDA Basic Linear Algebra Subroutines - GPU-accelerated matrix operations. |
+| **cuFFT DX** | cuFFT Device Extensions - allows FFT execution inside CUDA kernels without CPU round-trips. |
+| **cuTile** | CUDA Tile programming model for high-level GPU programming with automatic Tensor Core utilization. |
+| **FP8** | 8-bit floating point format (E4M3 or E5M2) for memory-efficient GPU storage. |
+| **Green Context** | CUDA 13.1 feature for spatial SM partitioning, isolating GPU workloads from each other. |
+| **Grouped GEMM** | cuBLAS feature to execute multiple matrix multiplications in a single kernel launch. |
+| **L2 Normalization** | Scaling a vector to unit length by dividing by its Euclidean norm. |
+| **LOOCV** | Leave-One-Out Cross-Validation - testing methodology where each sample is used as test data once. |
+| **Mean Pooling** | Averaging hidden states across the sequence dimension to produce a fixed-size embedding. |
+| **Nomic Embed** | nomic-ai/nomic-embed-text-v1, a 768-dimension text embedding model used for semantic stream. |
+| **Orthogonality** | Perpendicularity in vector space. Orthogonal vectors (90° apart) are maximally distinct. |
+| **SM** | Streaming Multiprocessor - the fundamental compute unit in NVIDIA GPUs. RTX 5090 has 170 SMs. |
+| **t-SNE** | t-Distributed Stochastic Neighbor Embedding - dimensionality reduction algorithm for visualization. |
+| **Tauri** | Desktop application framework using Rust backend + web frontend (React). |
+| **Tensor Core** | Specialized GPU units for matrix operations. 5th generation in Blackwell (RTX 5090). |
+| **Three.js** | JavaScript 3D graphics library used for the Galaxy View visualization. |
+| **UMAP** | Uniform Manifold Approximation and Projection - dimensionality reduction algorithm for visualization. |
+| **VAD** | Voice Activity Detection - identifying speech segments in audio. |
+| **WavLM** | microsoft/wavlm-base-plus-sv, a 512-dimension audio embedding model used for tone stream. |
+| **Wav2Vec2** | facebook/wav2vec2-large, a 1024-dimension audio model used for emotion stream. |
+| **X-Vector** | Speaker embedding format output by WavLM for speaker verification. |
+| **Z-Score** | A statistical measure indicating how many standard deviations a value is from the mean: `(value - mean) / std_dev`. |
+
+### Acronyms
+
+| Acronym | Expansion |
+|:--------|:----------|
+| **API** | Application Programming Interface |
+| **BERT** | Bidirectional Encoder Representations from Transformers |
+| **CI** | Continuous Integration |
+| **CUDA** | Compute Unified Device Architecture (NVIDIA GPU programming) |
+| **FFT** | Fast Fourier Transform |
+| **FPS** | Frames Per Second |
+| **GB** | Gigabytes |
+| **GDDR** | Graphics Double Data Rate (memory type) |
+| **GPU** | Graphics Processing Unit |
+| **GUI** | Graphical User Interface |
+| **IPC** | Inter-Process Communication |
+| **JIT** | Just-In-Time (compilation) |
+| **JSON** | JavaScript Object Notation |
+| **KPI** | Key Performance Indicator |
+| **ML** | Machine Learning |
+| **NFR** | Non-Functional Requirement |
+| **NPS** | Net Promoter Score |
+| **OWASP** | Open Web Application Security Project |
+| **PRD** | Product Requirements Document |
+| **RAM** | Random Access Memory |
+| **RoBERTa** | Robustly Optimized BERT Pretraining Approach |
+| **SHA** | Secure Hash Algorithm |
+| **SIMD** | Single Instruction, Multiple Data |
+| **SM** | Streaming Multiprocessor |
+| **SWDA** | Switchboard Dialog Act (corpus) |
+| **TFLOPS** | Tera Floating Point Operations Per Second |
+| **UAT** | User Acceptance Testing |
+| **UI** | User Interface |
+| **UMAP** | Uniform Manifold Approximation and Projection |
+| **UX** | User Experience |
+| **VAD** | Voice Activity Detection |
+| **VAK** | Visual, Auditory, Kinesthetic |
+| **VRAM** | Video Random Access Memory |
+| **WASM** | WebAssembly |
+| **WPM** | Words Per Minute |
+| **XAI** | Explainable Artificial Intelligence |
+
+---
+
+## Appendix B: Document History
+
+| Version | Date | Author | Changes |
+|:--------|:-----|:-------|:--------|
+| 1.0 | 2025-11-15 | Lead Data Scientist | Initial 5-stream PRD |
+| 1.5 | 2025-11-25 | System Architect | Added CUDA 13.1 acceleration layer |
+| 2.0 | 2025-12-01 | Lead Data Scientist | Added Chronemic (6th stream) + VAK profiles |
+| 2.1 | 2025-12-06 | AI Agent | Added AI-agent implementation sections (Problem Statement, Personas, User Stories, NFRs, Edge Cases, Success Metrics, Agent Details, Guardrails, Risks, Human Oversight, Success Criteria, Glossary) |
+
+---
+
+*End of PRD-2025-NSR-001 v2.1*

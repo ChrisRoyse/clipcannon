@@ -5,7 +5,6 @@ Tests cover:
 - Segment ordering and overlap detection
 - Transition duration constraints
 - Speed range validation
-- Platform duration limits
 - CaptionSpec, CropSpec, MetadataSpec creation
 - Total duration computation
 """
@@ -22,7 +21,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from clipcannon.editing.edl import (
-    PLATFORM_DURATION_LIMITS,
     CaptionSpec,
     CropSpec,
     EditDecisionList,
@@ -249,38 +247,6 @@ class TestDurationComputation:
     def test_empty_segments(self) -> None:
         """Empty segment list returns 0."""
         assert compute_total_duration([]) == 0
-
-
-class TestPlatformDurationLimits:
-    """Test platform-specific duration limits."""
-
-    def test_tiktok_max(self, project_db: Path) -> None:
-        """TikTok duration exceeds platform maximum triggers error."""
-        _, max_s = PLATFORM_DURATION_LIMITS["tiktok"]
-        # Create EDL that exceeds max
-        seg = SegmentSpec(
-            segment_id=1,
-            source_start_ms=0,
-            source_end_ms=200000,
-            output_start_ms=0,
-            speed=1.0,
-        )
-        edl = _make_edl(segments=[seg], target_platform="tiktok")
-        errors = validate_edl(edl, project_db)
-        assert any("exceeds platform maximum" in e for e in errors)
-
-    def test_platform_limits_has_7_platforms(self) -> None:
-        """All 7 platform limits are defined."""
-        expected = {
-            "tiktok",
-            "instagram_reels",
-            "youtube_shorts",
-            "youtube_standard",
-            "youtube_4k",
-            "facebook",
-            "linkedin",
-        }
-        assert set(PLATFORM_DURATION_LIMITS.keys()) == expected
 
 
 class TestTransitionTypes:
