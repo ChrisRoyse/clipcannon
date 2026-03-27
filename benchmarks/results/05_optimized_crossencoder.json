@@ -1,0 +1,169 @@
+{
+  "benchmark": "Optimized Cross-Encoder Benchmark",
+  "optimizations": [
+    "Best-of-12 scored with SpeechBrain (target encoder)",
+    "Augmented enrollment centroid (original + preprocessed + bandlimited + noisy)",
+    "Score-time VoxCeleb-domain preprocessing (HPF + presence boost + noise floor)"
+  ],
+  "baseline_real_preprocessed": {
+    "real_mic_1": 0.9904,
+    "real_mic_2": 0.9886
+  },
+  "baseline_real_raw": {
+    "real_mic_1": 0.9901,
+    "real_mic_2": 0.9921
+  },
+  "clone_scores": {
+    "sb_selected_mean": 0.7826,
+    "sb_selected_std": 0.0351,
+    "sb_selected_min": 0.6604,
+    "sb_selected_max": 0.8343,
+    "sb_denoised_raw_mean": 0.766,
+    "qwen3_mean": 0.987
+  },
+  "previous_score": 0.87,
+  "n_samples": 20,
+  "n_candidates_per_sample": 12,
+  "per_sample": [
+    {
+      "sentence": "The weather outside is absolutely beautiful today.",
+      "sb_selected": 0.6604,
+      "sb_denoised_raw": 0.6519,
+      "sb_denoised_preprocessed": 0.6609,
+      "qwen3_secs": 0.9842
+    },
+    {
+      "sentence": "I just finished reading a really interesting book about space exploration.",
+      "sb_selected": 0.7799,
+      "sb_denoised_raw": 0.7725,
+      "sb_denoised_preprocessed": 0.7781,
+      "qwen3_secs": 0.9884
+    },
+    {
+      "sentence": "Can you believe how fast technology is advancing these days?",
+      "sb_selected": 0.7614,
+      "sb_denoised_raw": 0.7545,
+      "sb_denoised_preprocessed": 0.7643,
+      "qwen3_secs": 0.9864
+    },
+    {
+      "sentence": "Let me show you how this new feature works in the application.",
+      "sb_selected": 0.7821,
+      "sb_denoised_raw": 0.7598,
+      "sb_denoised_preprocessed": 0.7822,
+      "qwen3_secs": 0.9874
+    },
+    {
+      "sentence": "The meeting has been rescheduled to three o'clock tomorrow afternoon.",
+      "sb_selected": 0.7643,
+      "sb_denoised_raw": 0.7723,
+      "sb_denoised_preprocessed": 0.769,
+      "qwen3_secs": 0.9882
+    },
+    {
+      "sentence": "We need to discuss the quarterly budget before the end of the week.",
+      "sb_selected": 0.7932,
+      "sb_denoised_raw": 0.7898,
+      "sb_denoised_preprocessed": 0.7983,
+      "qwen3_secs": 0.9847
+    },
+    {
+      "sentence": "I think the best approach would be to start with the basics first.",
+      "sb_selected": 0.7798,
+      "sb_denoised_raw": 0.7353,
+      "sb_denoised_preprocessed": 0.7746,
+      "qwen3_secs": 0.9876
+    },
+    {
+      "sentence": "Have you ever tried cooking Italian food from scratch at home?",
+      "sb_selected": 0.7387,
+      "sb_denoised_raw": 0.7404,
+      "sb_denoised_preprocessed": 0.7432,
+      "qwen3_secs": 0.9849
+    },
+    {
+      "sentence": "The traffic on the highway was absolutely terrible this morning.",
+      "sb_selected": 0.8078,
+      "sb_denoised_raw": 0.7556,
+      "sb_denoised_preprocessed": 0.8067,
+      "qwen3_secs": 0.9881
+    },
+    {
+      "sentence": "I'm really excited about the upcoming product launch next month.",
+      "sb_selected": 0.8161,
+      "sb_denoised_raw": 0.7911,
+      "sb_denoised_preprocessed": 0.8011,
+      "qwen3_secs": 0.9856
+    },
+    {
+      "sentence": "Please make sure to save your work before closing the application.",
+      "sb_selected": 0.7738,
+      "sb_denoised_raw": 0.7549,
+      "sb_denoised_preprocessed": 0.7775,
+      "qwen3_secs": 0.985
+    },
+    {
+      "sentence": "The customer feedback has been overwhelmingly positive so far.",
+      "sb_selected": 0.8343,
+      "sb_denoised_raw": 0.7886,
+      "sb_denoised_preprocessed": 0.8377,
+      "qwen3_secs": 0.9875
+    },
+    {
+      "sentence": "Let's take a quick break and come back in about fifteen minutes.",
+      "sb_selected": 0.7943,
+      "sb_denoised_raw": 0.7815,
+      "sb_denoised_preprocessed": 0.7965,
+      "qwen3_secs": 0.9855
+    },
+    {
+      "sentence": "I noticed a few small issues that we should probably address soon.",
+      "sb_selected": 0.7874,
+      "sb_denoised_raw": 0.7657,
+      "sb_denoised_preprocessed": 0.7801,
+      "qwen3_secs": 0.9879
+    },
+    {
+      "sentence": "The sunset over the mountains was one of the most beautiful things I've ever seen.",
+      "sb_selected": 0.8012,
+      "sb_denoised_raw": 0.8003,
+      "sb_denoised_preprocessed": 0.799,
+      "qwen3_secs": 0.988
+    },
+    {
+      "sentence": "Don't forget to update your password at least once every ninety days.",
+      "sb_selected": 0.7853,
+      "sb_denoised_raw": 0.7463,
+      "sb_denoised_preprocessed": 0.7886,
+      "qwen3_secs": 0.9882
+    },
+    {
+      "sentence": "We should consider expanding our team to handle the increased workload.",
+      "sb_selected": 0.7735,
+      "sb_denoised_raw": 0.7644,
+      "sb_denoised_preprocessed": 0.7782,
+      "qwen3_secs": 0.9862
+    },
+    {
+      "sentence": "The presentation went really well and the client seemed very impressed.",
+      "sb_selected": 0.8132,
+      "sb_denoised_raw": 0.7951,
+      "sb_denoised_preprocessed": 0.811,
+      "qwen3_secs": 0.9902
+    },
+    {
+      "sentence": "I'll send you the report by end of business today at the latest.",
+      "sb_selected": 0.7983,
+      "sb_denoised_raw": 0.7835,
+      "sb_denoised_preprocessed": 0.7908,
+      "qwen3_secs": 0.9863
+    },
+    {
+      "sentence": "Running every morning has completely changed my energy levels throughout the day.",
+      "sb_selected": 0.8067,
+      "sb_denoised_raw": 0.816,
+      "sb_denoised_preprocessed": 0.8146,
+      "qwen3_secs": 0.9888
+    }
+  ]
+}

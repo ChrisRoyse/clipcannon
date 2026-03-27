@@ -41,6 +41,7 @@ src/
             smart_crop.py                   # Content-aware cropping: detect_faces (MediaPipe/InsightFace), compute_crop_region, smooth_crop_positions, compute_split_screen_layout, compute_pip_layout, fit_mode scaling
             metadata_gen.py                 # Platform-specific metadata generation: generate_metadata produces title, description, hashtags, thumbnail_timestamp_ms from VUD data
             auto_trim.py                    # Automated filler word and pause removal: analyzes transcript to generate clean segments
+            change_classifier.py            # Change classification for iterative editing: classifies EDL modifications by type and scope
             measure_layout.py               # Face detection + layout coordinate computation: computes precise canvas regions for layouts A/B/C/D
             motion.py                       # Motion effects: zoom_in, zoom_out, pan_left/right/up/down, ken_burns with configurable easing
             overlays.py                     # Visual overlays: lower_third, title_card, logo, watermark, cta with position, timing, animation
@@ -51,6 +52,8 @@ src/
             renderer.py                     # RenderEngine class: async render pipeline (source validation, caption write, crop compute, FFmpeg execution, thumbnail, provenance, DB update)
             ffmpeg_cmd.py                   # FFmpeg command builder: build_ffmpeg_cmd (dispatches to standard/split_screen/pip/canvas builders), build_encoding_args, xfade transitions, per-segment canvas compositing, animated zoom, fit_mode scaling, blur background, delogo region removal
             profiles.py                     # 7 encoding profiles (tiktok_vertical, instagram_reels, youtube_shorts, youtube_standard, youtube_4k, facebook, linkedin), get_software_fallback
+            batch.py                        # Batch rendering with asyncio semaphore concurrency control: render_batch for multiple EDLs
+            segment_hash.py                 # Deterministic content hashing for segment render cache: compute_segment_hash from source SHA, segment spec, profile, canvas, color, overlays
             thumbnail.py                    # generate_thumbnail: extract JPEG frame at timestamp with optional crop
             inspector.py                    # Render inspection: extract frames at 5 key timestamps, probe metadata, run quality checks
             preview.py                      # Preview generation: low-quality 540p preview clips, canvas layout preview frames, segment previews
@@ -96,6 +99,7 @@ src/
             audio.py                        # 4 audio tools: generate_music, compose_midi, generate_sfx, audio_cleanup. dispatch_audio_tool
             discovery.py                    # 4 discovery tools: find_best_moments, find_cut_points, get_narrative_flow, find_safe_cuts. dispatch_discovery_tool
             discovery_defs.py               # JSON schema definitions for 4 discovery MCP tools
+            feedback.py                     # Feedback intent parser: translates natural language feedback into structured EDL changes via regex + keyword detection
             voice.py                        # 4 voice tools: prepare_voice_data, voice_profiles, speak, speak_optimized. dispatch_voice_tool
             voice_defs.py                   # JSON schema definitions for 4 voice MCP tools
             avatar.py                       # 1 avatar tool: lip_sync. dispatch_avatar_tool
@@ -106,9 +110,9 @@ src/
 
         pipeline/
             __init__.py                     # Re-exports PipelineOrchestrator, PipelineResult, PipelineStage, StageResult, and stage run functions
-            orchestrator.py                 # DAG-based pipeline runner. Resolves dependencies via topological sort, runs stages, tracks timing, writes stream_status
+            orchestrator.py                 # DAG-based pipeline runner. Resolves dependencies via topological sort, runs stages with per-stage timeouts, tracks timing, writes stream_status
             dag.py                          # Topological sort (Kahn's algorithm) for dependency resolution. update_stream_status helper
-            registry.py                     # Builds the full pipeline DAG with all 21 stages and their dependencies
+            registry.py                     # Builds the full pipeline DAG with all 22 stages and their dependencies
             probe.py                        # Stage: FFprobe metadata extraction and VFR detection
             vfr_normalize.py                # Stage: Variable frame rate normalization to constant frame rate via FFmpeg
             audio_extract.py                # Stage: Audio track extraction from source video via FFmpeg
@@ -127,9 +131,11 @@ src/
             chronemic.py                    # Stage: Pacing/chronemic analysis (words per minute, pause ratios, speaker changes)
             profanity.py                    # Stage: Profanity detection and content safety rating from transcript
             highlights.py                   # Stage: Multi-signal highlight scoring (emotion, reaction, semantic, visual, quality, speaker, narrative)
+            narrative_llm.py                # Stage: Qwen3-8B narrative structure analysis (story beats, open loops, chapters, key moments). Creates narrative_analysis table.
             storyboard.py                   # Stage: Storyboard grid generation from extracted frames
             scene_analysis.py               # Stage: Scene boundary detection, face/webcam/content region analysis, canvas region pre-computation for layouts A/B/C/D. Creates scene_map table.
             screen_layout.py                # Screen layout detection: identifies webcam overlay, content area, browser chrome regions
+            frame_utils.py                  # Shared frame utilities: frame_timestamp_ms computes timestamp from frame filename and extraction FPS
             finalize.py                     # Stage: Final status update, marks project as ready
             source_resolution.py            # Helpers: resolve_source_path, resolve_audio_input
 
@@ -255,7 +261,8 @@ clipcannon.tools.understanding
 clipcannon.pipeline.registry
     -> clipcannon.pipeline.orchestrator (PipelineOrchestrator, PipelineStage)
     -> clipcannon.pipeline.scene_analysis (run_scene_analysis)
-    -> clipcannon.pipeline.* (all 21 stage run functions)
+    -> clipcannon.pipeline.narrative_llm (run_narrative_llm)
+    -> clipcannon.pipeline.* (all 22 stage run functions)
 
 clipcannon.dashboard.app
     -> clipcannon.__init__ (__version__)
@@ -274,6 +281,14 @@ clipcannon = "clipcannon.server:main"
 ```
 
 Calls `server.main()` which sets up structured JSON logging to stderr, creates the MCP Server with all 51 tools registered, and runs it on stdio transport via `asyncio.run(run_stdio())`.
+
+### Narrative LLM stage dependencies
+
+```
+clipcannon.pipeline.narrative_llm
+    -> clipcannon.pipeline.orchestrator (StageResult)
+    -> clipcannon.provenance (ExecutionInfo, InputInfo, ModelInfo, OutputInfo, record_provenance)
+```
 
 ### License Server
 

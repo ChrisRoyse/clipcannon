@@ -1,6 +1,6 @@
 # Pipeline Stages -- Current Code State
 
-This document describes the ClipCannon pipeline as implemented in `src/clipcannon/pipeline/`. Every statement below is derived from the source code at the time of writing.
+This document describes the ClipCannon pipeline as implemented in `src/clipcannon/pipeline/`. The pipeline contains 22 stages total (6 required, 16 optional). Every statement below is derived from the source code at the time of writing.
 
 ## DAG Orchestrator Design
 
@@ -68,6 +68,7 @@ Defined in `pipeline/orchestrator.py` as a `@dataclass`:
 | `depends_on`      | `list[str]`           | `[]`              | Stage names that must complete successfully first  |
 | `run`             | `StageRunFn \| None`  | `None`            | Async function implementing the stage logic        |
 | `fallback_values` | `dict \| None`        | `None`            | Values to record if an optional stage fails        |
+| `timeout_s`       | `int`                 | `600`             | Maximum seconds before the stage is killed         |
 
 `StageRunFn` is typed as `Callable[[str, Path, Path, ClipCannonConfig], Awaitable[StageResult]]`.
 
@@ -84,7 +85,7 @@ Failure of any required stage aborts the pipeline. All subsequent stages are ski
 5. `transcribe`
 6. `finalize`
 
-### Optional stages (15 stages)
+### Optional stages (16 stages)
 
 Failure is logged but does not stop the pipeline. Downstream stages that depend only on optional stages can still attempt to run.
 
@@ -96,13 +97,14 @@ Failure is logged but does not stop the pipeline. Downstream stages that depend 
 6. `storyboard`
 7. `scene_analysis`
 8. `semantic_embed`
-9. `speaker_embed`
-10. `emotion_embed`
-11. `reactions`
-12. `acoustic`
-13. `profanity`
-14. `chronemic`
-15. `highlights`
+9. `narrative_llm`
+10. `speaker_embed`
+11. `emotion_embed`
+12. `reactions`
+13. `acoustic`
+14. `profanity`
+15. `chronemic`
+16. `highlights`
 
 ## Complete Dependency Graph
 
@@ -117,29 +119,31 @@ Level 3: source_separation         -> audio_extract
          visual_embed              -> frame_extract
          ocr                       -> frame_extract
          quality                   -> frame_extract
-         shot_type                 -> frame_extract
          storyboard                -> frame_extract
-         scene_analysis            -> frame_extract
+         transcribe                -> audio_extract
          acoustic                  -> audio_extract
-Level 4: transcribe                -> source_separation
-Level 5: semantic_embed            -> transcribe
-         speaker_embed             -> source_separation, transcribe
-         emotion_embed             -> source_separation
-         reactions                 -> source_separation
+Level 4: shot_type                 -> frame_extract, visual_embed
+         scene_analysis            -> frame_extract, transcribe
+         semantic_embed            -> transcribe
+         narrative_llm             -> transcribe
+         speaker_embed             -> audio_extract, transcribe
+         emotion_embed             -> audio_extract
+         reactions                 -> audio_extract
          profanity                 -> transcribe
-Level 6: chronemic                 -> transcribe, speaker_embed
-Level 7: highlights                -> emotion_embed, reactions, semantic_embed,
+Level 5: chronemic                 -> transcribe, speaker_embed
+Level 6: highlights                -> emotion_embed, reactions, semantic_embed,
                                       visual_embed, quality, speaker_embed,
                                       chronemic
-Level 8: finalize                  -> transcribe, visual_embed, ocr, quality,
+Level 7: finalize                  -> transcribe, visual_embed, ocr, quality,
                                       shot_type, storyboard, semantic_embed,
-                                      speaker_embed, emotion_embed, reactions,
-                                      acoustic, profanity, chronemic, highlights
+                                      narrative_llm, speaker_embed, emotion_embed,
+                                      reactions, acoustic, profanity, chronemic,
+                                      highlights
 ```
 
 Note: The actual level numbers at runtime depend on the topological sort output. The comment levels in the registry are approximate; the sort algorithm determines the true execution order based on the dependency edges above.
 
-## Stage Details (All 21 Stages)
+## Stage Details (All 22 Stages)
 
 ---
 
@@ -381,7 +385,7 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 | **Name**        | `shot_type`                                         |
 | **Operation ID**| `shot_type_classification`                          |
 | **Required**    | No                                                  |
-| **Depends on**  | `frame_extract`                                     |
+| **Depends on**  | `frame_extract`, `visual_embed`                     |
 | **Module**      | `pipeline/shot_type.py`                             |
 | **Internal stage name** | `siglip_zero_shot`                           |
 
@@ -417,7 +421,7 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 | **Name**        | `transcribe`                                        |
 | **Operation ID**| `transcription`                                     |
 | **Required**    | Yes                                                 |
-| **Depends on**  | `source_separation`                                 |
+| **Depends on**  | `audio_extract`                                     |
 | **Module**      | `pipeline/transcribe.py`                            |
 | **Internal stage name** | `whisperx`                                   |
 
@@ -507,14 +511,43 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 13. speaker_embed
+### 13. narrative_llm
+
+| Property        | Value                                               |
+|-----------------|-----------------------------------------------------|
+| **Name**        | `narrative_llm`                                     |
+| **Operation ID**| `narrative_analysis`                                |
+| **Required**    | No                                                  |
+| **Depends on**  | `transcribe`                                        |
+| **Module**      | `pipeline/narrative_llm.py`                         |
+| **Internal stage name** | `qwen3_8b`                                   |
+
+**Inputs**: Transcript text from `transcript_segments` table.
+
+**Operations**:
+1. Checks that the Qwen3-8B model exists in local cache (`~/.clipcannon/models/qwen3-8b-hf/`). Returns failure with download instructions if not found.
+2. Creates the `narrative_analysis` table if it does not exist.
+3. Writes transcript to a temp file and runs Qwen3-8B in a subprocess (`HF_HUB_OFFLINE=1`) for clean GPU memory management.
+4. Prompts the model to analyze: story beats, open loops, chapter boundaries, key moments, and narrative summary.
+5. Parses JSON response from model output.
+6. Stores results in `narrative_analysis` table: `project_id`, `analysis_json`, `model_name`.
+
+**Outputs / DB writes**: `narrative_analysis` (INSERT).
+
+**ML model**: Qwen3-8B (Qwen). Runs in subprocess with FP16 precision on CUDA.
+
+**Fallback if optional stage fails**: Returns `StageResult(success=False)`. If model is not cached locally, returns immediately with a download message.
+
+---
+
+### 14. speaker_embed
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|
 | **Name**        | `speaker_embed`                                     |
 | **Operation ID**| `speaker_diarization`                               |
 | **Required**    | No                                                  |
-| **Depends on**  | `source_separation`, `transcribe`                   |
+| **Depends on**  | `audio_extract`, `transcribe`                       |
 | **Module**      | `pipeline/speaker_embed.py`                         |
 | **Internal stage name** | `wavlm_speaker`                              |
 
@@ -538,14 +571,14 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 14. emotion_embed
+### 15. emotion_embed
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|
 | **Name**        | `emotion_embed`                                     |
 | **Operation ID**| `emotion_analysis`                                  |
 | **Required**    | No                                                  |
-| **Depends on**  | `source_separation`                                 |
+| **Depends on**  | `audio_extract`                                     |
 | **Module**      | `pipeline/emotion_embed.py`                         |
 | **Internal stage name** | `wav2vec2_emotion`                           |
 
@@ -571,14 +604,14 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 15. reactions
+### 16. reactions
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|
 | **Name**        | `reactions`                                         |
 | **Operation ID**| `reaction_detection`                                |
 | **Required**    | No                                                  |
-| **Depends on**  | `source_separation`                                 |
+| **Depends on**  | `audio_extract`                                     |
 | **Module**      | `pipeline/reactions.py`                             |
 | **Internal stage name** | `sensevoice_reactions`                       |
 
@@ -603,7 +636,7 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 16. acoustic
+### 17. acoustic
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|
@@ -638,7 +671,7 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 17. profanity
+### 18. profanity
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|
@@ -668,7 +701,7 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 18. chronemic
+### 19. chronemic
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|
@@ -701,7 +734,7 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 19. highlights
+### 20. highlights
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|
@@ -742,14 +775,14 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 20. scene_analysis
+### 21. scene_analysis
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|
 | **Name**        | `scene_analysis`                                    |
 | **Operation ID**| `scene_analysis`                                    |
 | **Required**    | No                                                  |
-| **Depends on**  | `frame_extract`                                     |
+| **Depends on**  | `frame_extract`, `transcribe`                       |
 | **Module**      | `pipeline/scene_analysis.py`                        |
 | **Internal stage name** | `scene_analysis`                             |
 
@@ -779,14 +812,14 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 21. finalize
+### 22. finalize
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|
 | **Name**        | `finalize`                                          |
 | **Operation ID**| `finalize`                                          |
 | **Required**    | Yes                                                 |
-| **Depends on**  | `transcribe`, `visual_embed`, `ocr`, `quality`, `shot_type`, `storyboard`, `semantic_embed`, `speaker_embed`, `emotion_embed`, `reactions`, `acoustic`, `profanity`, `chronemic`, `highlights` |
+| **Depends on**  | `transcribe`, `visual_embed`, `ocr`, `quality`, `shot_type`, `storyboard`, `semantic_embed`, `narrative_llm`, `speaker_embed`, `emotion_embed`, `reactions`, `acoustic`, `profanity`, `chronemic`, `highlights` |
 | **Module**      | `pipeline/finalize.py`                              |
 | **Internal stage name** | `finalize`                                   |
 

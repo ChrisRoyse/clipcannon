@@ -1,0 +1,29 @@
+{
+  "corrected_benchmark": "Cross-encoder scored against REAL mic recordings (not Demucs-processed clips)",
+  "encoder": "SpeechBrain ECAPA-TDNN 192-dim (independent, trained on VoxCeleb)",
+  "baseline_real_vs_real": {
+    "description": "Two real mic recordings of Chris (same session)",
+    "secs": 0.9987
+  },
+  "baseline_real_vs_different_session": {
+    "description": "Real mic recording vs source video (different mic/room/session)",
+    "secs": 0.7184
+  },
+  "clone_vs_real": {
+    "approved_clone_denoised": 0.87,
+    "approved_clone_raw": 0.8713,
+    "jimmy_sentence_denoised": 0.7554,
+    "anne_sentence_denoised": 0.7248
+  },
+  "interpretation": {
+    "clone_vs_real_same_session": "0.870 - Clone scores higher than a different recording of the same speaker (0.718)",
+    "comparison_to_published": {
+      "NaturalSpeech_3_SOTA": 0.891,
+      "VALL_E_2_human_parity": 0.881,
+      "MaskGCT": 0.877,
+      "ClipCannon_approved_clone": 0.87,
+      "ClipCannon_novel_jimmy": 0.755,
+      "note": "Published academic numbers are single-shot zero-shot on LibriSpeech. ClipCannon uses personalized pipeline with ICL + best-of-N."
+    }
+  }
+}

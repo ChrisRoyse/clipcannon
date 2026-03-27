@@ -1,0 +1,42 @@
+[
+  {
+    "config": "A: Zero-shot (1 random clip, x-vector only, temp=0.8)",
+    "qwen3_secs_mean": 0.9708,
+    "qwen3_secs_std": 0.002,
+    "speechbrain_secs_mean": 0.5296,
+    "speechbrain_secs_std": 0.0598,
+    "n_samples": 10
+  },
+  {
+    "config": "B: + Best reference selection",
+    "qwen3_secs_mean": 0.9729,
+    "qwen3_secs_std": 0.0031,
+    "speechbrain_secs_mean": 0.4677,
+    "speechbrain_secs_std": 0.0819,
+    "n_samples": 10
+  },
+  {
+    "config": "C: + Full ICL mode",
+    "qwen3_secs_mean": 0.9753,
+    "qwen3_secs_std": 0.0015,
+    "speechbrain_secs_mean": 0.624,
+    "speechbrain_secs_std": 0.0473,
+    "n_samples": 10
+  },
+  {
+    "config": "D: + Best-of-8 selection",
+    "qwen3_secs_mean": 0.9772,
+    "qwen3_secs_std": 0.0012,
+    "speechbrain_secs_mean": 0.6106,
+    "speechbrain_secs_std": 0.0568,
+    "n_samples": 10
+  },
+  {
+    "config": "E: + Resemble Enhance denoise (FULL PIPELINE)",
+    "qwen3_secs_mean": 0.9746,
+    "qwen3_secs_std": 0.0019,
+    "speechbrain_secs_mean": 0.642,
+    "speechbrain_secs_std": 0.0447,
+    "n_samples": 10
+  }
+]

@@ -34,7 +34,7 @@ Test video: `testdata/2026-03-20 14-43-20.mp4` (209.9s, 2560x1440, 60fps h264).
 
 ---
 
-## Unit Tests (427 total across 24 files)
+## Unit Tests (425 total across 24 files)
 
 | File | Tests | Domain |
 |---|---|---|
@@ -44,7 +44,7 @@ Test video: `testdata/2026-03-20 14-43-20.mp4` (209.9s, 2560x1440, 60fps h264).
 | `test_provenance_integration.py` | 19 | Hash chain, tamper detection |
 | `test_visual_pipeline.py` | 34 | Storyboard, quality, visual embed, OCR, shot type |
 | `test_derived_stages.py` | 14 | Profanity, chronemic, highlights, finalize |
-| `test_edl.py` | 19 | EDL models, validation, platform constraints |
+| `test_edl.py` | 17 | EDL models, validation |
 | `test_captions.py` | 14 | Caption chunking, ASS generation |
 | `test_smart_crop.py` | 15 | Crop regions, face tracking, aspect ratios |
 | `test_editing_tools.py` | 19 | Create/modify/list edits, metadata, iterative editing |
@@ -87,7 +87,7 @@ Standalone forensic testing (`python tests/fsv_*.py`). Each script: imports ever
 ## Running
 
 ```bash
-pytest                              # Full suite (427 tests)
+pytest                              # Full suite (425 tests)
 pytest tests/integration/           # Integration only
 python tests/fsv_core_infrastructure.py  # Individual FSV script
 ruff check src/                     # Lint

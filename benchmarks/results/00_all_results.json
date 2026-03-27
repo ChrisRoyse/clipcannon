@@ -1,0 +1,102 @@
+{
+  "ablation": [
+    {
+      "config": "A: Zero-shot (1 random clip, x-vector only, temp=0.8)",
+      "qwen3_secs_mean": 0.9708,
+      "qwen3_secs_std": 0.002,
+      "speechbrain_secs_mean": 0.5296,
+      "speechbrain_secs_std": 0.0598,
+      "n_samples": 10
+    },
+    {
+      "config": "B: + Best reference selection",
+      "qwen3_secs_mean": 0.9729,
+      "qwen3_secs_std": 0.0031,
+      "speechbrain_secs_mean": 0.4677,
+      "speechbrain_secs_std": 0.0819,
+      "n_samples": 10
+    },
+    {
+      "config": "C: + Full ICL mode",
+      "qwen3_secs_mean": 0.9753,
+      "qwen3_secs_std": 0.0015,
+      "speechbrain_secs_mean": 0.624,
+      "speechbrain_secs_std": 0.0473,
+      "n_samples": 10
+    },
+    {
+      "config": "D: + Best-of-8 selection",
+      "qwen3_secs_mean": 0.9772,
+      "qwen3_secs_std": 0.0012,
+      "speechbrain_secs_mean": 0.6106,
+      "speechbrain_secs_std": 0.0568,
+      "n_samples": 10
+    },
+    {
+      "config": "E: + Resemble Enhance denoise (FULL PIPELINE)",
+      "qwen3_secs_mean": 0.9746,
+      "qwen3_secs_std": 0.0019,
+      "speechbrain_secs_mean": 0.642,
+      "speechbrain_secs_std": 0.0447,
+      "n_samples": 10
+    }
+  ],
+  "sv_eer": {
+    "benchmark": "Speaker Verification EER",
+    "encoder": "SpeechBrain ECAPA-TDNN 192-dim (independent)",
+    "enrollment_clips": 50,
+    "real_test_clips": 20,
+    "synthetic_clips": 20,
+    "real_scores_mean": 0.6051,
+    "real_scores_std": 0.0873,
+    "synthetic_scores_mean": 0.4892,
+    "synthetic_scores_std": 0.0607,
+    "eer": 0.25,
+    "eer_threshold": 0.5956,
+    "interpretation": "DISTINGUISHABLE",
+    "real_scores": [
+      0.7472,
+      0.574,
+      0.6298,
+      0.62,
+      0.3926,
+      0.6835,
+      0.7311,
+      0.5955,
+      0.7406,
+      0.517,
+      0.6927,
+      0.5229,
+      0.5633,
+      0.6288,
+      0.4897,
+      0.5685,
+      0.6509,
+      0.5835,
+      0.6197,
+      0.5509
+    ],
+    "synthetic_scores": [
+      0.3366,
+      0.5195,
+      0.461,
+      0.4574,
+      0.5392,
+      0.4256,
+      0.3482,
+      0.5208,
+      0.4778,
+      0.5411,
+      0.5543,
+      0.4936,
+      0.4623,
+      0.483,
+      0.4963,
+      0.4935,
+      0.5612,
+      0.5325,
+      0.5476,
+      0.533
+    ]
+  }
+}

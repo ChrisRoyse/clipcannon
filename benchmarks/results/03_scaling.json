@@ -1,0 +1,65 @@
+[
+  {
+    "n_reference_clips": 1,
+    "secs_mean": 0.9638,
+    "secs_std": 0.0042,
+    "secs_min": 0.9545,
+    "secs_max": 0.9691
+  },
+  {
+    "n_reference_clips": 3,
+    "secs_mean": 0.9739,
+    "secs_std": 0.0058,
+    "secs_min": 0.9625,
+    "secs_max": 0.98
+  },
+  {
+    "n_reference_clips": 5,
+    "secs_mean": 0.9808,
+    "secs_std": 0.0051,
+    "secs_min": 0.9698,
+    "secs_max": 0.9857
+  },
+  {
+    "n_reference_clips": 10,
+    "secs_mean": 0.983,
+    "secs_std": 0.0043,
+    "secs_min": 0.9743,
+    "secs_max": 0.9881
+  },
+  {
+    "n_reference_clips": 25,
+    "secs_mean": 0.9862,
+    "secs_std": 0.0041,
+    "secs_min": 0.9797,
+    "secs_max": 0.9918
+  },
+  {
+    "n_reference_clips": 50,
+    "secs_mean": 0.9863,
+    "secs_std": 0.0034,
+    "secs_min": 0.9807,
+    "secs_max": 0.9917
+  },
+  {
+    "n_reference_clips": 100,
+    "secs_mean": 0.9804,
+    "secs_std": 0.0078,
+    "secs_min": 0.963,
+    "secs_max": 0.991
+  },
+  {
+    "n_reference_clips": 250,
+    "secs_mean": 0.9874,
+    "secs_std": 0.0031,
+    "secs_min": 0.9825,
+    "secs_max": 0.9921
+  },
+  {
+    "n_reference_clips": 489,
+    "secs_mean": 0.9824,
+    "secs_std": 0.0053,
+    "secs_min": 0.9723,
+    "secs_max": 0.9896
+  }
+]

@@ -7,7 +7,7 @@
 
 ## What ClipCannon Is
 
-ClipCannon is an AI-powered video understanding, editing, rendering, and voice/avatar pipeline exposed as an MCP (Model Context Protocol) server. An AI assistant connects to ClipCannon over MCP, sends tool calls to analyze video files, create edits, render platform-optimized clips, generate audio, clone voices, and produce lip-synced talking-head videos. The pipeline ingests a source video, runs it through a 21-stage analysis DAG (transcription, scene detection, scene analysis, emotion analysis, beat tracking, and more), and stores all results in a per-project SQLite database. The assistant then queries that database through additional MCP tools to retrieve transcripts, analytics, frames, storyboards, scene maps, editing context, narrative analysis, and discovery data -- and uses the editing, rendering, audio, voice, and avatar tools to produce platform-ready video clips.
+ClipCannon is an AI-powered video understanding, editing, rendering, and voice/avatar pipeline exposed as an MCP (Model Context Protocol) server. An AI assistant connects to ClipCannon over MCP, sends tool calls to analyze video files, create edits, render platform-optimized clips, generate audio, clone voices, and produce lip-synced talking-head videos. The pipeline ingests a source video, runs it through a 22-stage analysis DAG (transcription, scene detection, scene analysis, narrative analysis, emotion analysis, beat tracking, and more), and stores all results in a per-project SQLite database. The assistant then queries that database through additional MCP tools to retrieve transcripts, analytics, frames, storyboards, scene maps, editing context, narrative analysis, and discovery data -- and uses the editing, rendering, audio, voice, and avatar tools to produce platform-ready video clips.
 
 ## Architecture
 
@@ -58,7 +58,7 @@ ML dependencies are in the `[ml]` optional extra and are not required for the MC
 
 | Tool | Description |
 |------|-------------|
-| `clipcannon_ingest` | Run the full 21-stage analysis pipeline on a created project. Registers all stages, executes the DAG, returns results. |
+| `clipcannon_ingest` | Run the full 22-stage analysis pipeline on a created project. Registers all stages, executes the DAG, returns results. |
 | `clipcannon_get_transcript` | Get transcript with word-level timestamps. Paginated in 15-minute windows. Supports `text` and `words` detail levels. |
 | `clipcannon_get_frame` | Get the nearest frame to a timestamp with moment context (transcript, speaker, emotion, topic, shot type, quality, pacing, OCR, profanity). Returns inline base64 image. Supports `render_id` for inspecting rendered output. |
 | `clipcannon_search_content` | Search video content by semantic similarity (sqlite-vec + Nomic embeddings) or text match (SQL LIKE fallback). |
@@ -155,13 +155,13 @@ ML dependencies are in the `[ml]` optional extra and are not required for the MC
 | `clipcannon_credits_estimate` | Estimate the credit cost for an operation: analyze (10), render (2), metadata (1), publish (1). |
 | `clipcannon_spending_limit` | Set the monthly spending limit in credits. Operations exceeding this limit are blocked. |
 
-## Pipeline Stages (21 Stages)
+## Pipeline Stages (22 Stages)
 
-The analysis pipeline is a DAG of 21 stages. 16 analysis streams are tracked in the `stream_status` table:
+The analysis pipeline is a DAG of 22 stages. 16 analysis streams are tracked in the `stream_status` table:
 
 `source_separation`, `visual`, `ocr`, `quality`, `shot_type`, `transcription`, `semantic`, `emotion`, `speaker`, `reactions`, `acoustic`, `beats`, `chronemic`, `storyboards`, `profanity`, `highlights`
 
-Additional orchestration and analysis stages exist in the registry (`probe`, `vfr_normalize`, `audio_extract`, `frame_extract`, `scene_analysis`, `finalize`) that are part of the execution DAG. The `scene_analysis` stage runs after `frame_extract` and analyzes every frame for scene boundaries, face positions, webcam overlay regions, and content areas, storing results in the `scene_map` table.
+Additional orchestration and analysis stages exist in the registry (`probe`, `vfr_normalize`, `audio_extract`, `frame_extract`, `scene_analysis`, `narrative_llm`, `finalize`) that are part of the execution DAG. The `scene_analysis` stage runs after `frame_extract` and `transcribe`, analyzing every frame for scene boundaries, face positions, webcam overlay regions, and content areas, storing results in the `scene_map` table. The `narrative_llm` stage runs Qwen3-8B after `transcribe` to analyze narrative structure (story beats, open loops, chapters), storing results in the `narrative_analysis` table.
 
 ## Project Directory Structure
 
@@ -196,11 +196,13 @@ Each project's `analysis.db` uses schema version 3 and contains:
 
 **Scene analysis table (1)**: `scene_map` -- stores per-scene face positions, webcam regions, content areas, layout recommendations, and pre-computed canvas regions for layouts A/B/C/D
 
+**Narrative analysis table (1)**: `narrative_analysis` -- stores Qwen3-8B narrative structure analysis (story beats, open loops, chapters, key moments, summary) per project
+
 **Vector tables** (sqlite-vec `vec0`): `vec_frames` (float[1152]), `vec_semantic` (float[768]), `vec_emotion` (float[1024]), `vec_speakers` (float[512])
 
 **Phase 3 table (1)**: `voice_profiles` -- stores voice profile metadata, 2048-dim Qwen3-TTS ECAPA-TDNN speaker embeddings, verification thresholds. Located in `~/.clipcannon/voice_profiles.db` (separate from project databases).
 
-Schema version: 3 (migrated from v1 -> v2 -> v3 via `migrate_to_v2()` and `migrate_to_v3()`). Connection pragmas: WAL journal mode, NORMAL synchronous, 64MB cache, foreign keys ON, temp store in memory.
+Schema version: 3 (migrated from v1 -> v2 -> v3 via `migrate_to_v2()` and `migrate_to_v3()`). The `narrative_analysis` and `scene_map` tables are created on demand by their respective pipeline stages. Connection pragmas: WAL journal mode, NORMAL synchronous, 64MB cache, foreign keys ON, temp store in memory.
 
 ## Exception Hierarchy
 
@@ -255,11 +257,11 @@ The `ModelManager` in the GPU module uses an LRU eviction strategy. GPUs with >1
 
 ### Editing Engine (`src/clipcannon/editing/`)
 
-Declarative Edit Decision List (EDL) architecture supporting segment-based editing, adaptive caption generation, content-aware smart cropping (face tracking, split-screen, picture-in-picture, canvas compositing), automated filler/pause trimming, color grading, motion effects (zoom, pan, Ken Burns), visual overlays (lower thirds, title cards, logos, CTAs), iterative editing with version control (edit history, revert, branching, feedback application), and platform-specific metadata generation for 7 target platforms.
+Declarative Edit Decision List (EDL) architecture supporting segment-based editing, adaptive caption generation, content-aware smart cropping (face tracking, split-screen, picture-in-picture, canvas compositing), automated filler/pause trimming, color grading, motion effects (zoom, pan, Ken Burns), visual overlays (lower thirds, title cards, logos, CTAs), iterative editing with version control (edit history, revert, branching, feedback application), change classification, and platform-specific metadata generation for 7 target platforms. No hardcoded platform duration limits -- duration is unconstrained to support real-world workflows.
 
 ### Rendering Engine (`src/clipcannon/rendering/`)
 
-Async FFmpeg-based rendering pipeline with 7 platform-optimized encoding profiles, GPU acceleration (NVENC/HEVC), transition effects (xfade), caption burn-in (ASS subtitles), per-segment canvas compositing with animated zoom, thumbnail generation, segment-level caching, render inspection, segment preview, and contact sheet storyboard generation.
+Async FFmpeg-based rendering pipeline with 7 platform-optimized encoding profiles (all h264_nvenc with software libx264 fallback), GPU acceleration (NVENC), transition effects (xfade), caption burn-in (ASS subtitles), per-segment canvas compositing with animated zoom, thumbnail generation, segment-level caching with content hashing, batch rendering with concurrency control, render inspection, segment preview, and contact sheet storyboard generation.
 
 ### Audio Engine (`src/clipcannon/audio/`)
 
@@ -279,4 +281,8 @@ Lip-sync video generation using LatentSync 1.6 (ByteDance) diffusion pipeline. T
 
 ### Scene Analysis (`src/clipcannon/pipeline/scene_analysis.py`)
 
-Automated scene analysis that runs during ingest after frame extraction. Analyzes every extracted frame to detect scene boundaries (SSIM-based with 8s max scene duration), face positions, webcam overlay regions, and content areas. Pre-computes canvas regions for all layout types (A: 30/70 split, B: 40/60 split, C: PIP, D: full-screen face) so the AI never needs to manually measure coordinates. Results stored in the `scene_map` table.
+Automated scene analysis that runs during ingest after frame extraction and transcription. Analyzes every extracted frame to detect scene boundaries (SSIM-based with 8s max scene duration), face positions, webcam overlay regions, and content areas. Pre-computes canvas regions for all layout types (A: 30/70 split, B: 40/60 split, C: PIP, D: full-screen face) so the AI never needs to manually measure coordinates. Results stored in the `scene_map` table.
+
+### Narrative Analysis (`src/clipcannon/pipeline/narrative_llm.py`)
+
+Qwen3-8B LLM-based narrative structure analysis. Runs after transcription to identify story beats, open loops, chapter boundaries, key moments, and generate a narrative summary. Runs in a subprocess for clean GPU memory management. Results stored in the `narrative_analysis` table.

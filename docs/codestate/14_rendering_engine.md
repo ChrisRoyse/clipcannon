@@ -80,14 +80,14 @@ EDL -> Source validation (SHA-256, generation loss check)
 | Profile | Resolution | FPS | Codec | Bitrate | Aspect |
 |---|---|---|---|---|---|
 | tiktok_vertical | 1080x1920 | 30 | h264_nvenc | 8M | 9:16 |
-| instagram_reels | 1080x1920 | 30 | h264_nvenc | 8M | 9:16 |
+| instagram_reels | 1080x1920 | 30 | h264_nvenc | 6M | 9:16 |
 | youtube_shorts | 1080x1920 | 30 | h264_nvenc | 8M | 9:16 |
 | youtube_standard | 1920x1080 | 30 | h264_nvenc | 12M | 16:9 |
-| youtube_4k | 3840x2160 | 30 | hevc_nvenc | 35M | 16:9 |
-| facebook | 1200x628 | 30 | h264_nvenc | 6M | ~2:1 |
-| linkedin | 1200x628 | 30 | h264_nvenc | 6M | ~2:1 |
+| youtube_4k | 3840x2160 | 30 | h264_nvenc | 40M | 16:9 |
+| facebook | 1080x1920 | 30 | h264_nvenc | 6M | 9:16 |
+| linkedin | 1080x1080 | 30 | h264_nvenc | 5M | 1:1 |
 
-Software fallback: `h264_nvenc` -> `libx264`, `hevc_nvenc` -> `libx265`.
+Software fallback: `h264_nvenc` -> `libx264`, `hevc_nvenc` -> `libx265`, `av1_nvenc` -> `libsvtav1`.
 
 ---
 
@@ -107,6 +107,14 @@ Extracts frames at 5 key timestamps (0/25/50/75/100%), probes metadata via ffpro
 
 **Preview segment**: Low-quality preview of a specific segment within an edit. No credits.
 
-## 7. Credits
+## 7. Batch Rendering (`batch.py`)
+
+`render_batch(edl_list, project_dir, db_path, config, max_concurrent=3)`: Renders multiple EDLs concurrently using an asyncio semaphore to limit parallel FFmpeg/NVENC sessions. Default max concurrency matches `rendering.max_parallel_renders` config.
+
+## 8. Segment Hashing (`segment_hash.py`)
+
+`compute_segment_hash(source_sha256, segment, profile_name, canvas, global_color, overlays)`: Deterministic SHA-256 content hash from all factors affecting rendered output. Used by the segment render cache (`segment_cache` table) to detect unchanged segments and skip re-rendering.
+
+## 9. Credits
 
 `clipcannon_render`: 2 credits. Refunded on failure.

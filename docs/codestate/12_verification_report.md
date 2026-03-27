@@ -16,7 +16,7 @@ Extended scripts (`manual_fsv_full.py`, `manual_fsv_iterative.py`, `manual_fsv_p
 
 ## Pytest Results
 
-427 tests across 24 files. See [11_test_suite.md](11_test_suite.md) for breakdown.
+425 tests across 24 files. See [11_test_suite.md](11_test_suite.md) for breakdown.
 
 ## Lint
 
@@ -27,9 +27,9 @@ Ruff: Python 3.12, line length 100, rules E/F/W/I/N/UP/ANN/B/SIM/TCH. Source roo
 | Metric | Count |
 |---|---|
 | Source packages | `src/clipcannon/`, `src/license_server/` |
-| Pipeline stages | 21 |
+| Pipeline stages | 22 |
 | MCP tools | 51 |
-| Database tables | 23 core + 4 vector + 6 editing/rendering + 1 voice = 34 |
+| Database tables | 23 core + 1 narrative + 4 vector + 6 editing/rendering + 1 voice = 35 |
 | Encoding profiles | 7 |
 | Target platforms | 7 |
 | Pytest files | 24 |

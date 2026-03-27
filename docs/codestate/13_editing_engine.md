@@ -12,29 +12,19 @@ Helpers (editing_helpers.py) -- validation, spec builders, DB storage
     +-- EDL Models (edl.py)
     +-- Captions (captions.py, caption_render.py)
     +-- Smart Crop (smart_crop.py)
+    +-- Change Classifier (change_classifier.py)
     +-- Metadata (metadata_gen.py)
     +-- Auto Trim (auto_trim.py)
     +-- Motion (motion.py)
     +-- Overlays (overlays.py)
     +-- Subject Extraction (subject_extraction.py)
     +-- Measure Layout (measure_layout.py)
+    +-- Feedback Parser (tools/feedback.py)
 ```
 
 ---
 
 ## 1. EDL Models (`edl.py`)
-
-### Platform Duration Limits
-
-| Platform | Min (s) | Max (s) |
-|---|---|---|
-| tiktok | 5 | 180 |
-| instagram_reels | 5 | 90 |
-| youtube_shorts | 5 | 180 |
-| youtube_standard | 30 | 600 |
-| youtube_4k | 30 | 600 |
-| facebook | 5 | 90 |
-| linkedin | 10 | 600 |
 
 ### Enumerations
 
@@ -63,7 +53,7 @@ Helpers (editing_helpers.py) -- validation, spec builders, DB storage
 
 ### Validation
 
-`validate_edl(edl, project_db_path)` checks: source SHA-256 match, segment ordering (non-overlapping), total duration within platform limits, speed range, transition durations.
+`validate_edl(edl, project_db_path)` checks: source SHA-256 match, segment ordering (non-overlapping), segment time within source duration, speed range (0.25-4.0), transition durations. No platform duration limits are enforced -- duration is unconstrained to support real-world workflows.
 
 `compute_total_duration(segments)` accounts for speed changes and transition overlaps.
 
@@ -92,7 +82,7 @@ Styles: `bold_centered` (white bold center-bottom), `word_highlight` (current wo
 
 ## 4. Smart Crop (`smart_crop.py`)
 
-**Platform aspect ratios**: tiktok/instagram_reels/youtube_shorts/facebook = 9:16, youtube_standard/youtube_4k = 16:9, linkedin = 1:1.
+**Platform aspect ratios**: tiktok/instagram_reels/youtube_shorts/facebook = 9:16, youtube_standard/youtube_4k = 16:9, linkedin = 1:1. Defined in `PLATFORM_ASPECTS` dict in `smart_crop.py`.
 
 **Face detection**: `detect_faces(frame_path)` -> MediaPipe primary, InsightFace fallback. Returns faces sorted by area.
 

@@ -73,8 +73,8 @@ tables are created, then calls `migrate_to_v2()` and `migrate_to_v3()`.
 
 ## 3. Core Tables
 
-There are 30 core tables (including `schema_version`, `provenance`,
-`scene_map`, Phase 2, and Phase 3 tables), organized below by domain.
+There are 31 core tables (including `schema_version`, `provenance`,
+`scene_map`, `narrative_analysis`, Phase 2, and Phase 3 tables), organized below by domain.
 
 ### 3.1 Project Metadata
 
@@ -211,7 +211,23 @@ Created by the `scene_analysis` pipeline stage. Stores per-scene face positions,
 | `canvas_regions_json` | TEXT | DEFAULT '{}' | JSON with pre-computed canvas regions for all layout types |
 | `transcript_text` | TEXT | DEFAULT '' | Aligned transcript text for this scene |
 
-### 3.9 Phase 2: Editing Tables
+### 3.9 Narrative Analysis Table
+
+#### `narrative_analysis`
+
+Created on demand by the `narrative_llm` pipeline stage. Stores Qwen3-8B narrative structure analysis.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Auto-incrementing ID |
+| `project_id` | TEXT | NOT NULL, FK -> project | Owning project |
+| `analysis_json` | TEXT | NOT NULL | JSON with story beats, open loops, chapters, key moments, narrative summary |
+| `model_name` | TEXT | NOT NULL DEFAULT 'Qwen3-8B' | Model used for analysis |
+| `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |
+
+Index: `idx_narrative_project` on `narrative_analysis(project_id)`.
+
+### 3.10 Phase 2: Editing Tables
 
 #### `edits`
 
@@ -281,7 +297,7 @@ Created by the `scene_analysis` pipeline stage. Stores per-scene face positions,
 | `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |
 | `last_used_at` | TEXT | NOT NULL DEFAULT datetime('now') | Last access timestamp |
 
-### 3.10 Phase 2: Render Tables
+### 3.11 Phase 2: Render Tables
 
 #### `renders`
 
@@ -305,7 +321,7 @@ Created by the `scene_analysis` pipeline stage. Stores per-scene face positions,
 | `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |
 | `completed_at` | TEXT | | Render completion timestamp |
 
-### 3.11 Phase 2: Audio Assets Table
+### 3.12 Phase 2: Audio Assets Table
 
 #### `audio_assets`
 
@@ -324,7 +340,7 @@ Created by the `scene_analysis` pipeline stage. Stores per-scene face positions,
 | `volume_db` | REAL | DEFAULT 0 | Volume adjustment in dB |
 | `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |
 
-### 3.12 Phase 3: Voice Profiles Table
+### 3.13 Phase 3: Voice Profiles Table
 
 #### `voice_profiles`
 
@@ -377,6 +393,7 @@ Phase 1 indexes (9) plus Phase 2/3 additions:
 | `idx_edit_versions_edit` | `edit_versions` | `edit_id, version_number` | Phase 2: Version history lookup |
 | `idx_segment_cache_project` | `segment_cache` | `project_id` | Phase 2: Cache lookup |
 | `idx_voice_profiles_name` | `voice_profiles` | `name` | Phase 3: Profile lookup by name |
+| `idx_narrative_project` | `narrative_analysis` | `project_id` | Narrative analysis lookup by project |
 
 ---
 
