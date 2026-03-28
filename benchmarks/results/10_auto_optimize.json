@@ -1,0 +1,339 @@
+{
+  "trials": [
+    {
+      "trial_id": 12,
+      "name": "N=12 best",
+      "params": {
+        "name": "N=12 best",
+        "inference_cfg_rate": 0.7,
+        "speed": 1.0,
+        "num_candidates": 12,
+        "text_frontend": false
+      },
+      "mean_sim": 0.7211,
+      "max_sim": 0.8357,
+      "std_sim": 0.0699,
+      "n_scored": 5,
+      "elapsed_s": 551.6,
+      "per_sample": [
+        0.7002,
+        0.7623,
+        0.658,
+        0.6492,
+        0.8357
+      ]
+    },
+    {
+      "trial_id": 11,
+      "name": "N=6 best",
+      "params": {
+        "name": "N=6 best",
+        "inference_cfg_rate": 0.7,
+        "speed": 1.0,
+        "num_candidates": 6,
+        "text_frontend": false
+      },
+      "mean_sim": 0.7151,
+      "max_sim": 0.7958,
+      "std_sim": 0.0614,
+      "n_scored": 5,
+      "elapsed_s": 292.7,
+      "per_sample": [
+        0.728,
+        0.7521,
+        0.6831,
+        0.6163,
+        0.7958
+      ]
+    },
+    {
+      "trial_id": 3,
+      "name": "CFG 0.9",
+      "params": {
+        "name": "CFG 0.9",
+        "inference_cfg_rate": 0.9,
+        "speed": 1.0,
+        "num_candidates": 1,
+        "text_frontend": false
+      },
+      "mean_sim": 0.6734,
+      "max_sim": 0.8069,
+      "std_sim": 0.0717,
+      "n_scored": 5,
+      "elapsed_s": 50.8,
+      "per_sample": [
+        0.6859,
+        0.6069,
+        0.6422,
+        0.625,
+        0.8069
+      ]
+    },
+    {
+      "trial_id": 8,
+      "name": "Speed 1.05",
+      "params": {
+        "name": "Speed 1.05",
+        "inference_cfg_rate": 0.7,
+        "speed": 1.05,
+        "num_candidates": 1,
+        "text_frontend": false
+      },
+      "mean_sim": 0.6729,
+      "max_sim": 0.7709,
+      "std_sim": 0.0588,
+      "n_scored": 4,
+      "elapsed_s": 40.0,
+      "per_sample": [
+        0.65,
+        0.6562,
+        0.6145,
+        0.7709
+      ]
+    },
+    {
+      "trial_id": 10,
+      "name": "N=3 best",
+      "params": {
+        "name": "N=3 best",
+        "inference_cfg_rate": 0.7,
+        "speed": 1.0,
+        "num_candidates": 3,
+        "text_frontend": false
+      },
+      "mean_sim": 0.6589,
+      "max_sim": 0.8098,
+      "std_sim": 0.1241,
+      "n_scored": 5,
+      "elapsed_s": 160.3,
+      "per_sample": [
+        0.4355,
+        0.724,
+        0.6552,
+        0.6701,
+        0.8098
+      ]
+    },
+    {
+      "trial_id": 6,
+      "name": "Speed 0.9",
+      "params": {
+        "name": "Speed 0.9",
+        "inference_cfg_rate": 0.7,
+        "speed": 0.9,
+        "num_candidates": 1,
+        "text_frontend": false
+      },
+      "mean_sim": 0.633,
+      "max_sim": 0.6725,
+      "std_sim": 0.0292,
+      "n_scored": 3,
+      "elapsed_s": 50.5,
+      "per_sample": [
+        0.6725,
+        0.6027,
+        0.6238
+      ]
+    },
+    {
+      "trial_id": 9,
+      "name": "Speed 1.1",
+      "params": {
+        "name": "Speed 1.1",
+        "inference_cfg_rate": 0.7,
+        "speed": 1.1,
+        "num_candidates": 1,
+        "text_frontend": false
+      },
+      "mean_sim": 0.6253,
+      "max_sim": 0.683,
+      "std_sim": 0.0449,
+      "n_scored": 4,
+      "elapsed_s": 43.2,
+      "per_sample": [
+        0.6209,
+        0.6392,
+        0.683,
+        0.558
+      ]
+    },
+    {
+      "trial_id": 0,
+      "name": "Baseline",
+      "params": {
+        "name": "Baseline",
+        "inference_cfg_rate": 0.7,
+        "speed": 1.0,
+        "num_candidates": 1,
+        "text_frontend": false
+      },
+      "mean_sim": 0.6171,
+      "max_sim": 0.7549,
+      "std_sim": 0.0827,
+      "n_scored": 5,
+      "elapsed_s": 57.6,
+      "per_sample": [
+        0.5242,
+        0.6048,
+        0.6551,
+        0.5465,
+        0.7549
+      ]
+    },
+    {
+      "trial_id": 13,
+      "name": "TextFE=True",
+      "params": {
+        "name": "TextFE=True",
+        "inference_cfg_rate": 0.7,
+        "speed": 1.0,
+        "num_candidates": 1,
+        "text_frontend": true
+      },
+      "mean_sim": 0.6046,
+      "max_sim": 0.6545,
+      "std_sim": 0.0355,
+      "n_scored": 3,
+      "elapsed_s": 47.3,
+      "per_sample": [
+        0.6545,
+        0.5849,
+        0.5744
+      ]
+    },
+    {
+      "trial_id": 4,
+      "name": "CFG 1.0",
+      "params": {
+        "name": "CFG 1.0",
+        "inference_cfg_rate": 1.0,
+        "speed": 1.0,
+        "num_candidates": 1,
+        "text_frontend": false
+      },
+      "mean_sim": 0.5955,
+      "max_sim": 0.6728,
+      "std_sim": 0.0568,
+      "n_scored": 3,
+      "elapsed_s": 47.0,
+      "per_sample": [
+        0.5758,
+        0.6728,
+        0.5378
+      ]
+    },
+    {
+      "trial_id": 2,
+      "name": "CFG 0.5",
+      "params": {
+        "name": "CFG 0.5",
+        "inference_cfg_rate": 0.5,
+        "speed": 1.0,
+        "num_candidates": 1,
+        "text_frontend": false
+      },
+      "mean_sim": 0.5364,
+      "max_sim": 0.7261,
+      "std_sim": 0.2374,
+      "n_scored": 5,
+      "elapsed_s": 48.1,
+      "per_sample": [
+        0.6398,
+        0.5946,
+        0.7261,
+        0.6522,
+        0.0692
+      ]
+    },
+    {
+      "trial_id": 5,
+      "name": "CFG 1.2",
+      "params": {
+        "name": "CFG 1.2",
+        "inference_cfg_rate": 1.2,
+        "speed": 1.0,
+        "num_candidates": 1,
+        "text_frontend": false
+      },
+      "mean_sim": 0.5261,
+      "max_sim": 0.7397,
+      "std_sim": 0.2461,
+      "n_scored": 5,
+      "elapsed_s": 48.5,
+      "per_sample": [
+        0.496,
+        0.7397,
+        0.6992,
+        0.6331,
+        0.0625
+      ]
+    },
+    {
+      "trial_id": 7,
+      "name": "Speed 0.95",
+      "params": {
+        "name": "Speed 0.95",
+        "inference_cfg_rate": 0.7,
+        "speed": 0.95,
+        "num_candidates": 1,
+        "text_frontend": false
+      },
+      "mean_sim": 0.4567,
+      "max_sim": 0.6641,
+      "std_sim": 0.2089,
+      "n_scored": 3,
+      "elapsed_s": 47.2,
+      "per_sample": [
+        0.1708,
+        0.6641,
+        0.5353
+      ]
+    },
+    {
+      "trial_id": 1,
+      "name": "CFG 0.3",
+      "params": {
+        "name": "CFG 0.3",
+        "inference_cfg_rate": 0.3,
+        "speed": 1.0,
+        "num_candidates": 1,
+        "text_frontend": false
+      },
+      "mean_sim": 0.4444,
+      "max_sim": 0.6505,
+      "std_sim": 0.221,
+      "n_scored": 5,
+      "elapsed_s": 45.8,
+      "per_sample": [
+        0.5543,
+        0.5321,
+        0.6505,
+        0.4667,
+        0.0184
+      ]
+    }
+  ],
+  "best": {
+    "trial_id": 12,
+    "name": "N=12 best",
+    "params": {
+      "name": "N=12 best",
+      "inference_cfg_rate": 0.7,
+      "speed": 1.0,
+      "num_candidates": 12,
+      "text_frontend": false
+    },
+    "mean_sim": 0.7211,
+    "max_sim": 0.8357,
+    "std_sim": 0.0699,
+    "n_scored": 5,
+    "elapsed_s": 551.6,
+    "per_sample": [
+      0.7002,
+      0.7623,
+      0.658,
+      0.6492,
+      0.8357
+    ]
+  }
+}
