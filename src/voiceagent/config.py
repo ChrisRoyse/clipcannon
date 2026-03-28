@@ -18,7 +18,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class LLMConfig:
-    model_path: str = "/home/cabdru/.cache/huggingface/hub/models--Qwen--Qwen3-14B-FP8/snapshots/9a283b4a5efbc09ce247e0ae5b02b744739e525a/"
+    model_path: str = (
+        "/home/cabdru/.cache/huggingface/hub/"
+        "models--Qwen--Qwen3-14B-FP8/snapshots/"
+        "9a283b4a5efbc09ce247e0ae5b02b744739e525a/"
+    )
     quantization: str = "fp8"
     gpu_memory_utilization: float = 0.45
     max_model_len: int = 32768
@@ -87,7 +91,13 @@ _RANGE_CHECKS: dict[str, dict[str, tuple[float, float]]] = {
 }
 
 
-def _validate_range(section: str, key: str, value: float | int, low: float | int, high: float | int) -> None:
+def _validate_range(
+    section: str,
+    key: str,
+    value: float | int,
+    low: float | int,
+    high: float | int,
+) -> None:
     if not (low <= value <= high):
         raise ConfigError(
             f"Config [{section}].{key} = {value!r} is out of range [{low}, {high}]. "
@@ -96,11 +106,8 @@ def _validate_range(section: str, key: str, value: float | int, low: float | int
 
 
 def _build_section(section_name: str, cls: type, data: dict) -> object:
-    valid_fields = {f.name: f for f in dataclasses.fields(cls)}
-    filtered = {}
-    for k, v in data.items():
-        if k in valid_fields:
-            filtered[k] = v
+    valid_fields = {f.name for f in dataclasses.fields(cls)}
+    filtered = {k: v for k, v in data.items() if k in valid_fields}
     try:
         instance = cls(**filtered)
     except TypeError as e:

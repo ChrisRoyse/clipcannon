@@ -1,9 +1,9 @@
 """Tests for StreamingTTS."""
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 from voiceagent.tts.chunker import SentenceChunker
 from voiceagent.tts.streaming import StreamingTTS

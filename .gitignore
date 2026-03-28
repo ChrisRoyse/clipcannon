@@ -62,6 +62,8 @@ benchmarks/samples/**/*.wav
 *.zip
 
 # Media files - screenshots, videos
+docs/*.png
+docs/*.jpg
 docs2/*.png
 docs2/*.mp4
 docs2/*.jpg

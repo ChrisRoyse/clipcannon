@@ -1,6 +1,6 @@
 """Database connection factory."""
-import sqlite3
 import logging
+import sqlite3
 from pathlib import Path
 
 from voiceagent.errors import DatabaseError

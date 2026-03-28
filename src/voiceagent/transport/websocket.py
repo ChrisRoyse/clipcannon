@@ -4,11 +4,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Callable, Awaitable
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from voiceagent.errors import TransportError
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +20,10 @@ class WebSocketTransport:
     def __init__(self, host: str = "0.0.0.0", port: int = 8765) -> None:
         try:
             import websockets  # noqa: F401
-        except ImportError:
+        except ImportError as err:
             raise ImportError(
                 "websockets is required. Install with: pip install websockets"
-            )
+            ) from err
         self.host = host
         self.port = port
         self._ws = None
@@ -45,17 +48,23 @@ class WebSocketTransport:
                 f"Fix: check if port {self.port} is in use."
             ) from e
 
-    async def _handle(self, ws, on_audio, on_control) -> None:
+    async def _handle(
+        self,
+        ws: object,
+        on_audio: Callable[[np.ndarray], Awaitable[None]],
+        on_control: Callable[[dict], Awaitable[None]],
+    ) -> None:
         self._ws = ws
         remote = ws.remote_address
         logger.info("Client connected: %s", remote)
         try:
             async for message in ws:
                 if isinstance(message, bytes):
-                    if len(message) == 0:
+                    if not message:
                         continue
+                    # Truncate to even length for int16 alignment
                     if len(message) % 2 != 0:
-                        message = message[:len(message) - 1]
+                        message = message[:-1]
                     audio = np.frombuffer(message, dtype=np.int16)
                     await on_audio(audio)
                 else:

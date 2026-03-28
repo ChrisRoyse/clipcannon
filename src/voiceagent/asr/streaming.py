@@ -18,7 +18,7 @@ class StreamingASR:
     SAMPLES_PER_CHUNK: int = 3200
     VAD_CHUNK_SIZE: int = 512
 
-    def __init__(self, config, vad: SileroVAD | None = None) -> None:
+    def __init__(self, config: object, vad: SileroVAD | None = None) -> None:
         try:
             import faster_whisper
             self.model = faster_whisper.WhisperModel(

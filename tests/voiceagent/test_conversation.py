@@ -1,11 +1,10 @@
 """Tests for conversation state machine."""
-import asyncio
 
 import numpy as np
 import pytest
 
+from voiceagent.conversation.manager import ConversationManager
 from voiceagent.conversation.state import ConversationState
-from voiceagent.conversation.manager import ConversationManager, VALID_TRANSITIONS
 from voiceagent.errors import ConversationError
 
 

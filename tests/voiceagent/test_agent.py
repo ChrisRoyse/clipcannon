@@ -1,10 +1,7 @@
 """Tests for VoiceAgent orchestrator -- config/DB only, no GPU loading."""
-import sqlite3
-import uuid
 
-import pytest
 
-from voiceagent.agent import VoiceAgent
+from voiceagent.agent import AgentLifecycle, VoiceAgent
 from voiceagent.config import VoiceAgentConfig
 
 
@@ -31,8 +28,8 @@ def test_agent_not_initialized_on_create():
 
 
 def test_start_conversation_creates_db_record(tmp_path):
-    from voiceagent.db.schema import init_db
     from voiceagent.db.connection import get_connection
+    from voiceagent.db.schema import init_db
     db_path = tmp_path / "test.db"
     init_db(db_path)
     agent = VoiceAgent()
@@ -53,8 +50,8 @@ def test_start_conversation_creates_db_record(tmp_path):
 
 
 def test_log_turn_creates_db_record(tmp_path):
-    from voiceagent.db.schema import init_db
     from voiceagent.db.connection import get_connection
+    from voiceagent.db.schema import init_db
     db_path = tmp_path / "test.db"
     init_db(db_path)
     agent = VoiceAgent()
@@ -81,8 +78,8 @@ def test_log_turn_creates_db_record(tmp_path):
 
 
 def test_log_multiple_turns_increments_count(tmp_path):
-    from voiceagent.db.schema import init_db
     from voiceagent.db.connection import get_connection
+    from voiceagent.db.schema import init_db
     db_path = tmp_path / "test.db"
     init_db(db_path)
     agent = VoiceAgent()
@@ -114,3 +111,21 @@ def test_shutdown_clears_all_refs():
     assert agent._tts_adapter is None
     assert agent._db_conn is None
     assert agent._conversation is None
+
+
+def test_agent_starts_dormant():
+    agent = VoiceAgent()
+    assert agent._lifecycle == AgentLifecycle.DORMANT
+
+
+def test_lifecycle_enum_values():
+    assert len(AgentLifecycle) == 4
+    assert set(s.value for s in AgentLifecycle) == {
+        "dormant", "loading", "active", "unloading",
+    }
+
+
+def test_shutdown_returns_to_dormant():
+    agent = VoiceAgent()
+    agent.shutdown()
+    assert agent._lifecycle == AgentLifecycle.DORMANT

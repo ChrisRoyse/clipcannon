@@ -77,6 +77,9 @@ src = ["src"]
 select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "SIM", "TCH"]
 ignore = []
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "E501"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

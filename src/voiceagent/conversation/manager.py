@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 import numpy as np
 
@@ -45,7 +47,12 @@ class TransportProtocol(Protocol):
 
 @runtime_checkable
 class ContextProtocol(Protocol):
-    def build_messages(self, system_prompt: str, conversation_history: list[dict[str, str]], user_input: str) -> list[dict[str, str]]: ...
+    def build_messages(
+        self,
+        system_prompt: str,
+        conversation_history: list[dict[str, str]],
+        user_input: str,
+    ) -> list[dict[str, str]]: ...
 
 
 class ConversationManager:
@@ -91,37 +98,37 @@ class ConversationManager:
 
     async def handle_audio_chunk(self, audio: np.ndarray) -> None:
         if not isinstance(audio, np.ndarray):
-            logger.error("handle_audio_chunk received %s instead of np.ndarray", type(audio).__name__)
+            logger.error(
+                "handle_audio_chunk received %s instead of np.ndarray",
+                type(audio).__name__,
+            )
             return
         if audio.size == 0:
             logger.warning("handle_audio_chunk received empty audio array, ignoring")
             return
-        if self._state == ConversationState.THINKING:
-            return
-        if self._state == ConversationState.SPEAKING:
+        if self._state in (ConversationState.THINKING, ConversationState.SPEAKING):
             return
 
         if self._state == ConversationState.IDLE:
-            # Rechunk for VAD: split into 512-sample sub-chunks
-            chunk_size = 512
-            detected = False
-            for i in range(0, len(audio) - chunk_size + 1, chunk_size):
-                sub = audio[i:i + chunk_size]
-                if hasattr(self._asr, 'vad') and hasattr(self._asr.vad, 'is_speech'):
-                    if self._asr.vad.is_speech(sub):
-                        detected = True
-                        break
-            if detected:
-                await self._set_state(ConversationState.LISTENING)
-            else:
+            if not self._detect_speech(audio):
                 return
+            await self._set_state(ConversationState.LISTENING)
 
         if self._state == ConversationState.LISTENING:
             event = await self._asr.process_chunk(audio)
-            if event is not None:
-                if hasattr(event, 'final') and event.final:
-                    await self._set_state(ConversationState.THINKING)
-                    await self._generate_response(event.text)
+            if event is not None and hasattr(event, 'final') and event.final:
+                await self._set_state(ConversationState.THINKING)
+                await self._generate_response(event.text)
+
+    def _detect_speech(self, audio: np.ndarray) -> bool:
+        """Check if any 512-sample sub-chunk contains speech via VAD."""
+        chunk_size = 512
+        if not (hasattr(self._asr, 'vad') and hasattr(self._asr.vad, 'is_speech')):
+            return False
+        for i in range(0, len(audio) - chunk_size + 1, chunk_size):
+            if self._asr.vad.is_speech(audio[i:i + chunk_size]):
+                return True
+        return False
 
     async def _generate_response(self, user_text: str) -> None:
         self._history.append({"role": "user", "content": user_text})

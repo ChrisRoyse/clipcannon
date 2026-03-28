@@ -10,19 +10,11 @@ from voiceagent.adapters.clipcannon import ClipCannonAdapter
 from voiceagent.errors import TTSError
 
 
-@pytest.fixture(scope="module")
-def adapter():
-    """Create a shared adapter for the module (loads model once)."""
-    a = ClipCannonAdapter(voice_name="boris")
-    yield a
-    a.release()
-
-
-def test_adapter_loads_profile(adapter):
+def test_adapter_loads_profile(session_tts_adapter):
     """Profile and reference audio must be present."""
-    assert adapter._profile is not None
-    assert adapter._profile["name"] == "boris"
-    assert adapter._reference_audio.exists()
+    assert session_tts_adapter._profile is not None
+    assert session_tts_adapter._profile["name"] == "boris"
+    assert session_tts_adapter._reference_audio.exists()
 
 
 def test_adapter_raises_on_missing_profile():
@@ -31,10 +23,10 @@ def test_adapter_raises_on_missing_profile():
         ClipCannonAdapter(voice_name="nonexistent_voice_xyz_12345")
 
 
-def test_synthesize_returns_float32(adapter):
+def test_synthesize_returns_float32(session_tts_adapter):
     """Synthesized audio must be 1-D float32 with reasonable length."""
     audio = asyncio.get_event_loop().run_until_complete(
-        adapter.synthesize("Hello world")
+        session_tts_adapter.synthesize("Hello world")
     )
     assert isinstance(audio, np.ndarray)
     assert audio.dtype == np.float32
@@ -44,23 +36,23 @@ def test_synthesize_returns_float32(adapter):
     print(f"Synthesized {len(audio)} samples ({len(audio) / 24000:.2f}s)")
 
 
-def test_synthesize_empty_raises(adapter):
+def test_synthesize_empty_raises(session_tts_adapter):
     """Empty string must raise TTSError."""
     with pytest.raises(TTSError, match="empty"):
-        asyncio.get_event_loop().run_until_complete(adapter.synthesize(""))
+        asyncio.get_event_loop().run_until_complete(session_tts_adapter.synthesize(""))
 
 
-def test_synthesize_whitespace_raises(adapter):
+def test_synthesize_whitespace_raises(session_tts_adapter):
     """Whitespace-only string must raise TTSError."""
     with pytest.raises(TTSError, match="empty"):
-        asyncio.get_event_loop().run_until_complete(adapter.synthesize("   "))
+        asyncio.get_event_loop().run_until_complete(session_tts_adapter.synthesize("   "))
 
 
-def test_temp_wav_cleaned(adapter):
+def test_temp_wav_cleaned(session_tts_adapter):
     """Temporary WAV file must be cleaned up after synthesis."""
     before = set(glob.glob(f"{tempfile.gettempdir()}/*.wav"))
     asyncio.get_event_loop().run_until_complete(
-        adapter.synthesize("Testing cleanup")
+        session_tts_adapter.synthesize("Testing cleanup")
     )
     after = set(glob.glob(f"{tempfile.gettempdir()}/*.wav"))
     new = after - before

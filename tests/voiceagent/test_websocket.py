@@ -1,5 +1,6 @@
 """Tests for WebSocket transport -- real connections, NO MOCKS."""
 import asyncio
+import contextlib
 import json
 import socket
 
@@ -56,10 +57,8 @@ async def server_setup():
     yield transport, port, audio_rx, ctrl_rx, task
     await transport.stop()
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError, Exception):
         await task
-    except (asyncio.CancelledError, Exception):
-        pass
 
 
 @pytest.mark.asyncio

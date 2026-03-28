@@ -5,8 +5,12 @@ import asyncio
 import logging
 import signal
 import sys
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    from types import FrameType
 
 from voiceagent import __version__
 
@@ -29,7 +33,7 @@ def cli() -> None:
 def serve(voice: str, port: int, host: str) -> None:
     """Start the voice agent server."""
     from voiceagent.agent import VoiceAgent
-    from voiceagent.config import VoiceAgentConfig, TransportConfig, TTSConfig
+    from voiceagent.config import TransportConfig, TTSConfig, VoiceAgentConfig
 
     config = VoiceAgentConfig(
         transport=TransportConfig(host=host, port=port),
@@ -37,7 +41,7 @@ def serve(voice: str, port: int, host: str) -> None:
     )
     agent = VoiceAgent(config=config)
 
-    def _shutdown(signum, frame):
+    def _shutdown(signum: int, frame: FrameType | None) -> None:
         click.echo("Shutting down...")
         agent.shutdown()
         sys.exit(0)
@@ -56,7 +60,7 @@ def serve(voice: str, port: int, host: str) -> None:
 def talk(voice: str) -> None:
     """Interactive voice conversation using local microphone."""
     from voiceagent.agent import VoiceAgent
-    from voiceagent.config import VoiceAgentConfig, TTSConfig
+    from voiceagent.config import TTSConfig, VoiceAgentConfig
 
     config = VoiceAgentConfig(tts=TTSConfig(voice_name=voice))
     agent = VoiceAgent(config=config)

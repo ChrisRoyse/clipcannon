@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
 
-import numpy as np
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
-from voiceagent.adapters.clipcannon import ClipCannonAdapter
-from voiceagent.tts.chunker import SentenceChunker
+    import numpy as np
+
+    from voiceagent.adapters.clipcannon import ClipCannonAdapter
+    from voiceagent.tts.chunker import SentenceChunker
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +40,10 @@ class StreamingTTS:
                 logger.info("Extracted sentence (%d chars): '%s'", len(sentence), sentence[:80])
                 audio = await self.adapter.synthesize(sentence)
                 chunks_yielded += 1
-                logger.info("Audio chunk #%d: %d samples (%.2fs)", chunks_yielded, len(audio), len(audio) / 24000)
+                logger.info(
+                    "Audio chunk #%d: %d samples (%.2fs)",
+                    chunks_yielded, len(audio), len(audio) / 24000,
+                )
                 yield audio
 
         remaining = buffer.strip()

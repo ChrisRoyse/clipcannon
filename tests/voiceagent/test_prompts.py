@@ -1,6 +1,8 @@
 """Tests for build_system_prompt()."""
-import pytest
 from datetime import datetime
+
+import pytest
+
 from voiceagent.brain.prompts import build_system_prompt
 
 

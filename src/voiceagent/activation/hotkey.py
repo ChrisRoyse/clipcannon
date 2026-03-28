@@ -5,7 +5,7 @@ IMPORTANT: pynput requires X11 or Wayland on Linux. In headless environments
 on start().
 """
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 from voiceagent.errors import ActivationError
 
@@ -15,14 +15,18 @@ logger = logging.getLogger(__name__)
 class HotkeyActivator:
     """Global hotkey listener for push-to-talk activation."""
 
-    def __init__(self, key_combo: str = "<ctrl>+<space>", callback: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        key_combo: str = "<ctrl>+<space>",
+        callback: Callable[[], None] | None = None,
+    ) -> None:
         try:
             import pynput  # noqa: F401
-        except ImportError:
+        except ImportError as err:
             raise ImportError(
                 "pynput is required for hotkey activation. "
                 "Install with: pip install pynput"
-            )
+            ) from err
         self.callback = callback
         self._key_combo = key_combo
         self._listener = None

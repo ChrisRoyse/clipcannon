@@ -1,6 +1,7 @@
 """Tests for EndpointDetector and StreamingASR."""
 import numpy as np
 import pytest
+
 from voiceagent.asr.endpointing import EndpointDetector
 
 
@@ -44,40 +45,23 @@ def test_endpoint_reset():
         assert ep.update(is_speech=False) is False
 
 
-# GPU-dependent StreamingASR tests
-@pytest.fixture(scope="module")
-def check_gpu():
-    import torch
-    if not torch.cuda.is_available():
-        pytest.fail("CUDA GPU required for StreamingASR tests.")
-
-
-@pytest.fixture(scope="module")
-def streaming_asr(check_gpu):
-    from voiceagent.asr.streaming import StreamingASR
-    class ASRConfig:
-        model_name = "Systran/faster-whisper-large-v3"
-        vad_threshold = 0.5
-        endpoint_silence_ms = 600
-        chunk_ms = 200
-    return StreamingASR(ASRConfig())
-
+# GPU-dependent StreamingASR tests (use session fixture from conftest)
 
 @pytest.mark.asyncio
-async def test_silence_returns_none(streaming_asr):
-    result = await streaming_asr.process_chunk(np.zeros(3200, dtype=np.float32))
+async def test_silence_returns_none(session_asr):
+    result = await session_asr.process_chunk(np.zeros(3200, dtype=np.float32))
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_wrong_chunk_size_raises(streaming_asr):
+async def test_wrong_chunk_size_raises(session_asr):
     from voiceagent.errors import ASRError
     with pytest.raises(ASRError, match="Expected 3200"):
-        await streaming_asr.process_chunk(np.zeros(1600, dtype=np.float32))
+        await session_asr.process_chunk(np.zeros(1600, dtype=np.float32))
 
 
 @pytest.mark.asyncio
-async def test_reset_clears(streaming_asr):
-    streaming_asr.reset()
-    assert not streaming_asr.buffer.has_audio()
-    assert not streaming_asr.endpoint.has_speech
+async def test_reset_clears(session_asr):
+    session_asr.reset()
+    assert not session_asr.buffer.has_audio()
+    assert not session_asr.endpoint.has_speech

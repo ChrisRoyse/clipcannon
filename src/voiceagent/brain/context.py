@@ -64,14 +64,13 @@ class ContextManager:
         if total <= budget:
             return [system_msg] + list(conversation_history) + [user_msg]
 
+        # Drop oldest turns until total fits within budget
         included_start = 0
-        running = total
-        while included_start < len(conversation_history) and running > budget:
-            running -= turn_tokens[included_start]
+        while included_start < len(conversation_history) and total > budget:
+            total -= turn_tokens[included_start]
             included_start += 1
 
-        dropped = included_start
-        if dropped > 0:
-            logger.info("Dropped %d oldest turns to fit budget", dropped)
+        if included_start > 0:
+            logger.info("Dropped %d oldest turns to fit budget", included_start)
 
         return [system_msg] + list(conversation_history[included_start:]) + [user_msg]

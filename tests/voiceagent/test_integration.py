@@ -8,12 +8,8 @@ Run: cd /home/cabdru/clipcannon && PYTHONPATH=src python -m pytest tests/voiceag
 from __future__ import annotations
 
 import asyncio
-import json
 import sqlite3
-import tempfile
-import time
 import uuid
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -21,23 +17,15 @@ import torch
 
 from voiceagent.agent import VoiceAgent
 from voiceagent.asr.endpointing import EndpointDetector
-from voiceagent.asr.types import ASREvent, AudioBuffer
 from voiceagent.brain.context import ContextManager
 from voiceagent.brain.prompts import build_system_prompt
-from voiceagent.config import VoiceAgentConfig, ASRConfig, LLMConfig, TTSConfig, TransportConfig
+from voiceagent.config import ASRConfig, LLMConfig, TTSConfig, VoiceAgentConfig
 from voiceagent.conversation.state import ConversationState
 from voiceagent.db.connection import get_connection
 from voiceagent.db.schema import init_db
 from voiceagent.tts.chunker import SentenceChunker
 
-
 # --- Fixtures ---
-
-@pytest.fixture(scope="module")
-def check_gpu():
-    if not torch.cuda.is_available():
-        pytest.fail("CUDA GPU required for integration tests.")
-
 
 @pytest.fixture(scope="module")
 def tmp_db(tmp_path_factory):
@@ -61,28 +49,6 @@ def agent_config(tmp_db):
 def test_01_all_imports():
     """Verify every Phase 1 module is importable."""
     from voiceagent import __version__
-    from voiceagent.errors import (VoiceAgentError, ConfigError, ASRError, VADError,
-                                    LLMError, TTSError, TransportError, DatabaseError,
-                                    WakeWordError, ActivationError, ModelLoadError, ConversationError)
-    from voiceagent.config import VoiceAgentConfig, load_config
-    from voiceagent.db.schema import init_db
-    from voiceagent.db.connection import get_connection
-    from voiceagent.asr.types import ASREvent, AudioBuffer
-    from voiceagent.asr.vad import SileroVAD
-    from voiceagent.asr.endpointing import EndpointDetector
-    from voiceagent.asr.streaming import StreamingASR
-    from voiceagent.brain.llm import LLMBrain
-    from voiceagent.brain.prompts import build_system_prompt
-    from voiceagent.brain.context import ContextManager
-    from voiceagent.adapters.clipcannon import ClipCannonAdapter
-    from voiceagent.tts.chunker import SentenceChunker
-    from voiceagent.tts.streaming import StreamingTTS
-    from voiceagent.conversation.state import ConversationState
-    from voiceagent.conversation.manager import ConversationManager
-    from voiceagent.transport.websocket import WebSocketTransport
-    from voiceagent.server import create_app
-    from voiceagent.agent import VoiceAgent
-    from voiceagent.cli import cli
     assert __version__ == "0.1.0"
     print("All 20+ modules imported successfully")
 
@@ -139,8 +105,8 @@ def test_03_agent_db_wiring(tmp_db):
     agent._db_conn = get_connection(tmp_db)
 
     conv_id = agent.start_conversation()
-    t1 = agent.log_turn(conv_id, "user", "What is 2+2?", asr_ms=90.0, total_ms=200.0)
-    t2 = agent.log_turn(conv_id, "assistant", "Four.", llm_ttft_ms=80.0, tts_ttfb_ms=50.0, total_ms=300.0)
+    agent.log_turn(conv_id, "user", "What is 2+2?", asr_ms=90.0, total_ms=200.0)
+    agent.log_turn(conv_id, "assistant", "Four.", llm_ttft_ms=80.0, tts_ttfb_ms=50.0, total_ms=300.0)
 
     row = agent._db_conn.execute("SELECT turn_count FROM conversations WHERE id=?", (conv_id,)).fetchone()
     assert row["turn_count"] == 2
@@ -155,14 +121,12 @@ def test_03_agent_db_wiring(tmp_db):
     print(f"Agent DB wiring verified: {conv_id} with 2 turns")
 
 
-# --- Test 4: VAD detects speech (verification #4) ---
+# --- Test 4: VAD detects speech (uses session fixture) ---
 
-def test_04_vad_detects_speech(check_gpu):
+def test_04_vad_detects_speech(session_vad):
     """SileroVAD correctly classifies silence vs speech-like audio."""
-    from voiceagent.asr.vad import SileroVAD
-    vad = SileroVAD(threshold=0.5)
-    assert vad.is_speech(np.zeros(512, dtype=np.float32)) is False
-    vad.reset()
+    assert session_vad.is_speech(np.zeros(512, dtype=np.float32)) is False
+    session_vad.reset()
     print("VAD silence detection: PASS")
 
 
@@ -218,15 +182,10 @@ def test_08_sentence_chunker():
     print("Sentence chunker: PASS")
 
 
-# --- Test 9: LLM generates text (verification #1) ---
+# --- Test 9: LLM generates text (uses session fixture) ---
 
-def test_09_llm_generates_text(check_gpu):
+def test_09_llm_generates_text(session_llm_brain, check_gpu):
     """Qwen3-14B loads and generates coherent text."""
-    from voiceagent.brain.llm import LLMBrain
-    from voiceagent.config import LLMConfig
-    config = LLMConfig(max_tokens=32)
-    brain = LLMBrain(config)
-
     vram_gb = torch.cuda.memory_allocated() / (1024 ** 3)
     assert vram_gb > 1.0, f"Expected >1GB VRAM, got {vram_gb:.2f}GB"
     print(f"LLM VRAM: {vram_gb:.2f} GB")
@@ -234,7 +193,7 @@ def test_09_llm_generates_text(check_gpu):
     tokens = []
     loop = asyncio.new_event_loop()
     async def gen():
-        async for t in brain.generate_stream([{"role": "user", "content": "Say hello in one word."}]):
+        async for t in session_llm_brain.generate_stream([{"role": "user", "content": "Say hello in one word."}]):
             tokens.append(t)
     loop.run_until_complete(gen())
     loop.close()
@@ -242,20 +201,15 @@ def test_09_llm_generates_text(check_gpu):
     text = "".join(tokens)
     assert len(text) > 0, "LLM generated empty text"
     print(f"LLM generated: {text[:100]}")
-
-    brain.release()
     print("LLM test: PASS")
 
 
-# --- Test 10: TTS produces audio (verification #3) ---
+# --- Test 10: TTS produces audio (uses session fixture) ---
 
-def test_10_tts_produces_audio(check_gpu):
+def test_10_tts_produces_audio(session_tts_adapter, check_gpu):
     """ClipCannon TTS synthesizes audio in boris voice."""
-    from voiceagent.adapters.clipcannon import ClipCannonAdapter
-    adapter = ClipCannonAdapter(voice_name="boris")
-
     loop = asyncio.new_event_loop()
-    audio = loop.run_until_complete(adapter.synthesize("Hello world"))
+    audio = loop.run_until_complete(session_tts_adapter.synthesize("Hello world"))
     loop.close()
 
     assert isinstance(audio, np.ndarray)
@@ -263,8 +217,6 @@ def test_10_tts_produces_audio(check_gpu):
     assert len(audio) > 12000  # > 0.5s at 24kHz
     duration_s = len(audio) / 24000
     print(f"TTS audio: {len(audio)} samples ({duration_s:.2f}s)")
-
-    adapter.release()
     print("TTS test: PASS")
 
 
@@ -272,8 +224,9 @@ def test_10_tts_produces_audio(check_gpu):
 
 def test_11_fastapi_health():
     """GET /health returns correct response."""
-    from voiceagent.server import create_app
     from fastapi.testclient import TestClient
+
+    from voiceagent.server import create_app
     app = create_app()
     client = TestClient(app)
     resp = client.get("/health")
@@ -289,8 +242,9 @@ def test_11_fastapi_health():
 
 def test_12_websocket_transport():
     """WebSocket accepts connection and exchanges messages."""
-    from voiceagent.server import create_app
     from fastapi.testclient import TestClient
+
+    from voiceagent.server import create_app
     app = create_app()
     received = []
 
@@ -328,6 +282,7 @@ def test_13_conversation_state_machine():
 def test_14_cli_help():
     """CLI shows help text with serve and talk commands."""
     from click.testing import CliRunner
+
     from voiceagent.cli import cli
     runner = CliRunner()
     result = runner.invoke(cli, ["--help"])

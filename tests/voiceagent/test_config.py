@@ -5,11 +5,7 @@ import pytest
 
 from voiceagent.config import (
     ASRConfig,
-    ConversationConfig,
-    GPUConfig,
     LLMConfig,
-    TransportConfig,
-    TTSConfig,
     VoiceAgentConfig,
     load_config,
 )

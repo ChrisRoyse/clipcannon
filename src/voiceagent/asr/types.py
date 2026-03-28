@@ -5,8 +5,8 @@ AudioBuffer: Accumulates PCM audio chunks for batch processing.
 
 Audio format: 16kHz mono float32 PCM.
 """
-from dataclasses import dataclass, field
 import time
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -45,7 +45,7 @@ class AudioBuffer:
 
     def has_audio(self) -> bool:
         """Return True if any audio chunks have been appended."""
-        return len(self._chunks) > 0
+        return bool(self._chunks)
 
     def duration_s(self) -> float:
         """Return the total duration of buffered audio in seconds."""

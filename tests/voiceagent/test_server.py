@@ -2,7 +2,6 @@
 import sqlite3
 
 import numpy as np
-import pytest
 from fastapi.testclient import TestClient
 
 from voiceagent.server import create_app
@@ -30,7 +29,7 @@ def test_health_response_keys():
 def test_websocket_connect():
     app = create_app()
     client = TestClient(app)
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("/ws") as _ws:
         pass
 
 

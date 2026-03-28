@@ -20,42 +20,34 @@ class SentenceChunker:
         if not buffer:
             return None
 
-        best = self._find_sentence_boundary(buffer)
+        best = self._find_boundary(buffer, self.SENTENCE_ENDS, min_position=0)
         if best is not None:
             return best
 
-        best = self._find_clause_boundary(buffer)
+        best = self._find_boundary(buffer, self.CLAUSE_SEPS, min_position=60)
         if best is not None:
             return best
 
         words = buffer.split()
         if len(words) > self.MAX_WORDS:
-            chunk_words = words[:self.MAX_WORDS]
-            return " ".join(chunk_words)
+            return " ".join(words[:self.MAX_WORDS])
 
         return None
 
-    def _find_sentence_boundary(self, buffer: str) -> str | None:
+    def _find_boundary(
+        self, buffer: str, delimiters: list[str], min_position: int = 0,
+    ) -> str | None:
+        """Find the earliest delimiter that yields a chunk with enough words.
+
+        Args:
+            buffer: Text to search.
+            delimiters: Delimiter strings to look for.
+            min_position: Minimum index at which a delimiter is accepted.
+        """
         candidates: list[tuple[int, str]] = []
-        for end in self.SENTENCE_ENDS:
-            idx = buffer.find(end)
-            if idx >= 0:
-                candidate = buffer[:idx + 1].strip()
-                candidates.append((idx, candidate))
-
-        candidates.sort(key=lambda x: x[0])
-
-        for _idx, candidate in candidates:
-            if len(candidate.split()) >= self.MIN_WORDS:
-                return candidate
-
-        return None
-
-    def _find_clause_boundary(self, buffer: str) -> str | None:
-        candidates: list[tuple[int, str]] = []
-        for sep in self.CLAUSE_SEPS:
-            idx = buffer.find(sep)
-            if idx >= 0 and idx > 60:
+        for delim in delimiters:
+            idx = buffer.find(delim)
+            if idx >= min_position:
                 candidate = buffer[:idx + 1].strip()
                 candidates.append((idx, candidate))
 

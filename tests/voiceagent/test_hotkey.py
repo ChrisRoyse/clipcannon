@@ -1,11 +1,12 @@
 """Tests for hotkey activator."""
-import os
 import logging
+import os
+
 import pytest
 
 pynput = pytest.importorskip("pynput", reason="pynput not installed")
 
-from voiceagent.activation.hotkey import HotkeyActivator
+from voiceagent.activation.hotkey import HotkeyActivator  # noqa: E402
 
 HAS_DISPLAY = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 

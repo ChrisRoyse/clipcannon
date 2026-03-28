@@ -17,11 +17,11 @@ class WakeWordDetector:
 
         try:
             import openwakeword
-        except ImportError:
+        except ImportError as err:
             raise ImportError(
                 "openwakeword is required for wake word detection. "
                 "Install with: pip install openwakeword"
-            )
+            ) from err
 
         try:
             from openwakeword.model import Model as OWWModel
