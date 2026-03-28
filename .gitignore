@@ -53,3 +53,15 @@ testdata/*.mp4
 testdata/*.avi
 testdata/*.mkv
 testdata/*.mov
+
+# Benchmark audio/video/model data (large binaries)
+benchmarks/generated/**/*.wav
+benchmarks/seedtts_eval/
+benchmarks/samples/**/*.wav
+*.pth
+*.zip
+
+# Media files - screenshots, videos
+docs2/*.png
+docs2/*.mp4
+docs2/*.jpg

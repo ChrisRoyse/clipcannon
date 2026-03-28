@@ -1,0 +1,23 @@
+{
+  "benchmark": "SeedTTS-Eval (test-en)",
+  "samples_generated": 20,
+  "samples_failed": 0,
+  "generation_time_minutes": 29.7,
+  "wavlm_sim_preliminary": {
+    "encoder": "WavLMForXVector (microsoft/wavlm-base-plus-sv, 512-dim)",
+    "note": "Preliminary. Official scores use WavLM-Large + ECAPA-TDNN (192-dim)",
+    "mean": 0.9743,
+    "std": 0.0098,
+    "min": 0.953,
+    "max": 0.9871
+  },
+  "pipeline_config": {
+    "model": "Qwen3-TTS-12Hz-1.7B-Base",
+    "icl_mode": "Full (ref audio + transcript)",
+    "temperature": "adaptive (0.3-0.5 based on ref duration)",
+    "n_candidates": "adaptive (12-20 based on ref duration)",
+    "scoring_encoder": "WavLMForXVector during generation",
+    "post_processing": "none (raw for scoring)",
+    "ref_preprocessing": "trim silence + normalize + denoise-only"
+  }
+}

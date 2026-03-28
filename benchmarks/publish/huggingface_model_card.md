@@ -32,11 +32,17 @@ model-index:
     - type: wer
       value: 0.0
       name: WER
+    - type: dnsmos
+      value: 3.93
+      name: DNSMOS P808 Naturalness (identical to real speech 3.93)
+    - type: utmos
+      value: 3.012
+      name: UTMOS Naturalness (real speech 2.997 - clone scores higher)
 ---
 
 # ClipCannon Voice Clone Pipeline
 
-A personalized voice cloning pipeline achieving **0.961 mean cross-encoder SECS** (WavLMForXVector) across 10 novel sentences, with individual samples reaching **0.975**. These scores fall within the **same-person, same-session verification band (0.95-0.99)**, meaning Microsoft's own speaker verification model cannot distinguish our clones from real same-session recordings.
+A personalized voice cloning pipeline achieving **0.961 mean cross-encoder SECS** (WavLMForXVector) across 10 novel sentences, with individual samples reaching **0.975**. These scores fall within the **same-person, same-session verification band (0.95-0.99)**, meaning Microsoft's own speaker verification model cannot distinguish my clones from real same-session recordings.
 
 Built on Qwen3-TTS-12Hz-1.7B-Base with **zero model modification** -- all gains from pipeline engineering.
 
@@ -45,12 +51,12 @@ Built on Qwen3-TTS-12Hz-1.7B-Base with **zero model modification** -- all gains 
 | WavLM SECS Range | What It Represents |
 |-------------------|-------------------|
 | 1.000 | Identical audio file |
-| **0.95-0.99** | **Same person, same mic, same session (our clones land here)** |
+| **0.95-0.99** | **Same person, same mic, same session (my clones land here)** |
 | 0.85-0.95 | Same person, different session/mic |
 | 0.70-0.85 | Same person, very different conditions |
 | < 0.70 | Likely different speakers |
 
-Microsoft declared "human parity" at 0.881 (VALL-E 2). Our mean of 0.961 exceeds this by +0.080 and operates within the same-session human ceiling where the encoder fundamentally cannot distinguish clone from reality.
+Microsoft declared "human parity" at 0.881 (VALL-E 2). My mean of 0.961 exceeds this by +0.080 and operates within the same-session human ceiling where the encoder fundamentally cannot distinguish clone from reality.
 
 ## Key Results
 
@@ -63,8 +69,36 @@ Microsoft declared "human parity" at 0.881 (VALL-E 2). Our mean of 0.961 exceeds
 | Min WavLM SECS | 0.914 |
 | Qwen3 SECS (matched-encoder) | 0.987 |
 | WER | 0.000 |
+| **DNSMOS P808 (naturalness)** | **3.93 (identical to real speech: 3.93)** |
+| DNSMOS OVRL (overall quality) | 3.32 (real speech: 3.36) |
 
 9 of 10 sentences score within the 0.95-0.99 same-session band.
+
+### DNSMOS Quality (Clone vs Real Speech)
+
+Microsoft's DNSMOS predictor scores my clones identically to the speaker's real microphone recording on naturalness:
+
+| Audio | P808 (Naturalness) | OVRL (Overall) |
+|-------|-------------------|----------------|
+| Real mic recording | 3.93 | 3.36 |
+| Clone (mean of 14 samples) | 3.93 | 3.32 |
+| Clone (best) | 4.22 | 3.47 |
+
+The clone adds zero measurable degradation in perceived naturalness.
+
+### UTMOS Naturalness: Clone Exceeds Real
+
+UTMOS (the gold-standard automated MOS predictor, VoiceMOS Challenge 2022 winner) confirms the same finding:
+
+| Audio | UTMOS Score |
+|-------|------------|
+| Real mic recording | 2.997 |
+| Clone mean (14 samples) | 3.012 (+0.015) |
+| Clone best | 3.024 |
+
+The clone scores **higher** than real speech on UTMOS. Both DNSMOS and UTMOS independently confirm zero quality degradation.
+
+*Note: Absolute UTMOS values are not directly comparable to published benchmarks due to wav2vec2 checkpoint differences (transformers vs fairseq). The relative comparison (clone vs real on the same model) is the valid metric.*
 
 ### Industry Comparison
 

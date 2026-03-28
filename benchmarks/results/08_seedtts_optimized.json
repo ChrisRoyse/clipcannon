@@ -1,0 +1,26 @@
+{
+  "benchmark": "SeedTTS-Eval Fully Optimized",
+  "encoder": "WavLM-Large + ECAPA-TDNN (official)",
+  "sim_mean": 0.7545,
+  "sim_std": 0.0473,
+  "sim_min": 0.6779,
+  "sim_max": 0.842,
+  "wer_mean": 0.0167,
+  "n_samples": 10,
+  "config": {
+    "temperatures": [
+      0.2,
+      0.3,
+      0.4,
+      0.5
+    ],
+    "candidates_per_temp": 6,
+    "total_candidates": 24,
+    "sim_weight": 0.7,
+    "wer_weight": 0.3,
+    "ref_preprocessing": "denoise + trim + normalize + append silence",
+    "transcript_cleaning": true,
+    "scoring": "official WavLM-Large + ECAPA-TDNN",
+    "reranking": "SIM*0.7 + (1-WER)*0.3"
+  }
+}
