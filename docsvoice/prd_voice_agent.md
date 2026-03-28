@@ -58,43 +58,39 @@ A voice-first personal AI assistant that lives at `src/voiceagent/` inside the C
         │                 │
         ▼                 ▼
 ┌───────────────┐  ┌────────────────┐  ┌──────────────────────┐
-│ OCR Provenance│  │ Screenshots    │  │ ClipCannon           │
-│ MCP Server    │  │ /tmp/va_caps/  │  │ (voice profiles,     │
-│ Docker :3366  │  │ → OCR → delete │  │  speak, verify)      │
-│ 153 tools     │  │                │  │  read-only import    │
+│ OCR Provenance│  │ Companion .exe │  │ ClipCannon           │
+│ MCP Server    │  │ (Windows host) │  │ (voice profiles,     │
+│ Docker :3366  │  │ captures →     │  │  speak, verify)      │
+│ 153 tools     │  │ shared volume  │  │  read-only import    │
 └───────────────┘  └────────────────┘  └──────────────────────┘
 ```
 
 ### 3.1 Data Flow: Screenshot → Memory
 
-**CRITICAL: WSL2 cannot use Linux screenshot tools (scrot, PIL.ImageGrab, python-mss) to capture the Windows desktop.** There is no X11/Wayland display server connection to the Windows desktop from WSL2. All screenshot capture MUST go through PowerShell interop via `powershell.exe`.
+**Architecture**: The Windows companion (.exe) captures screenshots natively on Windows 11 using `PIL.ImageGrab` and `win32gui`. The Docker container reads captures from the shared volume and OCR-processes them during dream state (3-5 AM). See Section 3.4 for the full companion spec and Phase 2 for implementation code.
 
 **Design: Capture all day, OCR once at night (dream state).**
 
-Screenshots are cheap (~400ms, ~1MB each). OCR is expensive (~37s per image via Marker-pdf). So the capture daemon takes screenshots and stores them locally with metadata all day, then the dream state batch-processes them through OCR Provenance overnight.
+Screenshots are cheap (~50ms via PIL.ImageGrab, ~1MB each). OCR is expensive (~37s per image via Marker-pdf). The companion captures screenshots to `C:\voiceagent_data\captures\` with JSON metadata sidecars all day, then the dream state batch-processes them through OCR Provenance overnight.
 
 ```
-DAYTIME — Capture Only (no OCR, no GPU):
-  Every screen-change detection (pixel diff, checked every 5 seconds):
-  1. powershell.exe CopyFromScreen → /mnt/c/Users/Public/wsl_screenshot.png
-     Per-monitor: only capture monitors that changed (pHash per-monitor diff)
-  2. Copy PNG to ~/.voiceagent/captures/YYYY-MM-DD/screenshot_{timestamp}.png
-  3. Collect active window metadata via powershell.exe:
-     - Window title, process name, PID
-     - Browser URL (if Chrome/Edge active, via UI Automation)
+DAYTIME — Companion Captures (no OCR, no GPU):
+  Every screen-change detection (pixel diff, checked every 5 seconds by companion):
+  1. Companion: PIL.ImageGrab.grab(bbox=monitor_bounds) per changed monitor
+  2. Save PNG to C:\voiceagent_data\captures\YYYY-MM-DD\screenshot_{timestamp}_mon{N}.png
+  3. Companion: win32gui.GetForegroundWindow() → app name, window title, PID
+     Browser URL via COM Shell.Application (if Chrome/Edge active)
   4. Perceptual hash (pHash) compared against last 10 captures per monitor
      - If hamming distance < 5 (duplicate): delete file, skip
      - If unique: keep
   5. Check window title against privacy blocklist
      - If match (1Password, banking, etc.): delete file, skip
-  6. Save metadata sidecar: ~/.voiceagent/captures/YYYY-MM-DD/screenshot_{timestamp}.json
+  6. Save metadata sidecar: C:\voiceagent_data\captures\YYYY-MM-DD\screenshot_{timestamp}.json
      { "timestamp": "...", "app": "Code", "title": "server.py - clipcannon",
        "url": "", "monitor": 0, "phash": "a1b2c3..." }
-  7. Clean up /mnt/c/Users/Public/ temp file
-
-NIGHTTIME (4 AM Dream State) — Batch OCR:
-  1. Unload all voice agent models from GPU (LLM, ASR, TTS)
-  2. List all un-processed PNGs in ~/.voiceagent/captures/
+NIGHTTIME (3 AM Dream State) — Docker Batch OCR:
+  1. Unload all voice agent models from GPU (if loaded)
+  2. Count pending PNGs in shared volume, budget to fit 110 min OCR window
   3. Batch ingest into OCR Provenance:
      ocr_ingest_files(files=[all_pngs], disable_image_extraction=true)
      → Marker-pdf OCR + chunking + embeddings, synchronous
@@ -105,7 +101,7 @@ NIGHTTIME (4 AM Dream State) — Batch OCR:
      - Store window metadata via ocr_document_update_metadata
   5. Deduplicate: ocr_document_duplicates → remove near-identical text
   6. Generate daily digest (Qwen3-14B summarizes the day's captures)
-  7. Delete all processed PNGs from ~/.voiceagent/captures/
+  7. Delete processed PNGs + sidecars from shared volume
   8. Reload voice agent models
 
 Result: Zero GPU contention during the day. Full OCR overnight when nobody cares about latency.
@@ -115,7 +111,7 @@ Result: Zero GPU contention during the day. Full OCR overnight when nobody cares
 - Zero GPU contention during daytime — voice agent has full 32GB VRAM
 - No 37-second processing delays interrupting the capture cadence
 - Batch processing is more efficient (Marker loads once, processes many)
-- Overnight processing has no time pressure — 500 screenshots × 37s = ~5 hours, finishes by 9 AM
+- Overnight processing fits within the 3 AM - 5 AM dream window (190 screenshots × 37s ≈ 117 min)
 - Screenshots are still captured with full metadata, so the agent knows WHAT you were doing (app, title, URL) even before OCR runs
 - The only thing delayed is full-text search of screenshot content — but window title/app metadata is immediate
 
@@ -127,41 +123,21 @@ Even without OCR, the metadata sidecars give the agent real-time awareness:
 
 The agent can answer time/app/window questions immediately from sidecar metadata. Full-text content search ("find the code with the JWT bug") becomes available after dream state OCR.
 
-### 3.1.1 WSL2 Screenshot Implementation
+### 3.1.1 Screenshot Implementation
 
-PowerShell interop is the ONLY way to capture the Windows desktop from WSL2. The voice agent calls `powershell.exe` with a .NET script that uses `System.Drawing.Graphics.CopyFromScreen()`.
+Screenshots are captured by the **Windows companion** (native .exe), NOT from WSL2/Docker. The companion uses `PIL.ImageGrab.grab()` which works natively on Windows 11. See Section 3.4.2 and Phase 2 for full implementation code.
 
 ```python
-# This is how screenshots work in WSL2 — no alternatives exist
-import subprocess
-from pathlib import Path
+# Native Windows (runs in companion .exe, NOT in Docker/WSL2)
+from PIL import ImageGrab
+import imagehash
 
-def capture_screen(output_path: str) -> str:
-    win_tmp = "/mnt/c/Users/Public/wsl_screenshot.png"
-    ps_script = r'''
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-$bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
-$gfx = [System.Drawing.Graphics]::FromImage($bmp)
-$gfx.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-$bmp.Save('C:\Users\Public\wsl_screenshot.png', [System.Drawing.Imaging.ImageFormat]::Png)
-$gfx.Dispose(); $bmp.Dispose()
-'''
-    result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-Command", ps_script],
-        capture_output=True, timeout=10
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Screenshot failed: {result.stderr}")
-    Path(output_path).write_bytes(Path(win_tmp).read_bytes())
-    Path(win_tmp).unlink()
-    return output_path
+img = ImageGrab.grab()  # primary monitor
+# Per-monitor: ImageGrab.grab(bbox=(x, y, x+w, y+h))
+# All monitors: ImageGrab.grab(all_screens=True)
 ```
 
-For **multi-monitor**: use `[System.Windows.Forms.Screen]::AllScreens` to iterate monitors and capture each separately. Do NOT use `VirtualScreen` stitched capture -- it wastes OCR processing on unchanged monitors.
-
-**Per-monitor differential capture**: Each monitor maintains its own pHash history. On every capture cycle:
+**Per-monitor differential capture**: Each monitor maintains its own pHash history (handled by companion). On every capture cycle:
 
 1. Capture all monitors separately → `monitor_0.png`, `monitor_1.png`, `monitor_2.png`
 2. Compute pHash for each monitor image independently
@@ -177,7 +153,7 @@ class PerMonitorCapture:
 
     def capture_cycle(self) -> list[dict]:
         """Returns list of changed monitors with their screenshots."""
-        monitors = self._capture_all_monitors()  # PowerShell AllScreens
+        monitors = self._capture_all_monitors()  # Win32 EnumDisplayMonitors + PIL.ImageGrab
         changed = []
 
         for mon in monitors:
@@ -204,39 +180,24 @@ This means: if you have 3 monitors and only monitor 1 changes, you OCR 1 image i
 
 Each monitor's OCR document is tagged with `monitor:0`, `monitor:1`, etc. so the agent knows which screen the content came from.
 
-Latency: ~400ms per capture (PowerShell startup + .NET rendering for all monitors in one call). pHash comparison is <1ms per image. Only changed monitors incur the OCR upload + processing cost.
+Latency: ~50ms per monitor capture via PIL.ImageGrab. pHash comparison <1ms. Only changed monitors are saved to disk.
 
 ### 3.1.2 Active Window Metadata
 
-Captured alongside every screenshot via PowerShell `GetForegroundWindow` P/Invoke:
+Captured by the companion alongside every screenshot using native Win32 APIs:
 
 ```python
-def get_active_window() -> dict:
-    ps_script = r'''
-Add-Type @"
-using System; using System.Runtime.InteropServices; using System.Text;
-public class Win32 {
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder t, int c);
-    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
-}
-"@
-$h = [Win32]::GetForegroundWindow()
-$sb = New-Object System.Text.StringBuilder 256
-[Win32]::GetWindowText($h, $sb, 256) | Out-Null
-$pid = 0; [Win32]::GetWindowThreadProcessId($h, [ref]$pid) | Out-Null
-$proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
-@{title=$sb.ToString(); process=$proc.ProcessName; pid=$pid} | ConvertTo-Json -Compress
-'''
-    result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-Command", ps_script],
-        capture_output=True, text=True, timeout=5
-    )
-    return json.loads(result.stdout.strip())
-# Returns: {"title": "server.py - Visual Studio Code", "process": "Code", "pid": 12345}
+# Native Windows (runs in companion .exe)
+import win32gui, win32process, psutil
+
+hwnd = win32gui.GetForegroundWindow()
+title = win32gui.GetWindowText(hwnd)
+_, pid = win32process.GetWindowThreadProcessId(hwnd)
+process_name = psutil.Process(pid).name()
+# Returns: {"title": "server.py - clipcannon", "process": "Code", "pid": 12345}
 ```
 
-This metadata is stored with every capture, making queries like "what file was I editing at 3pm?" trivially answerable without OCR.
+This metadata is stored in JSON sidecars with every capture, making queries like "what file was I editing at 3pm?" answerable immediately without OCR.
 
 ### 3.2 OCR Provenance Integration
 
@@ -302,6 +263,13 @@ from clipcannon.voice.enhance import enhance_speech
 - Use ClipCannon's GPU ModelManager for TTS model loading
 - Adapter layer at `voiceagent/adapters/clipcannon.py` absorbs API changes
 
+**Voice Identity:**
+- Default voice: `boris` — trained on 1-2 hours of Chris Royse's speech, 0.975 SECS (indistinguishable from real speech)
+- Additional voices can be created in ClipCannon and used by the agent
+- Voice swapping at runtime: user says "switch to voice {name}" or via config
+- Voice list available via LLM tool `list_voices` which queries ClipCannon's `voice_profiles.db`
+- The wake word "Hey Boris" uses a custom OpenWakeWord model trained on synthesized audio of the boris voice saying the phrase
+
 ### 3.2.1 GPU Management (CUDA 13.1/13.2 + NVFP4 + Green Contexts)
 
 **Solution Stack**:
@@ -325,23 +293,97 @@ Total: ~15.5GB. **16.5GB headroom.** Marker OCR (~8GB) fits alongside everything
 
 **Fallback (FP8, no Green Contexts)**: Temporal separation only. Voice agent owns GPU during day. Dream state owns GPU at night.
 
-### 3.2.2 Wake Word and Activation
+### 3.2.2 On-Demand Model Loading: Voice-Activated GPU Control
 
-The agent supports two activation modes:
+**The agent's AI models (Qwen3-14B, Whisper, TTS) are NOT loaded into VRAM by default.** They load on demand when the user speaks the wake word, and unload when the user dismisses the agent. This keeps the GPU free for other work (OCR Provenance, ClipCannon rendering, gaming, etc.) until you actually need the assistant.
 
-**1. Wake word (hands-free)**: OpenWakeWord v0.6+ running on CPU. ~50MB RAM, 3-5% single core, 80ms processing per audio chunk. Pre-trained model for "hey jarvis" or custom-trained wake word. Always listening via `sounddevice` InputStream.
+**Only the wake word detector runs 24/7** — OpenWakeWord on CPU (~50MB RAM, 3-5% single core). Zero GPU usage until activated.
 
-```python
-import openwakeword
-from openwakeword.model import Model
+**Lifecycle:**
 
-oww = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
-# Runs in background thread, fires callback when detected
+```
+DORMANT STATE (default):
+  GPU: 0 bytes used by voice agent
+  Running: wake word detector only (CPU)
+  Companion: capturing screenshots/audio/clipboard normally
+
+    │  User says wake word (e.g. "Hey Boris")
+    ▼
+
+LOADING STATE (~5-10 seconds):
+  Loading Qwen3-14B + Whisper + TTS to GPU
+  Agent: "I'm here" (spoken once models are loaded)
+
+    │  User has conversation
+    ▼
+
+ACTIVE STATE:
+  GPU: ~13GB (FP4) or ~21GB (FP8)
+  Full conversation capability
+  Companion paused (prevents self-capture)
+
+    │  User says dismiss keyword (e.g. "Go to sleep")
+    ▼
+
+UNLOADING STATE (~2-3 seconds):
+  Agent: "Going to sleep"
+  Unloading all models: model.cpu() + torch.cuda.empty_cache()
+  Companion resumed
+
+    │
+    ▼
+
+DORMANT STATE (back to start)
 ```
 
-**2. Global hotkey (push-to-talk)**: `pynput` global hotkey listener. Zero CPU when idle. Requires X server in WSL2 (WSLg provides this on Windows 11). Fallback: PowerShell-side hotkey listener.
+**Wake word**: "Hey Boris" (or configurable). The companion pre-renders this audio clip using ClipCannon TTS with the boris voice profile during setup, then trains a custom OpenWakeWord model on it. This means the wake word detector recognizes YOUR voice saying "Hey Boris" specifically.
 
-Default: wake word mode. Configurable in config.json `"activation": "wake_word"` or `"activation": "hotkey"`.
+**Dismiss keyword**: "Go to sleep" (or configurable). Detected by the ASR (Whisper) during active conversation. When detected, the agent speaks a farewell, then unloads all models.
+
+**Implementation:**
+
+```python
+class VoiceAgentLifecycle:
+    def __init__(self):
+        self.state = "dormant"
+        self.wake_detector = WakeWordDetector("hey_boris")  # CPU only
+
+    def on_wake_word(self):
+        if self.state != "dormant":
+            return
+        self.state = "loading"
+        self._load_models()     # Qwen3-14B + Whisper + TTS → GPU
+        self.state = "active"
+        self._speak("I'm here")
+        self._pause_companion()
+
+    def on_dismiss_keyword(self, text: str):
+        if "go to sleep" in text.lower():
+            self._speak("Going to sleep")
+            self.state = "unloading"
+            self._unload_models()   # model.cpu() + empty_cache()
+            self.state = "dormant"
+            self._resume_companion()
+
+    def _load_models(self):
+        self.llm = load_qwen3_14b()       # ~7.5GB FP4 or ~15GB FP8
+        self.asr = load_whisper()           # ~1.5GB
+        self.tts = load_clipcannon_tts()    # ~4GB
+
+    def _unload_models(self):
+        self.llm.cpu(); del self.llm
+        self.asr.cpu(); del self.asr
+        # TTS model managed by ClipCannon ModelManager
+        torch.cuda.empty_cache()
+```
+
+**Why this is critical:**
+- RTX 5090 has 32GB VRAM. If the agent owns 13-21GB permanently, ClipCannon rendering, OCR Provenance batch processing, and any other GPU work would OOM.
+- On-demand loading means the GPU is 100% free except when you're actively talking to the agent.
+- Background processes (companion capture, ambient audio recording) use zero GPU.
+- Dream state (3 AM) runs when the agent is dormant — full GPU available.
+
+**Global hotkey alternative**: `pynput` listener for Ctrl+Space (load/unload toggle). For when wake word detection is unreliable or disabled.
 
 ### 3.2.3 Ambient Microphone Transcription
 
@@ -446,13 +488,12 @@ class AmbientMicCapture:
 
 Same pipeline as ambient mic, but captures all audio output from Windows (meetings, YouTube, podcasts, tutorials, calls). Uses the system loopback audio device.
 
-**How loopback works in WSL2**: Windows exposes a virtual "Stereo Mix" or "What U Hear" device. PulseAudio in WSLg can access it. Alternatively, capture via PowerShell using `NAudio` or `Windows.Media.Capture` loopback and pipe the PCM to WSL2.
+**How loopback works**: The Windows companion records from the "Stereo Mix" device via `sounddevice` natively on Windows 11. Enable it in: Sound Settings → More sound settings → Recording → right-click → Show Disabled Devices → Enable Stereo Mix.
 
 ```python
-# sounddevice can capture loopback if the device is exposed via PulseAudio
+# Companion captures system audio natively on Windows via sounddevice
 loopback_idx = find_device("stereo mix", kind="input")  # or "what u hear"
-# If not available via PulseAudio, use PowerShell:
-# powershell.exe -Command "Start-Process -FilePath 'ffmpeg' -ArgumentList '-f dshow -i audio=\"Stereo Mix\" output.wav'"
+# The companion records to WAV files in C:\voiceagent_data\audio\system\
 ```
 
 **Pipeline**: Identical to ambient mic (3.2.3) with these differences:
@@ -493,26 +534,50 @@ loopback_idx = find_device("stereo mix", kind="input")  # or "what u hear"
 
 ### 3.2.4 Clipboard Monitoring
 
-Background thread polls `powershell.exe Get-Clipboard` every 500ms. Content-hashed for change detection. Unique clipboard entries are stored as text documents in `va_clipboard` OCR Provenance database.
+**No background clipboard polling.** Polling locks the clipboard every 500ms and captures noise (passwords, random selections, transient copies). Instead, clipboard is voice-controlled:
+
+**"Clip"** → Agent copies its last spoken response text to your Windows clipboard. You can immediately Ctrl+V it anywhere. The Docker container sends the text to the companion via HTTP, the companion writes it via `win32clipboard.SetClipboardText()`.
+
+**"Save clipboard"** → Agent reads your current clipboard content (one-time read), ingests it into `va_clipboard` database via OCR Provenance. Only happens when you explicitly ask.
 
 ```python
-class ClipboardWatcher:
-    INTERVAL = 0.5  # seconds
-    def _get_clipboard(self) -> str:
-        result = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command", "Get-Clipboard"],
-            capture_output=True, text=True, timeout=3
-        )
-        return result.stdout.rstrip("\r\n")
+# Companion HTTP endpoints for clipboard (called by Docker container)
+@app.post("/clipboard/write")
+def write_clipboard(body: dict):
+    """Agent writes its response to Windows clipboard."""
+    import win32clipboard
+    win32clipboard.OpenClipboard()
+    win32clipboard.EmptyClipboard()
+    win32clipboard.SetClipboardText(body["text"], win32clipboard.CF_UNICODETEXT)
+    win32clipboard.CloseClipboard()
+    return {"written": True}
 
-    def _poll(self):
-        while self.running:
-            content = self._get_clipboard()
-            content_hash = hashlib.md5(content.encode()).hexdigest()
-            if content_hash != self._last_hash and content.strip():
-                self._last_hash = content_hash
-                self._store(content)  # ingest into OCR Prov as text document
-            time.sleep(self.INTERVAL)
+@app.get("/clipboard/read")
+def read_clipboard():
+    """Agent reads current clipboard content on demand."""
+    import win32clipboard
+    win32clipboard.OpenClipboard()
+    try:
+        text = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+    except TypeError:
+        text = ""  # clipboard contains non-text (image, etc.)
+    finally:
+        win32clipboard.CloseClipboard()
+    return {"text": text}
+```
+
+**LLM tool definitions:**
+```python
+{
+    "name": "clip",
+    "description": "Copy the agent's last response to the Windows clipboard so the user can Ctrl+V it.",
+    "parameters": {}
+},
+{
+    "name": "save_clipboard",
+    "description": "Read the user's current clipboard and save it to memory. Use when user says 'save clipboard' or 'remember what I copied'.",
+    "parameters": {}
+}
 ```
 
 ### 3.2.5 PII Detection and Redaction
@@ -565,9 +630,9 @@ When called, the agent creates a text document containing the fact, tagged with 
 
 ### 3.2.7 Dream State (3 AM Nightly Consolidation)
 
-A scheduled job runs at 4:00 AM daily when the system is idle. It consolidates, deduplicates, and distills the day's data into compact knowledge -- like a brain consolidating short-term memory into long-term memory during sleep.
+A scheduled job runs at 3:00 AM daily when the system is idle. It consolidates, deduplicates, and distills the day's data into compact knowledge -- like a brain consolidating short-term memory into long-term memory during sleep.
 
-**Schedule**: Cron-style via `scheduler.py`. If the user is in an active conversation at 4 AM, the dream state defers until the conversation ends (max defer: 2 hours, then runs anyway).
+**Schedule**: Cron-style via `scheduler.py`. If the user is in an active conversation at 3 AM, the dream state defers until the conversation ends (max defer: 2 hours, then runs anyway).
 
 **Dream Pipeline** (runs sequentially):
 
@@ -710,7 +775,30 @@ When the agent speaks through speakers, the mic picks it up. The system audio lo
 
 Conversation transcripts already go to `va_conversations` -- no need to capture them again via ambient mic.
 
-### 3.2.12 Cross-Database Search Default
+### 3.2.12 Voice-First I/O and "Clip" Command
+
+**All interaction is voice.** Every response from the agent is spoken aloud via ClipCannon TTS in the active voice profile. Text is never the primary output -- it's always audio first.
+
+**Voice commands for clipboard:**
+
+| Command | Action |
+|---------|--------|
+| "Clip" | Agent's last spoken response text → copied to Windows clipboard via companion API. User can immediately Ctrl+V it anywhere. |
+| "Save clipboard" | Current Windows clipboard content → read once via companion API → ingested into `va_clipboard` database. |
+
+**How "Clip" works end-to-end:**
+1. Agent speaks a response (e.g., answers a question about code)
+2. The response text is stored in `self.last_response_text`
+3. User says "Clip"
+4. ASR transcribes "clip" → LLM matches the `clip` tool
+5. Docker container sends `POST http://companion:8770/clipboard/write {"text": "..."}`
+6. Companion calls `win32clipboard.SetClipboardText(text)`
+7. Agent says "Copied" (confirmation)
+8. User presses Ctrl+V anywhere in Windows → pastes the agent's response
+
+**No background clipboard polling.** The clipboard is never read or written without explicit voice command.
+
+### 3.2.13 Cross-Database Search Default
 
 When the user asks an ambiguous question ("what was that JWT thing?"), the LLM must search ALL databases, not guess one. The system prompt instructs the LLM: "For any recall/memory question, use `ocr_search_cross_db` with ALL va_* databases unless the user specifies a source. Only narrow to a single database if the user says 'in my code' or 'in that meeting' etc."
 
@@ -857,7 +945,7 @@ def find_device(name_substring: str) -> int:
 
 Config field: `"audio_device": "USB Audio"` (substring match) or `"audio_device": "default"`.
 
-**WSL2 note**: On Windows 11 with WSLg, PulseAudio passthrough works automatically. On Windows 10, a PulseAudio server must run on the Windows side. Devices appear as `pulse` or `default` in WSL2.
+**Note**: Audio devices are accessed by the Windows companion natively, not through Docker/WSL2. The Docker container receives WAV files via the shared volume.
 
 ### 3.3 CUDA 13.1/13.2 Optimizations for RTX 5090
 
@@ -891,52 +979,437 @@ Blackwell's 5th-gen Tensor Cores support NVFP4 natively -- 4-bit weights with FP
 - Embedding generation: 1.84x faster
 - Audio buffer processing: effectively free
 
-### 3.4 Docker Containerization Strategy
+### 3.4 Two-Process Architecture: Companion + Docker
 
-**Architecture**: Two processes -- a Docker container (Linux + CUDA) for the AI stack, and a lightweight Windows companion for capture.
+A Linux Docker container cannot call Windows APIs. Period. The system is therefore two processes:
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│  Windows Host                                               │
-│                                                              │
-│  ┌──────────────────────────┐    ┌───────────────────────┐  │
-│  │ Companion (Python .exe)  │    │ OCR Provenance Docker │  │
-│  │ • Screenshot capture     │───>│ (already running)     │  │
-│  │ • Active window metadata │    │ Port 3366             │  │
-│  │ • Clipboard monitoring   │    └───────────────────────┘  │
-│  │ • Mic + system audio     │                               │
-│  │ • Saves to shared volume │    ┌───────────────────────┐  │
-│  └────────────┬─────────────┘    │ Voice Agent Docker    │  │
-│               │ shared volume    │ • Qwen3-14B (FP4)     │  │
-│               └─────────────────>│ • ASR (Whisper)       │  │
-│                                  │ • TTS (ClipCannon)    │  │
-│                                  │ • Conversation engine │  │
-│                                  │ Port 8765 (WebSocket) │  │
-│                                  └───────────────────────┘  │
-└────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│  Windows 11 Host                                                     │
+│                                                                       │
+│  ┌─────────────────────────────────────┐                             │
+│  │  COMPANION (voiceagent-capture.exe)  │                             │
+│  │  Native Windows Python process       │                             │
+│  │                                      │                             │
+│  │  ┌────────────┐ ┌────────────────┐  │   Shared Volume             │
+│  │  │ Screenshot │ │ Active Window  │  │   C:\voiceagent_data\       │
+│  │  │ Capture    │ │ Metadata       │  │         │                    │
+│  │  │ (ImageGrab)│ │ (win32gui)     │  │         │ PNGs + JSONs       │
+│  │  └────────────┘ └────────────────┘  │         │ WAV audio buffers  │
+│  │  ┌────────────┐ ┌────────────────┐  │         │ clipboard.txt      │
+│  │  │ Clipboard  │ │ Mic + System   │  │         │                    │
+│  │  │ Monitor    │ │ Audio Record   │  │         ▼                    │
+│  │  │(win32clip) │ │ (sounddevice)  │  │   ┌───────────────────────┐ │
+│  │  └────────────┘ └────────────────┘  │   │ Voice Agent Docker    │ │
+│  │  ┌────────────────────────────────┐ │   │ (Linux + CUDA)        │ │
+│  │  │ HTTP API :8770                 │◄├───┤                       │ │
+│  │  │ /status, /health, /config      │ │   │ Qwen3-14B FP4         │ │
+│  │  └────────────────────────────────┘ │   │ Whisper ASR            │ │
+│  │  ┌────────────────────────────────┐ │   │ ClipCannon TTS         │ │
+│  │  │ System Tray Icon              │ │   │ Conversation Engine    │ │
+│  │  │ • Green = capturing            │ │   │ Dream State            │ │
+│  │  │ • Yellow = paused (in convo)   │ │   │                       │ │
+│  │  │ • Red = error                  │ │   │ Port 8765 (WebSocket) │ │
+│  │  │ • Right-click: pause/resume    │ │   │ Port 8080 (REST API)  │ │
+│  │  └────────────────────────────────┘ │   └───────┬───────────────┘ │
+│  └─────────────────────────────────────┘           │                  │
+│                                                     │ Docker network   │
+│                                              ┌──────┴────────────┐    │
+│                                              │ OCR Provenance    │    │
+│                                              │ Docker :3366      │    │
+│                                              │ (already running) │    │
+│                                              └───────────────────┘    │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-**Why two processes**:
-- Docker (Linux) containers CANNOT call Windows APIs (no PowerShell, no Win32, no UI Automation)
-- The Windows companion handles all Windows-native capture (screenshots, clipboard, audio devices, window titles)
-- The Docker container handles all AI/ML (GPU inference, conversation, OCR integration)
-- Communication via shared Docker volume for files + HTTP for commands
+#### 3.4.1 Windows Companion Specification
 
-**Windows Companion** (`voiceagent-capture.exe`, ~5MB PyInstaller bundle):
-- Captures screenshots via native `PIL.ImageGrab.grab()` (works natively on Windows, no PowerShell needed)
-- Gets active window via `win32gui.GetForegroundWindow()` + `win32process`
-- Monitors clipboard via `win32clipboard`
-- Records mic + system audio via `sounddevice` (direct Windows audio devices)
-- Saves everything to a shared volume mount (e.g., `C:\voiceagent_data\`)
-- Exposes a tiny HTTP API on localhost for the Docker container to query status
+**Package**: `voiceagent-capture.exe` (~8MB PyInstaller single-file bundle)
+**Runtime**: Python 3.12+ (Windows native, NOT WSL2)
+**Startup**: Runs at Windows login via Start Menu Startup folder or Task Scheduler
+**UI**: System tray icon only (no window). Right-click menu: Pause/Resume, Settings, Quit.
 
-**Docker Container** (`voiceagent:latest`):
-- Mounts `C:\voiceagent_data\` as `/data/captures/`
-- Reads captures, processes them, manages conversations
-- Full CUDA GPU access via Docker Desktop WSL2 backend
-- Connects to OCR Provenance container via Docker network
+**Dependencies (Windows-native, pip install on Windows Python):**
 
-This eliminates ALL WSL2 interop hacks (PowerShell subprocess calls, PulseAudio passthrough, etc.). Native Windows APIs for capture, native CUDA for AI.
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `Pillow` | >=10.0 | `ImageGrab.grab()` for screenshots (native Windows, no PowerShell) |
+| `pywin32` | >=306 | `win32gui`, `win32process`, `win32clipboard`, `win32api` |
+| `sounddevice` | >=0.5.5 | Mic + system audio loopback recording |
+| `imagehash` | >=4.3 | Perceptual hashing for screenshot dedup |
+| `pystray` | >=0.19 | System tray icon |
+| `requests` | >=2.31 | HTTP heartbeat to Docker container |
+| `numpy` | >=1.26 | Audio buffer handling |
+
+**NO GPU dependencies. NO torch. NO transformers. Pure CPU. <100MB RAM.**
+
+#### 3.4.2 Companion Capture Modules
+
+**Screenshot Capture** (`companion/screen.py`):
+```python
+from PIL import ImageGrab
+import imagehash
+
+class ScreenCapture:
+    DIFF_INTERVAL_S = 5
+    PHASH_THRESHOLD = 5
+    MAX_PER_DAY = 190
+
+    def capture_if_changed(self) -> Path | None:
+        """Native Windows screenshot — no PowerShell, no subprocess."""
+        # ImageGrab.grab() works natively on Windows 11
+        # For specific monitor: ImageGrab.grab(bbox=(x, y, x+w, y+h))
+        # For all monitors: ImageGrab.grab(all_screens=True)
+        img = ImageGrab.grab()  # primary monitor
+        phash = imagehash.phash(img)
+
+        if self._is_duplicate(phash):
+            return None
+
+        timestamp = datetime.now().strftime("%H%M%S")
+        date_dir = self.capture_dir / datetime.now().strftime("%Y-%m-%d")
+        date_dir.mkdir(parents=True, exist_ok=True)
+        path = date_dir / f"screenshot_{timestamp}.png"
+        img.save(path, "PNG")
+        self._save_hash(phash)
+        return path
+```
+
+**Per-monitor capture** (Windows 11 native):
+```python
+from PIL import ImageGrab
+import ctypes
+
+def get_monitors() -> list[dict]:
+    """Get all monitor bounds via Win32 EnumDisplayMonitors."""
+    monitors = []
+    def callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+        rect = lprcMonitor.contents
+        monitors.append({
+            "x": rect.left, "y": rect.top,
+            "w": rect.right - rect.left, "h": rect.bottom - rect.top
+        })
+        return True
+    ctypes.windll.user32.EnumDisplayMonitors(None, None,
+        ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.wintypes.RECT),
+            ctypes.c_double)(callback), 0)
+    return monitors
+
+def capture_changed_monitors(last_hashes: dict[int, str]) -> list[Path]:
+    """Only capture monitors whose content changed."""
+    changed = []
+    for i, mon in enumerate(get_monitors()):
+        img = ImageGrab.grab(bbox=(mon["x"], mon["y"],
+                                    mon["x"]+mon["w"], mon["y"]+mon["h"]))
+        phash = str(imagehash.phash(img))
+        if phash != last_hashes.get(i) or i not in last_hashes:
+            path = save_screenshot(img, monitor=i)
+            changed.append(path)
+        last_hashes[i] = phash
+    return changed
+```
+
+**Active Window** (`companion/window.py`):
+```python
+import win32gui
+import win32process
+import psutil
+
+def get_active_window() -> dict:
+    """Native Win32 — instant, no subprocess, no PowerShell."""
+    hwnd = win32gui.GetForegroundWindow()
+    title = win32gui.GetWindowText(hwnd)
+    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+    try:
+        proc = psutil.Process(pid)
+        name = proc.name()
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        name = "unknown"
+    return {"title": title, "process": name, "pid": pid}
+```
+
+**Browser URL extraction** (`companion/browser_url.py`):
+```python
+import win32com.client
+
+def get_chrome_url() -> str | None:
+    """Get URL from Chrome/Edge via UI Automation COM."""
+    try:
+        shell = win32com.client.Dispatch("Shell.Application")
+        for window in shell.Windows():
+            if "chrome" in str(window.FullName).lower() or "msedge" in str(window.FullName).lower():
+                return window.LocationURL
+    except Exception:
+        pass
+    return None
+```
+
+**Clipboard Monitor** (`companion/clipboard.py`):
+```python
+import win32clipboard
+import hashlib
+
+class ClipboardWatcher:
+    POLL_INTERVAL_S = 0.5
+
+    def poll(self) -> str | None:
+        """Native Win32 clipboard — no subprocess, instant."""
+        try:
+            win32clipboard.OpenClipboard()
+            text = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+            win32clipboard.CloseClipboard()
+        except Exception:
+            return None
+
+        content_hash = hashlib.md5(text.encode()).hexdigest()
+        if content_hash != self._last_hash and text.strip():
+            self._last_hash = content_hash
+            return text
+        return None
+```
+
+**Audio Recording** (`companion/audio.py`):
+```python
+import sounddevice as sd
+import numpy as np
+from scipy.io import wavfile
+
+class AudioRecorder:
+    SAMPLE_RATE = 16000
+    SEGMENT_DURATION_S = 900  # 15 minutes
+
+    def __init__(self, device_name: str, output_dir: Path):
+        self.device = self._find_device(device_name)
+        self.output_dir = output_dir
+
+    def record_segment(self) -> Path:
+        """Record 15-min WAV to disk. Blocking."""
+        frames = int(self.SAMPLE_RATE * self.SEGMENT_DURATION_S)
+        audio = sd.rec(frames, samplerate=self.SAMPLE_RATE,
+                       channels=1, dtype="int16", device=self.device)
+        sd.wait()
+
+        path = self.output_dir / f"audio_{datetime.now().strftime('%H%M%S')}.wav"
+        wavfile.write(str(path), self.SAMPLE_RATE, audio)
+        return path
+
+    def _find_device(self, name: str) -> int:
+        for i, dev in enumerate(sd.query_devices()):
+            if name.lower() in dev["name"].lower() and dev["max_input_channels"] > 0:
+                return i
+        raise ValueError(f"No input device matching '{name}'")
+```
+
+**Note on system audio loopback**: Windows 11 exposes "Stereo Mix" as an input device if enabled in Sound Settings > Recording Devices. The companion records from it the same way as the mic -- just a different device name. If Stereo Mix is disabled, enable it: Sound Settings → More sound settings → Recording → right-click → Show Disabled Devices → Enable Stereo Mix.
+
+#### 3.4.3 Companion Output Structure
+
+All output goes to the shared Docker volume at `C:\voiceagent_data\`:
+
+```
+C:\voiceagent_data\
+    captures\
+        2026-03-28\
+            screenshot_143215.png
+            screenshot_143215.json      # sidecar metadata
+            screenshot_143512.png
+            screenshot_143512.json
+    audio\
+        mic\
+            mic_143000.wav              # 15-min mic segment
+        system\
+            sys_143000.wav              # 15-min system audio segment
+    clipboard\
+        clip_143215.txt                 # clipboard snapshot
+        clip_150032.txt
+    companion_status.json               # heartbeat file, updated every 30s
+```
+
+**Sidecar metadata** (`screenshot_143215.json`):
+```json
+{
+    "timestamp": "2026-03-28T14:32:15Z",
+    "app": "Code",
+    "title": "server.py - clipcannon - Visual Studio Code",
+    "url": "",
+    "monitor": 0,
+    "phash": "a1b2c3d4e5f6a7b8",
+    "processed": false
+}
+```
+
+**Heartbeat file** (`companion_status.json`, updated every 30s):
+```json
+{
+    "status": "running",
+    "last_heartbeat": "2026-03-28T14:32:45Z",
+    "captures_today": 87,
+    "disk_usage_mb": 234,
+    "mic_recording": true,
+    "system_audio_recording": true,
+    "clipboard_watching": true,
+    "errors_last_hour": 0,
+    "uptime_s": 28800
+}
+```
+
+#### 3.4.4 Companion HTTP API
+
+Tiny HTTP server on `localhost:8770` (not exposed outside the machine). The Docker container queries this for real-time companion status.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | `{"status": "ok", "uptime_s": 28800}` |
+| GET | `/status` | Full companion status (same as heartbeat JSON) |
+| GET | `/window` | Current active window metadata (live) |
+| POST | `/pause` | Pause all capture (during voice conversation) |
+| POST | `/resume` | Resume all capture |
+| POST | `/capture-now` | Take one screenshot immediately |
+| GET | `/config` | Current companion configuration |
+| PUT | `/config` | Update configuration (e.g., change privacy blocklist) |
+
+The Docker container checks `/health` every 30 seconds. 3 missed heartbeats = alert surfaced in next voice conversation.
+
+#### 3.4.5 Companion Configuration
+
+Stored at `%APPDATA%\voiceagent\companion_config.json`:
+
+```json
+{
+    "output_dir": "C:\\voiceagent_data",
+    "http_port": 8770,
+    "capture": {
+        "diff_check_interval_s": 5,
+        "phash_threshold": 5,
+        "max_captures_per_day": 190,
+        "max_disk_mb": 500,
+        "multi_monitor": true,
+        "privacy_blocklist": ["1Password", "LastPass", "Bitwarden",
+                               "Chase", "Bank of America", "Wells Fargo"]
+    },
+    "audio": {
+        "mic_device": "default",
+        "system_audio_device": "Stereo Mix",
+        "segment_duration_s": 900,
+        "sample_rate": 16000
+    },
+    "clipboard": {
+        "enabled": true,
+        "poll_interval_s": 0.5,
+        "min_length": 10,
+        "max_length": 50000
+    },
+    "tray": {
+        "show_capture_count": true,
+        "show_notifications": true
+    }
+}
+```
+
+#### 3.4.6 Companion Packaging
+
+```bash
+# Build on Windows Python (not WSL2)
+pip install pyinstaller
+pyinstaller --onefile --windowed --icon=voiceagent.ico \
+    --add-data "companion_config.json;." \
+    --name voiceagent-capture \
+    companion/main.py
+# Output: dist/voiceagent-capture.exe (~8MB)
+```
+
+`--windowed` means no console window (tray icon only). The .exe runs at Windows startup via:
+```
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\voiceagent-capture.lnk
+```
+
+#### 3.4.7 Docker Container Specification
+
+**Image**: `voiceagent:latest` (Linux + CUDA 13.2)
+**Base**: `nvidia/cuda:13.2-runtime-ubuntu24.04`
+**Ports**: 8765 (WebSocket for voice), 8080 (REST API)
+**Volumes**: `C:\voiceagent_data` → `/data/captures` (read/write)
+
+```yaml
+# docker-compose.yml (extends existing OCR Provenance compose)
+services:
+  voiceagent:
+    image: voiceagent:latest
+    container_name: voiceagent
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    ports:
+      - "8765:8765"   # WebSocket (voice conversation)
+      - "8080:8080"   # REST API (monitoring)
+    volumes:
+      - voiceagent-data:/data/agent          # agent.db, registry, logs, sessions
+      - type: bind
+        source: C:\voiceagent_data
+        target: /data/captures               # shared with companion
+      - type: bind
+        source: \\wsl.localhost\Ubuntu-24.04\home\cabdru\.cache\huggingface
+        target: /root/.cache/huggingface     # model cache (shared with host)
+        read_only: true
+      - type: bind
+        source: \\wsl.localhost\Ubuntu-24.04\home\cabdru\.clipcannon
+        target: /root/.clipcannon            # voice profiles (read-only)
+        read_only: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - ocr-provenance-mcp
+    networks:
+      - voiceagent-net
+
+  # Existing OCR Provenance container (unchanged)
+  ocr-provenance-mcp:
+    # ... existing config ...
+    networks:
+      - voiceagent-net
+
+networks:
+  voiceagent-net:
+    driver: bridge
+
+volumes:
+  voiceagent-data:
+```
+
+The Docker container reads captures from `/data/captures/`, processes audio through Whisper, manages conversations, talks to OCR Provenance at `http://ocr-provenance-mcp:3366` via the Docker network, and serves voice conversations on port 8765.
+
+#### 3.4.8 Heartbeat Protocol
+
+Bidirectional health monitoring between companion and Docker container:
+
+```
+Every 30 seconds:
+
+Companion → writes C:\voiceagent_data\companion_status.json (heartbeat file)
+Docker    → reads /data/captures/companion_status.json
+            If last_heartbeat > 90s old: companion is dead
+            → Log alert, surface in next voice conversation
+
+Docker    → exposes GET http://localhost:8080/health
+Companion → polls http://localhost:8080/health every 30s
+            If 3 consecutive failures: Docker is dead
+            → System tray icon turns red
+            → Windows toast notification: "Voice Agent is down"
+```
+
+No complex protocol. File-based heartbeat in one direction (companion → Docker), HTTP health check in the other (Docker → companion). Both use what they already have.
 
 ---
 
@@ -1023,16 +1496,16 @@ src/
         memory/
             __init__.py
             ocr_client.py              # HTTP JSON-RPC client for OCR Provenance at localhost:3366
-            screen_capture.py           # Screenshot daemon: PowerShell interop, pHash dedup, save to disk
-            ambient_mic.py              # Continuous mic recording, VAD, Whisper transcribe, .txt ingest
-            system_audio.py             # System audio loopback capture, same pipeline as ambient_mic
-            clipboard_watcher.py        # Clipboard monitoring: PowerShell Get-Clipboard polling, dedup
-            active_window.py            # Active window metadata: PowerShell GetForegroundWindow + UI Automation
+            screen_capture.py           # Reads companion screenshots from shared volume, manages OCR queue
+            ambient_mic.py              # Reads companion mic WAVs from shared volume, VAD + Whisper transcribe
+            system_audio.py             # Reads companion system audio WAVs, same pipeline as ambient_mic
+            clipboard.py                # Voice-triggered clipboard read/write via companion HTTP API
+            active_window.py            # Reads companion window metadata JSONs from shared volume
             pii_filter.py              # Presidio PII detection + redaction before storage
             registry.py                 # Agent's database registry (~/.voiceagent/registry.json)
             retriever.py               # Search across OCR Prov databases, assemble RAG context
             knowledge.py               # Cross-session persistent memory: user facts, preferences
-            dream.py                   # 4 AM nightly consolidation: dedup, digest, knowledge extraction, retention
+            dream.py                   # 3 AM nightly consolidation: dedup, digest, knowledge extraction, retention
             scheduler.py               # Cron/interval scheduler for capture + dream state + maintenance
             session.py                  # Session state serialization + restoration on restart
 
@@ -1043,7 +1516,7 @@ src/
         activation/
             __init__.py
             wake_word.py               # OpenWakeWord v0.6+ (CPU, "hey jarvis" or custom)
-            hotkey.py                  # Global hotkey push-to-talk (pynput or PowerShell fallback)
+            hotkey.py                  # Global hotkey push-to-talk (pynput)
 
         eval/
             __init__.py
@@ -1087,7 +1560,7 @@ class ScreenCaptureDaemon:
     def capture_loop(self):
         while self.running:
             if self._screen_changed():              # fast pixel-sum diff (<1ms)
-                filepath = self._take_screenshot()   # PowerShell CopyFromScreen
+                filepath = self._take_screenshot()   # PIL.ImageGrab (companion)
                 phash = self._compute_phash(filepath)
 
                 if self._is_duplicate(phash):
@@ -1120,7 +1593,7 @@ class ScreenCaptureDaemon:
 | Dream state cleanup | After OCR processing | Delete ALL processed PNGs |
 | Stale capture cleanup | Captures older than 48 hours un-processed | Delete (dream state failed or was skipped) |
 
-**Storage math**: A 1920x1080 PNG screenshot is ~1-3MB. At 2GB cap, that's 700-2000 screenshots max on disk at any time. Dream state processes and deletes them nightly, so the typical daily accumulation is 200-500 screenshots (~500MB-1.5GB) that get cleared overnight.
+**Storage math**: A 1920x1080 PNG screenshot is ~1-3MB. At 500MB cap, that's ~190-250 screenshots max on disk at any time. Dream state processes and deletes them nightly, so the typical daily accumulation is up to 190 screenshots (~380MB) that get cleared overnight.
 
 **Capture directory structure**:
 ```
@@ -1174,7 +1647,7 @@ Tags are applied via `ocr_tag_create` + `ocr_tag_apply`.
 
 ### 6.4 Cleanup
 
-- Screenshots are deleted from `/tmp/va_captures/` immediately after successful OCR processing
+- Screenshots are deleted from shared volume after dream state OCR processing
 - Failed screenshots are retried on next cycle, then deleted after 3 failures
 - OCR Provenance handles document storage — no local copies needed
 - Rolling retention: `va_screen_captures` database auto-purges entries older than 30 days via a daily maintenance cron
@@ -1431,8 +1904,8 @@ At `~/.voiceagent/config.json`:
         "capture_dir": "~/.voiceagent/captures",
         "phash_threshold": 5,
         "phash_history": 10,
-        "max_captures_per_day": 1500,
-        "max_disk_mb": 2000,
+        "max_captures_per_day": 190,
+        "max_disk_mb": 500,
         "multi_monitor": "per_monitor_diff",
         "default_database": "va_screen_captures",
         "retention_days": 30,
@@ -1440,12 +1913,8 @@ At `~/.voiceagent/config.json`:
         "privacy_blocklist": ["1Password", "LastPass", "Bitwarden", "Chase", "Bank of America"]
     },
     "clipboard": {
-        "enabled": true,
-        "poll_interval_s": 0.5,
         "database": "va_clipboard",
-        "retention_days": 7,
-        "min_length": 10,
-        "max_length": 50000
+        "retention_days": 7
     },
     "pii": {
         "enabled": true,
@@ -1549,9 +2018,9 @@ Server → Client (text):   {"type": "transcript", "text": "...", "final": true}
 | OCR Provenance unreachable at startup | `raise ConnectionError("OCR Provenance not reachable at localhost:3366")` -- do not start |
 | Qwen3-14B-FP8 model files missing | `raise FileNotFoundError(f"Model not found at {model_path}")` -- do not start |
 | ClipCannon voice profile not found | `raise ValueError(f"Voice profile '{name}' not in voice_profiles.db")` -- do not start |
-| Screenshot capture fails | `raise RuntimeError(f"scrot failed: {stderr}")` -- log full error, re-raise |
+| Screenshot capture fails (companion) | `raise RuntimeError(f"ImageGrab failed: {e}")` -- log full error, re-raise |
 | OCR Provenance upload fails | `raise IOError(f"Upload to OCR Prov failed: {status} {body}")` -- log full response |
-| OCR processing fails | `raise RuntimeError(f"ocr_process_pending failed: {error}")` -- log tool response |
+| OCR ingestion fails | `raise RuntimeError(f"ocr_ingest_files failed: {error}")` -- log tool response |
 | LLM generation fails | `raise RuntimeError(f"Qwen3-14B generation failed: {e}")` -- log full traceback |
 | TTS synthesis fails | `raise RuntimeError(f"ClipCannon TTS failed: {e}")` -- log full traceback |
 | Database write fails | `raise sqlite3.Error(f"DB write failed: {e}")` -- log query + params |
@@ -1658,8 +2127,8 @@ ocr_db_create(name="va_test_data")
 # Ingest a known test document (a simple text file with predictable content)
 # Content: "The authentication module was refactored on March 27 2026. The new JWT handler
 #           uses RS256 signing with 15-minute token expiry."
-ocr_ingest_files(files=["/path/to/test_document.txt"])
-ocr_process_pending()
+ocr_ingest_files(files=["/path/to/test_document.txt"], disable_image_extraction=True)
+# ocr_ingest_files handles the full pipeline synchronously — no separate process_pending call
 
 # Now test search:
 result = ocr_search(query="JWT authentication refactoring", database="va_test_data")
@@ -1702,9 +2171,9 @@ ocr_db_delete(name="va_test_data")
 
 ### Phase 2: Memory System (Weeks 4-5)
 - OCR Provenance HTTP JSON-RPC client
-- Screenshot capture daemon: PowerShell interop, multi-monitor, pHash dedup
-- Active window metadata collection (title, process, browser URL)
-- Clipboard watcher (PowerShell Get-Clipboard polling)
+- Windows companion captures screenshots, audio, window metadata natively
+- Active window metadata collection via companion (win32gui, native)
+- Voice-controlled clipboard read/write via companion HTTP API
 - PII detection and redaction (Presidio) before storage
 - Privacy blocklist (skip captures of sensitive apps)
 - Auto-tagging by application type
@@ -1786,10 +2255,10 @@ Before any code runs, verify these are operational:
 | Qwen3-14B-FP8 model | `ls ~/.cache/huggingface/hub/models--Qwen--Qwen3-14B-FP8/snapshots/*/config.json` | File exists |
 | ClipCannon voice profiles | `python -c "from clipcannon.voice.profiles import get_voice_profile; print(get_voice_profile('boris'))"` | Profile object returned |
 | GPU available | `python -c "import torch; print(torch.cuda.get_device_name(0))"` | `NVIDIA GeForce RTX 5090` |
-| PowerShell interop (WSL2) | `powershell.exe -NoProfile -Command "Write-Output ok"` | `ok` |
-| Windows screenshot | `powershell.exe -NoProfile -Command "[System.Windows.Forms.Screen]::PrimaryScreen.Bounds"` (after Add-Type) | Resolution string |
-| Audio device | `python -c "import sounddevice; print(sounddevice.query_devices())"` | Device list with at least 1 input |
-| PulseAudio (WSL2 audio) | `python -c "import sounddevice; print(sounddevice.query_devices('default', 'input'))"` | Default input device info |
+| Companion running | `curl http://localhost:8770/health` | `{"status":"ok"}` |
+| Companion heartbeat | Read `C:\voiceagent_data\companion_status.json` | `last_heartbeat` within 30s |
+| Companion screenshot | `curl -X POST http://localhost:8770/capture-now` | Returns `{"captured": N}` with N > 0 |
+| Companion clipboard | `curl http://localhost:8770/clipboard/read` | Returns `{"text": "..."}` |
 
 If ANY check fails, the system must not start. Print exactly which check failed and what the expected result was.
 
