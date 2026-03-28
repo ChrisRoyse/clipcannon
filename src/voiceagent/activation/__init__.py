@@ -1,0 +1,1 @@
+"""Voice Agent activation module."""
