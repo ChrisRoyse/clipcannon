@@ -50,27 +50,62 @@ class SpeakResult:
 
 
 def _trim_reference(audio_path: Path, max_duration_s: float = _MAX_REF_DURATION_S) -> Path:
-    """Trim reference audio to max duration to prevent runaway generation.
+    """Preprocess reference audio for optimal voice cloning.
+
+    Steps:
+      1. Convert to mono
+      2. Trim leading/trailing silence (energy-based)
+      3. Truncate to max duration (prevents runaway generation)
+      4. Peak normalize to -1dB (consistent input level)
 
     Args:
         audio_path: Path to reference WAV.
         max_duration_s: Maximum duration in seconds.
 
     Returns:
-        Original path if already short enough, or path to trimmed copy.
+        Original path if no changes needed, or path to preprocessed copy.
     """
     import torchaudio
 
     wav, sr = torchaudio.load(str(audio_path))
-    max_samples = int(max_duration_s * sr)
-    if wav.shape[-1] <= max_samples:
-        return audio_path
 
-    wav = wav[:, :max_samples]
-    trimmed = audio_path.parent / f"{audio_path.stem}_trimmed.wav"
-    torchaudio.save(str(trimmed), wav, sr)
-    logger.info("Trimmed reference %s to %.0fs", audio_path.name, max_duration_s)
-    return trimmed
+    # Mono
+    if wav.shape[0] > 1:
+        wav = wav.mean(dim=0, keepdim=True)
+
+    # Trim silence from ends
+    energy = wav.abs().squeeze()
+    threshold = energy.max() * 0.02
+    active = (energy > threshold).nonzero(as_tuple=True)[0]
+    if len(active) > 0:
+        pad = int(0.05 * sr)  # 50ms padding
+        start = max(0, active[0].item() - pad)
+        end = min(wav.shape[-1], active[-1].item() + int(0.3 * sr))
+        wav = wav[:, start:end]
+
+    # Truncate to max duration
+    max_samples = int(max_duration_s * sr)
+    if wav.shape[-1] > max_samples:
+        wav = wav[:, :max_samples]
+
+    # Peak normalize to -1dB
+    peak = wav.abs().max()
+    if peak > 0:
+        target = 10 ** (-1.0 / 20)
+        wav = wav * (target / peak)
+
+    # Only save if something changed
+    original_wav, _ = torchaudio.load(str(audio_path))
+    if wav.shape != original_wav.shape or not torch.allclose(wav, original_wav[:1, :wav.shape[-1]], atol=1e-4):
+        trimmed = audio_path.parent / f"{audio_path.stem}_trimmed.wav"
+        torchaudio.save(str(trimmed), wav, sr)
+        logger.info(
+            "Preprocessed reference %s: %.1fs, normalized",
+            audio_path.name, wav.shape[-1] / sr,
+        )
+        return trimmed
+
+    return audio_path
 
 
 class VoiceSynthesizer:
@@ -192,7 +227,7 @@ class VoiceSynthesizer:
         reference_embedding: np.ndarray | None = None,
         verification_threshold: float = 0.80,
         max_attempts: int = 5,
-        temperature: float = 0.8,
+        temperature: float = 0.5,
         max_new_tokens: int = 2048,
         speed: float = 1.0,
     ) -> SpeakResult:
@@ -207,7 +242,8 @@ class VoiceSynthesizer:
                 identity verification (cosine similarity gate).
             verification_threshold: SECS threshold for identity gate.
             max_attempts: Maximum generation attempts (best-of-N).
-            temperature: Sampling temperature (0.8 = balanced).
+            temperature: Sampling temperature (0.5 = optimal for speaker
+                identity preservation with Full ICL mode).
             max_new_tokens: Max generation tokens (2048 = ~170s audio).
             speed: Playback speed multiplier.
 
@@ -270,7 +306,7 @@ class VoiceSynthesizer:
                 voice_clone_prompt=prompt,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
-                top_p=0.9,
+                top_p=0.85,
                 repetition_penalty=1.05,
             )
 

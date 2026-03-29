@@ -101,11 +101,16 @@ def best_of_n_speak(
     prompt: object,
     verifier: VoiceVerifier,
     output_path: Path,
-    n_candidates: int = 8,
-    temperature: float = 0.8,
+    n_candidates: int = 12,
+    temperature: float | tuple[float, ...] = (0.3, 0.4, 0.5),
     max_new_tokens: int = 2048,
 ) -> tuple[np.ndarray, float, int, int]:
     """Generate N candidates and return the one with highest SECS.
+
+    Supports multi-temperature generation: when temperature is a tuple,
+    candidates are distributed evenly across temperatures. Different
+    temperatures capture different aspects of the speaker's voice,
+    increasing the chance of finding a high-SECS candidate.
 
     Args:
         engine: Qwen3TTSModel instance.
@@ -114,7 +119,8 @@ def best_of_n_speak(
         verifier: VoiceVerifier for SECS scoring.
         output_path: Where to write the winning candidate.
         n_candidates: Number of candidates to generate.
-        temperature: Sampling temperature.
+        temperature: Sampling temperature. Pass a tuple of floats
+            for multi-temperature sweep (recommended: (0.3, 0.4, 0.5)).
         max_new_tokens: Max generation tokens.
 
     Returns:
@@ -123,17 +129,32 @@ def best_of_n_speak(
     candidates: list[tuple[float, np.ndarray, int, int]] = []
     temp_path = output_path.parent / f"_temp_{output_path.stem}.wav"
 
+    # Build temperature schedule
+    if isinstance(temperature, (list, tuple)):
+        temps = list(temperature)
+        per_temp = max(1, n_candidates // len(temps))
+        temp_schedule = []
+        for t in temps:
+            temp_schedule.extend([t] * per_temp)
+        # Fill remaining with middle temperature
+        while len(temp_schedule) < n_candidates:
+            temp_schedule.append(temps[len(temps) // 2])
+        temp_schedule = temp_schedule[:n_candidates]
+    else:
+        temp_schedule = [temperature] * n_candidates
+
     for i in range(n_candidates):
         seed = int(torch.randint(0, 2**31, (1,)).item())
         torch.manual_seed(seed)
+        current_temp = temp_schedule[i]
 
         wavs, sr = engine.generate_voice_clone(  # type: ignore[union-attr]
             text=text,
             language="English",
             voice_clone_prompt=prompt,
             max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=0.9,
+            temperature=current_temp,
+            top_p=0.85,
             repetition_penalty=1.05,
         )
 
@@ -144,7 +165,10 @@ def best_of_n_speak(
         secs = verifier.compute_secs(temp_path)
         candidates.append((secs, wav_np, i, sr))
 
-        logger.debug("Candidate %d/%d: SECS=%.4f (seed=%d)", i + 1, n_candidates, secs, seed)
+        logger.debug(
+            "Candidate %d/%d (temp=%.1f): SECS=%.4f (seed=%d)",
+            i + 1, n_candidates, current_temp, secs, seed,
+        )
 
     temp_path.unlink(missing_ok=True)
 
@@ -170,8 +194,8 @@ def optimized_speak(
     verifier: VoiceVerifier,
     reference_clips: list[Path],
     reference_text: str | None = None,
-    n_candidates: int = 8,
-    temperature: float = 0.8,
+    n_candidates: int = 12,
+    temperature: float | tuple[float, ...] = (0.3, 0.4, 0.5),
     max_new_tokens: int = 2048,
 ) -> OptimizedSpeakResult:
     """Full SECS-optimized voice synthesis pipeline.
