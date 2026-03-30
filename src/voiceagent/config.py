@@ -26,7 +26,7 @@ class LLMConfig:
     quantization: str = "fp8"
     gpu_memory_utilization: float = 0.45
     max_model_len: int = 32768
-    max_tokens: int = 512
+    max_tokens: int = 150
 
 
 @dataclass(frozen=True)
@@ -61,7 +61,7 @@ class TransportConfig:
 @dataclass(frozen=True)
 class GPUConfig:
     device: str = "cuda"
-    compute_type: str = "float32"
+    compute_type: str = "float16"
 
 
 @dataclass(frozen=True)

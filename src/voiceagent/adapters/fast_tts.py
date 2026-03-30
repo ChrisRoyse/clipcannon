@@ -236,7 +236,7 @@ class FastTTSAdapter:
         return self._engine
 
     def _clone_kwargs(
-        self, text: str, max_new_tokens: int = 512,
+        self, text: str, max_new_tokens: int = 256,
     ) -> dict:
         """Build kwargs for generate_voice_clone.
 
@@ -306,25 +306,40 @@ class FastTTSAdapter:
 
         Yields numpy arrays of float32 audio at 24kHz.
         First chunk arrives in ~500ms (TTFB).
+
+        Uses a thread + queue so chunks are yielded as soon as the
+        TTS engine produces them, rather than waiting for all chunks.
         """
         if not text or not text.strip():
             raise TTSError("Cannot synthesize empty text.")
 
-        def _generate_chunks() -> list[np.ndarray]:
-            self._warmup()
-            engine = self._ensure_engine()
-            kwargs = self._clone_kwargs(text)
-            kwargs["chunk_size"] = 12
-            chunks = []
-            for chunk_audio, sr, _info in (
-                engine.generate_voice_clone_streaming(**kwargs)
-            ):
-                self._sample_rate = sr
-                chunks.append(chunk_audio.astype(np.float32))
-            return chunks
+        import queue as queue_mod
+        import threading
 
-        chunks = await asyncio.to_thread(_generate_chunks)
-        for chunk in chunks:
+        q: queue_mod.Queue[np.ndarray | None] = queue_mod.Queue()
+
+        def _generate() -> None:
+            try:
+                self._warmup()
+                engine = self._ensure_engine()
+                kwargs = self._clone_kwargs(text, max_new_tokens=256)
+                kwargs["chunk_size"] = 12
+                for chunk_audio, sr, _info in engine.generate_voice_clone_streaming(**kwargs):
+                    self._sample_rate = sr
+                    q.put(chunk_audio.astype(np.float32))
+            except Exception as e:
+                logger.error("TTS streaming error: %s", e)
+            finally:
+                q.put(None)  # sentinel
+
+        thread = threading.Thread(target=_generate, daemon=True)
+        thread.start()
+
+        loop = asyncio.get_event_loop()
+        while True:
+            chunk = await loop.run_in_executor(None, q.get)
+            if chunk is None:
+                break
             yield chunk
 
     @property

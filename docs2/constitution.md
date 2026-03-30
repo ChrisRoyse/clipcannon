@@ -10,7 +10,7 @@
   <project_name>ClipCannon</project_name>
   <spec_version>3.0.0</spec_version>
   <created>2026-03-26</created>
-  <description>AI-native video editing, voice cloning, and avatar pipeline exposed as an MCP server — local GPU, 22-stage multimodal analysis, platform-ready output</description>
+  <description>AI-native video editing, voice cloning, avatar pipeline, and real-time voice agent — local GPU, 22-stage multimodal analysis, platform-ready output, conversational AI assistant</description>
   <target_hardware>NVIDIA RTX 5090 (32GB GDDR7, CUDA 13.2) — degrades gracefully to RTX 2000+</target_hardware>
 </metadata>
 
@@ -52,14 +52,22 @@
     <model name="ace-step" version="v1.5-turbo-rl" vram_nvfp4="4.0GB" license="MIT">AI music generation</model>
   </optional_models>
 
-  <!-- ML Models — Voice / Avatar (Phase 3, loaded on demand) -->
+  <!-- ML Models — Voice / Avatar (loaded on demand for ClipCannon video pipeline) -->
   <voice_avatar_models>
-    <model name="Qwen3-TTS" version="latest" license="Apache-2.0">Voice synthesis with reference audio style transfer</model>
+    <model name="Qwen3-TTS" version="1.7B" license="Apache-2.0">Voice synthesis with reference audio style transfer (high-quality, video generation)</model>
     <model name="Qwen3-Voice-Embedding-12Hz-1.7B" version="latest" license="Apache-2.0">2048-dim ECAPA-TDNN speaker encoder for identity verification</model>
     <model name="resemble-enhance" version="latest" license="MIT">Audio denoising + latent flow matching (24kHz → 44.1kHz)</model>
     <model name="faster-whisper-base" version="base" license="MIT">Transcription for WER verification gate (CPU, int8)</model>
     <model name="LatentSync" version="1.6" license="Apache-2.0">ByteDance diffusion-based lip-sync (512x512, DDIM)</model>
   </voice_avatar_models>
+
+  <!-- ML Models — Voice Agent (real-time conversational AI, separate from ClipCannon) -->
+  <voice_agent_models>
+    <model name="Qwen3-14B-FP8" version="latest" vram_fp8="~14GB" license="Apache-2.0">Conversational LLM brain (vLLM, 0.45 GPU utilization)</model>
+    <model name="faster-whisper-large-v3" version="large-v3" license="MIT">Streaming ASR with VAD endpointing</model>
+    <model name="faster-qwen3-tts" version="0.6B" license="Apache-2.0">Low-latency TTS (~500ms TTFB) with CUDA graphs, Full ICL mode</model>
+    <model name="silero-vad" version="5.0" vram_nvfp4="0GB" license="MIT">Voice activity detection for endpointing (CPU)</model>
+  </voice_agent_models>
 
   <!-- Core Libraries -->
   <required_libraries>
@@ -87,13 +95,22 @@
     <library version="latest">rembg (AI background removal)</library>
   </required_libraries_video>
 
-  <!-- Voice / Avatar Libraries -->
+  <!-- Voice / Avatar Libraries (ClipCannon) -->
   <required_libraries_voice>
     <library version="latest">torchaudio (audio I/O and resampling)</library>
     <library version="latest">transformers (Qwen3-TTS, speaker encoder)</library>
     <library version="latest">soundfile (audio metadata inspection)</library>
     <library version="latest">resemble-enhance (TTS post-processing)</library>
   </required_libraries_voice>
+
+  <!-- Voice Agent Libraries -->
+  <required_libraries_voice_agent>
+    <library version="latest">vllm (Qwen3-14B-FP8 LLM serving)</library>
+    <library version="latest">faster-whisper (streaming ASR)</library>
+    <library version="latest">pyaudio (local audio capture/playback)</library>
+    <library version="latest">websockets (WebSocket transport)</library>
+    <library version="latest">numpy (audio buffer processing)</library>
+  </required_libraries_voice_agent>
 
 </tech_stack>
 
@@ -194,9 +211,10 @@ clipcannon/
 │       │   ├── mixer.py               # Speech-aware audio mixing with ducking
 │       │   ├── effects.py             # Pedalboard audio effects chain
 │       │   └── cleanup.py             # Noise reduction, normalization, silence trim, EQ
-│       ├── voice/                     # Voice cloning engine (7 modules)
+│       ├── voice/                     # Voice cloning engine (8 modules)
 │       │   ├── data_prep.py           # Silence-boundary splitting, transcript matching, train/val manifests
 │       │   ├── inference.py           # VoiceSynthesizer: Qwen3-TTS with iterative verification
+│       │   ├── multi_voice.py         # Multi-voice synthesis for conversational scenarios (voice swapping mid-conversation)
 │       │   ├── verify.py              # Multi-gate verification: sanity, intelligibility (WER), identity (SECS 2048-dim)
 │       │   ├── optimize.py            # SECS-optimized best-of-N candidate selection
 │       │   ├── profiles.py            # Voice profile SQLite CRUD (~/.clipcannon/voice_profiles.db)
@@ -222,11 +240,47 @@ clipcannon/
 │           ├── app.py                 # FastAPI app factory, CORS, route registration
 │           ├── auth.py                # JWT dev-mode auth (HS256, 30-day TTL)
 │           └── routes/                # 7 route modules (home, credits, projects, provenance, editing, review, timeline)
+│   └── voiceagent/                    # Real-time voice agent (Jarvis) — separate from ClipCannon
+│       ├── __init__.py
+│       ├── __main__.py                # Entry point
+│       ├── agent.py                   # VoiceAgent orchestrator — lifecycle, pipeline coordination
+│       ├── cli.py                     # CLI entry (python -m voiceagent)
+│       ├── config.py                  # Frozen dataclass config (LLM, ASR, TTS, Conversation, Transport)
+│       ├── errors.py                  # VoiceAgentError hierarchy (ASR, TTS, LLM, Config, Transport)
+│       ├── gpu_manager.py             # GPU memory management for voice agent models
+│       ├── server.py                  # WebSocket server (FastAPI)
+│       ├── activation/                # Wake word and hotkey activation
+│       │   ├── wake_word.py           # Configurable wake word detection with audio feedback
+│       │   └── hotkey.py              # Push-to-talk hotkey activation
+│       ├── adapters/                  # TTS backend adapters
+│       │   ├── clipcannon.py          # ClipCannon 1.7B Qwen3-TTS adapter (high-quality)
+│       │   └── fast_tts.py            # faster-qwen3-tts 0.6B adapter (~500ms TTFB, CUDA graphs)
+│       ├── asr/                       # Automatic speech recognition
+│       │   ├── streaming.py           # Streaming ASR with faster-whisper
+│       │   ├── endpointing.py         # Silence-based endpoint detection
+│       │   ├── vad.py                 # Silero VAD integration
+│       │   └── types.py               # ASR result types
+│       ├── brain/                     # LLM reasoning
+│       │   ├── llm.py                 # Qwen3-14B-FP8 via vLLM
+│       │   ├── context.py             # Conversation context management
+│       │   └── prompts.py             # System prompt templates
+│       ├── conversation/              # Conversation state management
+│       │   ├── manager.py             # Turn handling, interruption, history
+│       │   └── state.py               # Conversation state machine
+│       ├── transport/                 # Audio I/O transports
+│       │   ├── local_audio.py         # Local microphone/speaker (PyAudio)
+│       │   └── websocket.py           # WebSocket transport
+│       ├── tts/                       # Text-to-speech
+│       │   ├── streaming.py           # Streaming TTS synthesis
+│       │   └── chunker.py             # Text chunking for streaming TTS
+│       └── db/                        # Voice agent database
+│           ├── connection.py          # SQLite connection factory
+│           └── schema.py              # Conversation history schema
 ├── src/license_server/                # Standalone license server (port 3100)
 │   ├── server.py                      # FastAPI app, SQLite-backed credits, HMAC integrity
 │   ├── d1_sync.py                     # Cloudflare D1 sync stub (local-only)
 │   └── stripe_webhooks.py             # Stripe checkout webhook handler
-├── tests/                             # 24 pytest files (427 tests), 10 FSV scripts
+├── tests/                             # 42 pytest files (~686 tests), 10 FSV scripts
 │   ├── conftest.py                    # Session-scoped shared fixtures
 │   ├── test_pipeline_stages.py        # 12 tests — probe, audio/frame extract, DAG, orchestrator
 │   ├── test_visual_pipeline.py        # 34 tests — storyboard, quality, visual embed, OCR, shot type
@@ -252,6 +306,27 @@ clipcannon/
 │   ├── test_dashboard_phase2.py       # 12 tests — timeline, editing, review endpoints
 │   ├── dashboard/test_dashboard.py    # 18 tests — dashboard endpoints
 │   ├── integration/test_full_pipeline.py # 22 tests — full pipeline with real video
+│   ├── voiceagent/                    # ~201 tests — voice agent subsystem
+│   │   ├── conftest.py                # Voice agent test fixtures
+│   │   ├── test_agent.py              # Agent orchestrator tests
+│   │   ├── test_asr_types.py          # ASR result types
+│   │   ├── test_chunker.py            # TTS text chunking
+│   │   ├── test_cli.py                # CLI entry tests
+│   │   ├── test_clipcannon_adapter.py # ClipCannon TTS adapter
+│   │   ├── test_config.py             # Config loading, defaults
+│   │   ├── test_context.py            # Conversation context
+│   │   ├── test_conversation.py       # Turn handling, interruption
+│   │   ├── test_db.py                 # Conversation DB
+│   │   ├── test_hotkey.py             # Hotkey activation
+│   │   ├── test_integration.py        # End-to-end voice pipeline
+│   │   ├── test_llm.py                # LLM brain
+│   │   ├── test_prompts.py            # System prompts
+│   │   ├── test_server.py             # WebSocket server
+│   │   ├── test_streaming_asr.py      # Streaming ASR
+│   │   ├── test_streaming_tts.py      # Streaming TTS
+│   │   ├── test_vad.py                # VAD tests
+│   │   ├── test_wake_word.py          # Wake word detection
+│   │   └── test_websocket.py          # WebSocket transport
 │   ├── fsv_*.py                       # 6 FSV scripts (750+ checks total)
 │   ├── manual_fsv_full.py             # Comprehensive system-wide verification
 │   ├── manual_fsv_iterative.py        # Iterative editing verification
@@ -263,7 +338,14 @@ clipcannon/
 ├── scripts/
 │   ├── setup.sh
 │   ├── download_models.py
-│   └── validate_gpu.py
+│   ├── validate_gpu.py
+│   ├── docker-entrypoint.sh           # Docker container entry point
+│   └── jarvis-service.sh              # Systemd service script for voice agent
+├── benchmarks/                        # Voice cloning benchmarks and evaluation
+│   ├── results/                       # Benchmark result JSON files (SV-EER, Seed-TTS, WavLM)
+│   ├── scripts/                       # Benchmark runners (seed-TTS eval, gradient optimization, WavLM)
+│   ├── seedtts_eval/                  # Seed-TTS evaluation audio pairs
+│   └── publish/                       # ArXiv report, HuggingFace model card, Gradio demo app
 ├── assets/
 │   └── profanity/                     # Profanity word list
 ├── docs/codestate/                    # 15 codestate reference documents
@@ -291,6 +373,7 @@ clipcannon/
     <project_ids>Prefixed: proj_ + 8 hex chars (e.g., proj_a1b2c3d4)</project_ids>
     <provenance_ids>Prefixed: prov_ + 3-digit sequence (e.g., prov_001, prov_019)</provenance_ids>
     <voice_profile_ids>Prefixed: vp_ + hex (e.g., vp_abc123)</voice_profile_ids>
+    <voice_agent_config>Frozen dataclasses with defaults (e.g., LLMConfig, ASRConfig, TTSConfig)</voice_agent_config>
   </naming_conventions>
 
   <type_annotations>
@@ -387,6 +470,18 @@ clipcannon/
     <rule id="ARCH-65">SECS scoring uses the SAME encoder model for both reference embedding and candidate embedding — never mix encoder spaces</rule>
   </voice_architecture>
 
+  <voice_agent_architecture>
+    <rule id="ARCH-70">Voice agent (Jarvis) is a SEPARATE application from ClipCannon MCP — independent entry point, config, and model stack</rule>
+    <rule id="ARCH-71">Voice agent uses faster-qwen3-tts 0.6B for low-latency TTS (~500ms TTFB); ClipCannon uses full 1.7B for video generation quality</rule>
+    <rule id="ARCH-72">LLM brain runs Qwen3-14B-FP8 via vLLM with 0.45 GPU memory utilization, max 150 output tokens for conversational speed</rule>
+    <rule id="ARCH-73">ASR uses faster-whisper-large-v3 with Silero VAD endpointing (600ms silence threshold)</rule>
+    <rule id="ARCH-74">Conversation manager handles turn-taking, interruption detection, and history (max 50 turns)</rule>
+    <rule id="ARCH-75">Transport layer supports both local audio (PyAudio) and WebSocket for remote clients</rule>
+    <rule id="ARCH-76">Wake word engine supports configurable sensitivity, multi-keyword, and audio feedback</rule>
+    <rule id="ARCH-77">Multi-voice synthesis enables voice swapping mid-conversation for scripted dialogue scenarios</rule>
+    <rule id="ARCH-78">Voice agent config uses frozen dataclasses (immutable after creation), loaded from ~/.voiceagent/config.json</rule>
+  </voice_agent_architecture>
+
   <billing_architecture>
     <rule id="ARCH-40">Two-layer trust: License Server (SQLite-backed, port 3100) → HMAC-SHA256 integrity (tamper detection). D1 remote sync stubs exist for future scale-out.</rule>
     <rule id="ARCH-41">Credits charged BEFORE operation begins, refunded on failure</rule>
@@ -427,6 +522,11 @@ clipcannon/
     <item reason="Encoder space mismatch">NEVER mix speaker encoder models — reference embedding and verification MUST use the same model (Qwen3-Voice-Embedding-12Hz-1.7B)</item>
     <item reason="Stale embeddings">NEVER use 192-dim SpeechBrain embeddings for verification — reject and require rebuild with 2048-dim encoder</item>
     <item reason="Raw vocoder artifacts">NEVER ship raw Qwen3-TTS output without Resemble Enhance post-processing unless user explicitly opts out</item>
+
+    <!-- Voice Agent -->
+    <item reason="Latency budget">NEVER use the 1.7B Qwen3-TTS model in the voice agent — use the 0.6B fast adapter for real-time conversation</item>
+    <item reason="Model confusion">NEVER share TTS model instances between ClipCannon and voice agent — they use different model sizes and configurations</item>
+    <item reason="Blocking">NEVER run synchronous model inference on the voice agent event loop — use async adapters</item>
 
     <!-- Security -->
     <item reason="Security">NEVER hardcode API keys, secrets, tokens, or credentials in source files — use environment variables</item>
@@ -472,11 +572,18 @@ clipcannon/
   <metric name="tts_per_sentence" target="< 10 seconds">Qwen3-TTS synthesis per sentence (including verification)</metric>
   <metric name="enhance_per_clip" target="< 15 seconds">Resemble Enhance post-processing per TTS clip</metric>
 
+  <!-- Voice Agent Performance -->
+  <metric name="voice_agent_ttfb" target="< 500 milliseconds">Time to first audio byte from faster-qwen3-tts 0.6B</metric>
+  <metric name="voice_agent_llm_latency" target="< 2 seconds">Qwen3-14B-FP8 response generation (max 150 tokens)</metric>
+  <metric name="voice_agent_asr_latency" target="< 300 milliseconds">Streaming ASR transcription latency</metric>
+  <metric name="voice_agent_endpoint_silence" target="600 milliseconds">VAD silence threshold for turn-end detection</metric>
+
   <!-- Accuracy -->
   <metric name="transcript_wer" target="< 5%">Word Error Rate on English content</metric>
   <metric name="word_timestamp_precision" target="< 50ms drift">WhisperX wav2vec2 forced alignment precision</metric>
   <metric name="scene_detection_recall" target="> 90%">Scene boundary detection completeness</metric>
   <metric name="caption_sync" target="< 100ms drift">Caption display timing accuracy</metric>
+  <metric name="voice_clone_secs" target="> 0.85">Speaker Embedding Cosine Similarity for cloned voice</metric>
 
   <!-- MCP Response -->
   <metric name="mcp_response_size" target="< 25,000 tokens">Every MCP tool response</metric>
@@ -498,7 +605,7 @@ clipcannon/
 <!-- ============================================================ -->
 <testing_requirements>
 
-  <coverage_minimum>80% line coverage for src/clipcannon/ (excluding dashboard templates)</coverage_minimum>
+  <coverage_minimum>80% line coverage for src/clipcannon/ and src/voiceagent/ (excluding dashboard templates)</coverage_minimum>
 
   <required_tests>
     <test_type scope="pipeline">Test for every pipeline stage — use real video for required stages, synthetic data for derived stages</test_type>
@@ -510,6 +617,8 @@ clipcannon/
     <test_type scope="voice">Test multi-gate verification (sanity, WER, SECS), speaker encoder embedding dimensions, profile CRUD</test_type>
     <test_type scope="integration">Integration test: real video through full pipeline → verify every DB table + file on disk</test_type>
     <test_type scope="integration">Integration test: billing workflow — charge → process → verify OR charge → fail → refund</test_type>
+    <test_type scope="voice_agent">Test voice agent subsystem: agent lifecycle, ASR streaming, TTS streaming, conversation state, wake word, transports</test_type>
+    <test_type scope="voice_agent">Test adapters independently: fast_tts (0.6B) and clipcannon (1.7B) must not share state</test_type>
     <test_type scope="performance">Benchmark: pipeline time, VRAM peak, MCP response sizes, sqlite-vec search time</test_type>
   </required_tests>
 

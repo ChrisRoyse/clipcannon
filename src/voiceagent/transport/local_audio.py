@@ -72,7 +72,7 @@ def _ensure_wsl2_pulse_tcp() -> None:
                 subprocess.Popen(
                     ["powershell.exe", "-Command",
                      "Start-Process -FilePath "
-                     "'C:\Program Files (x86)\PulseAudio\bin\pulseaudio.exe' "
+                     r"'C:\Program Files (x86)\PulseAudio\bin\pulseaudio.exe' "
                      "-ArgumentList '--exit-idle-time=-1','--daemonize=no' "
                      "-WindowStyle Hidden"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

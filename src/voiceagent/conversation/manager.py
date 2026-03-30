@@ -2,14 +2,12 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-# Strip Qwen3 <think>...</think> reasoning blocks from LLM output
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+import re
 
 import numpy as np
 
@@ -169,7 +167,11 @@ class ConversationManager:
 
         available = self._voice_switcher.available_voices
         if voice_name not in available:
-            response = f"I don't have a voice called {voice_name}. Available voices: {', '.join(available)}."
+            voices = ", ".join(available)
+            response = (
+                f"I don't have a voice called {voice_name}. "
+                f"Available voices: {voices}."
+            )
         else:
             self._voice_switcher.switch_voice(voice_name)
             response = f"Switched to {voice_name} voice."
@@ -183,40 +185,37 @@ class ConversationManager:
         await self._set_state(ConversationState.LISTENING)
 
     async def _generate_response(self, user_text: str) -> None:
-        # Check for voice switch command before hitting LLM
         if self._voice_switcher:
             switch_target = self._check_voice_switch(user_text)
             if switch_target:
                 await self._handle_voice_switch(switch_target)
                 return
 
+        self._history.append({"role": "user", "content": user_text})
         messages = self._context.build_messages(
             self._system_prompt, self._history, user_text
         )
 
-        full_response = ""
-        async for token in self._brain.generate_stream(messages):
-            full_response += token
+        # Collect LLM tokens while streaming them to TTS.
+        # With enable_thinking=False the model produces no <think> blocks,
+        # so we pass tokens straight through -- no stripping needed.
+        collected_tokens: list[str] = []
 
-        # Strip <think>...</think> reasoning blocks (Qwen3 chain-of-thought)
-        spoken_text = _THINK_RE.sub("", full_response).strip()
-        # Also strip any unclosed <think> block (model hit max tokens mid-thought)
-        if "<think>" in spoken_text:
-            spoken_text = spoken_text.split("</think>")[-1].strip()
-            if spoken_text.startswith("<think>"):
-                spoken_text = ""
-
-        if not spoken_text:
-            spoken_text = "I'm not sure how to respond to that."
-            logger.warning("LLM produced only <think> content, using fallback")
+        async def _llm_tokens() -> AsyncIterator[str]:
+            async for token in self._brain.generate_stream(messages):
+                collected_tokens.append(token)
+                yield token
 
         await self._set_state(ConversationState.SPEAKING)
 
-        async for audio_chunk in self._tts.stream(self._iter_text(spoken_text)):
+        async for audio_chunk in self._tts.stream(_llm_tokens()):
             await self._transport.send_audio(audio_chunk)
 
-        self._history.append({"role": "user", "content": user_text})
-        self._history.append({"role": "assistant", "content": spoken_text})
+        full_response = "".join(collected_tokens).strip()
+        if not full_response:
+            full_response = "[empty response]"
+
+        self._history.append({"role": "assistant", "content": full_response})
         await self._set_state(ConversationState.LISTENING)
 
     async def dismiss(self) -> None:

@@ -110,6 +110,13 @@ class LLMBrain:
                 f"Ensure GPU has sufficient VRAM (need ~15GB for FP8/FP16 14B model)."
             ) from e
 
+        # Compile for reduced-overhead inference
+        try:
+            self._model = torch.compile(self._model, mode="reduce-overhead")
+            logger.info("torch.compile applied (reduce-overhead mode)")
+        except Exception as e:
+            logger.warning("torch.compile failed (will use eager mode): %s", e)
+
         vram_after = torch.cuda.memory_allocated(self._device)
         self._load_time_ms = (time.perf_counter() - t0) * 1000
         vram_used_gb = (vram_after - vram_before) / (1024 ** 3)
@@ -160,7 +167,10 @@ class LLMBrain:
                 "with 'role' and 'content' keys."
             )
         return self._tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
         )
 
     def _tokenize(self, prompt: str) -> dict:
@@ -187,8 +197,8 @@ class LLMBrain:
         self,
         messages: list[dict[str, str]],
         temperature: float = 0.7,
-        top_p: float = 0.9,
-        top_k: int = 50,
+        top_p: float = 0.8,
+        top_k: int = 20,
         repetition_penalty: float = 1.0,
     ) -> AsyncIterator[str]:
         """Stream tokens one-by-one from the model.
@@ -235,6 +245,7 @@ class LLMBrain:
             "top_p": top_p,
             "top_k": top_k,
             "repetition_penalty": repetition_penalty,
+            "cache_implementation": "static",
         }
 
         # Track metrics

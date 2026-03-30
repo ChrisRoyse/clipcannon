@@ -18,7 +18,7 @@ def test_default_config_all_fields():
     assert c.llm.quantization == "fp8"
     assert c.llm.gpu_memory_utilization == 0.45
     assert c.llm.max_model_len == 32768
-    assert c.llm.max_tokens == 512
+    assert c.llm.max_tokens == 150
     assert c.asr.model_name == "Systran/faster-whisper-large-v3"
     assert c.asr.vad_threshold == 0.5
     assert c.asr.endpoint_silence_ms == 600
@@ -33,7 +33,7 @@ def test_default_config_all_fields():
     assert c.transport.port == 8765
     assert c.transport.ws_path == "/ws"
     assert c.gpu.device == "cuda"
-    assert c.gpu.compute_type == "int8"
+    assert c.gpu.compute_type == "float16"
     assert c.data_dir == "~/.voiceagent"
 
 
