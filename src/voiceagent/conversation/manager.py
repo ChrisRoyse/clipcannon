@@ -211,6 +211,15 @@ class ConversationManager:
         async for audio_chunk in self._tts.stream(_llm_tokens()):
             await self._transport.send_audio(audio_chunk)
 
+        # Signal transport that TTS playback is done.
+        # Mic stays muted for POST_SPEECH_GUARD_S to prevent echo.
+        if hasattr(self._transport, 'stop_speaking'):
+            self._transport.stop_speaking()
+
+        # Reset ASR to flush any buffered echo audio
+        if hasattr(self._asr, 'reset'):
+            self._asr.reset()
+
         full_response = "".join(collected_tokens).strip()
         if not full_response:
             full_response = "[empty response]"

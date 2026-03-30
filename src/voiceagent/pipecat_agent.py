@@ -1,0 +1,203 @@
+"""Pipecat-based voice agent with local Ollama LLM + faster-qwen3-tts.
+
+All local, no cloud APIs:
+  - ASR: faster-whisper (Whisper Large v3, float16, CUDA)
+  - LLM: Ollama serving Qwen3-14B locally (GGUF, ~120 tok/s)
+  - TTS: faster-qwen3-tts (Qwen3-TTS 0.6B with CUDA graphs)
+  - VAD: Silero VAD
+  - Transport: PyAudio local mic/speaker
+
+Pipecat handles:
+  - Streaming LLM -> TTS (sentence-level chunking)
+  - Turn-taking (Silero VAD)
+  - Barge-in (interrupt agent mid-sentence)
+  - Frame-based pipeline architecture
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def _ensure_pulse_server() -> None:
+    """Set PULSE_SERVER for WSL2 PulseAudio TCP bridge."""
+    if Path("/proc/sys/fs/binfmt_misc/WSLInterop").exists():
+        current = os.environ.get("PULSE_SERVER", "")
+        if not current.startswith("tcp:"):
+            try:
+                result = subprocess.run(
+                    ["ip", "route", "show", "default"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                parts = result.stdout.strip().split()
+                if len(parts) >= 3:
+                    os.environ["PULSE_SERVER"] = f"tcp:{parts[2]}"
+                    logger.info(
+                        "WSL2 PULSE_SERVER set to tcp:%s", parts[2],
+                    )
+            except Exception:
+                pass
+
+
+def _ensure_ollama_running() -> None:
+    """Verify Ollama is running and has qwen3:14b loaded."""
+    import urllib.request
+    try:
+        req = urllib.request.Request("http://localhost:11434/api/tags")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            import json
+            data = json.loads(resp.read())
+            models = [m["name"] for m in data.get("models", [])]
+            if not any("qwen3" in m for m in models):
+                logger.error(
+                    "Ollama has no qwen3 model. Run: ollama pull qwen3:14b"
+                )
+                sys.exit(1)
+            logger.info("Ollama OK: %s", models)
+    except Exception as e:
+        logger.error(
+            "Ollama not running at localhost:11434: %s. "
+            "Start it with: ollama serve",
+            e,
+        )
+        sys.exit(1)
+
+
+async def run_agent(voice_name: str = "boris") -> None:
+    """Run the Pipecat voice agent with local models."""
+
+    _ensure_pulse_server()
+    _ensure_ollama_running()
+
+    from pipecat.audio.vad.silero import SileroVADAnalyzer
+    from pipecat.pipeline.pipeline import Pipeline
+    from pipecat.pipeline.runner import PipelineRunner
+    from pipecat.pipeline.task import PipelineParams, PipelineTask
+    from pipecat.processors.aggregators.openai_llm_context import (
+        OpenAILLMContext,
+    )
+    from pipecat.services.ollama.llm import OLLamaLLMService
+    from pipecat.services.whisper.stt import WhisperSTTService
+    from pipecat.transports.local.audio import (
+        LocalAudioTransport,
+        LocalAudioTransportParams,
+    )
+
+    from voiceagent.pipecat_tts import FastQwen3TTSService
+
+    # --- Transport: local mic + speaker ---
+    transport = LocalAudioTransport(
+        LocalAudioTransportParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            vad_enabled=True,
+            vad_analyzer=SileroVADAnalyzer(),
+            audio_out_sample_rate=24000,
+            audio_in_sample_rate=16000,
+        ),
+    )
+
+    # --- ASR: local Whisper ---
+    stt = WhisperSTTService(
+        model="large-v3",
+        device="cuda",
+        compute_type="float16",
+        no_speech_prob=0.4,
+    )
+
+    # --- LLM: local Ollama (qwen3:14b) ---
+    llm = OLLamaLLMService(
+        model="qwen3:14b",
+        base_url="http://localhost:11434/v1",
+    )
+
+    # --- TTS: local faster-qwen3-tts ---
+    tts = FastQwen3TTSService(voice_name=voice_name)
+
+    # --- System prompt (concise, voice-optimized) ---
+    from datetime import datetime
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                f"You are Boris, a personal AI voice assistant for "
+                f"Chris Royse. You speak naturally and concisely. "
+                f"This is a SPOKEN conversation -- keep responses to "
+                f"1-3 sentences. No markdown, no lists, no formatting. "
+                f"No reasoning or thinking out loud. "
+                f"Current time: {datetime.now().isoformat()}."
+            ),
+        },
+    ]
+
+    context = OpenAILLMContext(messages)
+    context_aggregator = llm.create_context_aggregator(context)
+
+    # --- Pipeline ---
+    pipeline = Pipeline(
+        [
+            transport.input(),
+            stt,
+            context_aggregator.user(),
+            llm,
+            tts,
+            transport.output(),
+            context_aggregator.assistant(),
+        ],
+    )
+
+    task = PipelineTask(
+        pipeline,
+        params=PipelineParams(
+            allow_interruptions=True,
+            enable_metrics=True,
+        ),
+    )
+
+    runner = PipelineRunner()
+
+    print("\n=== Voice Agent (Pipecat) ===")
+    print(f"Voice: {voice_name}")
+    print("LLM: Ollama qwen3:14b (local, ~120 tok/s)")
+    print("ASR: Whisper Large v3 (local, float16)")
+    print("TTS: faster-qwen3-tts 0.6B (local, CUDA graphs)")
+    print("---")
+    print("Speak to start. Press Ctrl+C to quit.")
+    print("=" * 30 + "\n")
+
+    await runner.run(task)
+
+
+def main() -> None:
+    """Entry point for the Pipecat voice agent."""
+    import click
+
+    @click.command()
+    @click.option(
+        "--voice", default="boris", show_default=True,
+        help="Voice profile name",
+    )
+    def cli(voice: str) -> None:
+        """Run the Pipecat voice agent (all local)."""
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(name)s %(levelname)s %(message)s",
+            stream=sys.stderr,
+        )
+        try:
+            asyncio.run(run_agent(voice_name=voice))
+        except KeyboardInterrupt:
+            print("\nShutting down...")
+
+    cli()
+
+
+if __name__ == "__main__":
+    main()

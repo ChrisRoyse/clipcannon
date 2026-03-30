@@ -9,14 +9,14 @@ if TYPE_CHECKING:
 
     import numpy as np
 
-    from voiceagent.adapters.clipcannon import ClipCannonAdapter
+    from voiceagent.adapters.fast_tts import FastTTSAdapter
     from voiceagent.tts.chunker import SentenceChunker
 
 logger = logging.getLogger(__name__)
 
 
 class StreamingTTS:
-    def __init__(self, adapter: ClipCannonAdapter, chunker: SentenceChunker) -> None:
+    def __init__(self, adapter: FastTTSAdapter, chunker: SentenceChunker) -> None:
         self.adapter = adapter
         self.chunker = chunker
 

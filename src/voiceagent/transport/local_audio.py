@@ -77,7 +77,8 @@ def _ensure_wsl2_pulse_tcp() -> None:
                      "-WindowStyle Hidden"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
-                import time; time.sleep(3)
+                import time
+                time.sleep(3)
         except Exception:
             pass
 
@@ -144,6 +145,11 @@ class LocalAudioTransport:
         self._running = False
         self._events: list[dict] = []
 
+        # Echo suppression: mic is muted while bot is speaking
+        # and for POST_SPEECH_GUARD_S after the last audio write.
+        self._bot_speaking = False
+        self._last_audio_write_time: float = 0.0
+
     async def start(
         self,
         on_audio: Callable[[np.ndarray], Awaitable[None]],
@@ -205,6 +211,9 @@ class LocalAudioTransport:
         finally:
             self._cleanup()
 
+    # Seconds to keep mic muted after the last speaker write
+    POST_SPEECH_GUARD_S = 2.0
+
     def _mic_callback(
         self,
         indata: np.ndarray,
@@ -212,29 +221,64 @@ class LocalAudioTransport:
         time_info: object,
         status: object,
     ) -> None:
-        """Called by sounddevice from audio thread for each mic chunk."""
+        """Called by sounddevice from audio thread for each mic chunk.
+
+        Drops audio when bot is speaking or within the post-speech
+        guard window to prevent echo/self-capture.
+        """
         if status:
             logger.warning("Mic input status: %s", status)
         if not self._running:
             return
+
+        # Echo gate: drop mic audio while bot is speaking
+        # or within POST_SPEECH_GUARD_S after last speaker write
+        import time as _time
+        if self._bot_speaking:
+            return
+        elapsed = _time.monotonic() - self._last_audio_write_time
+        if elapsed < self.POST_SPEECH_GUARD_S:
+            return  # Still in echo tail
+
         # Convert float32 mono to int16 for ASR pipeline
         mono = indata[:, 0].copy()
         audio_int16 = (mono * 32767).astype(np.int16)
         self._audio_queue.put_nowait(audio_int16)
 
     async def send_audio(self, audio: np.ndarray) -> None:
-        """Play audio through speakers. Called by ConversationManager for TTS output."""
+        """Play audio through speakers. Called by ConversationManager for TTS output.
+
+        Sets _bot_speaking=True on first write, updates _last_audio_write_time
+        on every write. The mic callback uses these to suppress echo.
+        """
+        import time as _time
+
         if self._output_stream is None or not self._output_stream.active:
             return
-        # Audio from TTS is 24kHz float32 mono
+
+        self._bot_speaking = True
+
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32)
         if audio.ndim == 1:
             audio = audio.reshape(-1, 1)
         try:
             self._output_stream.write(audio)
+            self._last_audio_write_time = _time.monotonic()
         except Exception as e:
             logger.warning("Speaker write failed: %s", e)
+
+    def stop_speaking(self) -> None:
+        """Signal that TTS playback is complete.
+
+        Called by the agent after all TTS chunks have been sent.
+        The mic stays muted for POST_SPEECH_GUARD_S after this.
+        """
+        import time as _time
+
+        self._bot_speaking = False
+        self._last_audio_write_time = _time.monotonic()
+        logger.debug("Bot stopped speaking, guard window started")
 
     async def send_event(self, event: dict) -> None:
         """Log events locally (no network in local mode)."""

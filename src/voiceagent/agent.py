@@ -58,6 +58,8 @@ class VoiceAgent:
         self._current_conversation_id: str | None = None
         self._initialized = False
         self._paused_worker_pids: list[int] = []
+        self._last_speak_time: float = 0.0
+        self._echo_reset_done: bool = False
         logger.info("VoiceAgent created (DORMANT, zero GPU)")
 
     # ------------------------------------------------------------------
@@ -267,6 +269,8 @@ class VoiceAgent:
         try:
             audio = await self._tts_adapter.synthesize("I'm here.")
             await transport.send_audio(audio)
+            if hasattr(transport, 'stop_speaking'):
+                transport.stop_speaking()
         except Exception as e:
             logger.warning("Could not speak greeting: %s", e)
 
@@ -282,6 +286,8 @@ class VoiceAgent:
         try:
             audio = await self._tts_adapter.synthesize("Going to sleep.")
             await transport.send_audio(audio)
+            if hasattr(transport, 'stop_speaking'):
+                transport.stop_speaking()
         except Exception as e:
             logger.warning("Could not speak farewell: %s", e)
 
@@ -296,19 +302,20 @@ class VoiceAgent:
         audio: object,
         transport: object,
     ) -> None:
-        """Process mic audio in talk mode with lifecycle management."""
+        """Process mic audio in talk mode with lifecycle management.
+
+        Echo suppression is handled by the transport layer (mic callback
+        drops audio while bot_speaking=True and during the post-speech
+        guard window). This method only sees audio that passed the gate.
+
+        Dismiss keywords are intercepted BEFORE the LLM.
+        """
         import numpy as np
+
         if not isinstance(audio, np.ndarray) or audio.size == 0:
             return
 
-        # Echo suppression: drop mic audio while agent is speaking or thinking.
-        # TTS output feeds back through speakers -> mic, causing false triggers.
-        if self._lifecycle == AgentLifecycle.ACTIVE and self._conversation:
-            from voiceagent.conversation.state import ConversationState
-            state = self._conversation.state
-            if state in (ConversationState.SPEAKING, ConversationState.THINKING):
-                return  # Suppress echo
-
+        # --- Dormant: wake word only ---
         if self._lifecycle == AgentLifecycle.DORMANT:
             if (
                 self._wake_word is not None
@@ -318,21 +325,41 @@ class VoiceAgent:
                 await self._activate(transport)
             return
 
-        # Skip if loading or unloading
         if self._lifecycle != AgentLifecycle.ACTIVE:
             return
 
-        if self._conversation:
-            await self._conversation.handle_audio_chunk(audio)
+        # --- Active: ASR processing ---
+        if not self._asr or not self._conversation:
+            return
 
-            # Check for dismiss keyword in ASR output
-            if hasattr(self._conversation, '_history') and self._conversation._history:
-                last = self._conversation._history[-1]
-                if last.get("role") == "user":
-                    text_lower = last["content"].lower().strip()
-                    if any(phrase in text_lower for phrase in DISMISS_PHRASES):
-                        logger.info("Dismiss keyword detected: '%s'", last["content"])
-                        await self._deactivate(transport)
+        # Feed audio to ASR (VAD + Whisper transcription)
+        event = await self._asr.process_chunk(audio)
+        if event is None:
+            return
+        if not (hasattr(event, 'final') and event.final):
+            return
+        if not event.text.strip():
+            return
+
+        user_text = event.text.strip()
+        logger.info("User said: '%s'", user_text)
+
+        # --- Intercept dismiss BEFORE LLM ---
+        text_lower = user_text.lower()
+        if any(phrase in text_lower for phrase in DISMISS_PHRASES):
+            logger.info("Dismiss intercepted: '%s'", user_text)
+            await self._deactivate(transport)
+            return
+
+        # --- Forward to conversation manager for LLM response ---
+        from voiceagent.conversation.state import ConversationState
+        state = self._conversation.state
+        if state == ConversationState.IDLE:
+            await self._conversation._set_state(ConversationState.LISTENING)
+        if self._conversation.state == ConversationState.LISTENING:
+            await self._conversation._set_state(ConversationState.THINKING)
+        await self._conversation._generate_response(user_text)
+        # State returns to LISTENING after _generate_response completes
 
     # ------------------------------------------------------------------
     #  talk_interactive -- the real deal

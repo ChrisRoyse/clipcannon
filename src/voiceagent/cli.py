@@ -58,7 +58,19 @@ def serve(voice: str, port: int, host: str) -> None:
 @cli.command()
 @click.option("--voice", default="boris", show_default=True, help="ClipCannon voice profile name")
 def talk(voice: str) -> None:
-    """Interactive voice conversation using local microphone."""
+    """Interactive voice conversation (Pipecat + Ollama, recommended)."""
+    from voiceagent.pipecat_agent import run_agent
+
+    try:
+        asyncio.run(run_agent(voice_name=voice))
+    except KeyboardInterrupt:
+        click.echo("Shutting down...")
+
+
+@cli.command(name="talk-legacy")
+@click.option("--voice", default="boris", show_default=True, help="ClipCannon voice profile name")
+def talk_legacy(voice: str) -> None:
+    """Interactive voice conversation (legacy custom pipeline)."""
     from voiceagent.agent import VoiceAgent
     from voiceagent.config import TTSConfig, VoiceAgentConfig
 
