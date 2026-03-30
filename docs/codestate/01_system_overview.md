@@ -1,6 +1,6 @@
 # ClipCannon System Overview
 
-**Version**: 0.1.0 (Phase 1 + Phase 2 + Phase 3)
+**Version**: 0.1.0 (Phase 1 + Phase 2 + Phase 3 + Voice Agent)
 **Python**: >=3.12
 **License**: MIT
 **Build System**: Hatchling
@@ -9,17 +9,20 @@
 
 ClipCannon is an AI-powered video understanding, editing, rendering, and voice/avatar pipeline exposed as an MCP (Model Context Protocol) server. An AI assistant connects to ClipCannon over MCP, sends tool calls to analyze video files, create edits, render platform-optimized clips, generate audio, clone voices, and produce lip-synced talking-head videos. The pipeline ingests a source video, runs it through a 22-stage analysis DAG (transcription, scene detection, scene analysis, narrative analysis, emotion analysis, beat tracking, and more), and stores all results in a per-project SQLite database. The assistant then queries that database through additional MCP tools to retrieve transcripts, analytics, frames, storyboards, scene maps, editing context, narrative analysis, and discovery data -- and uses the editing, rendering, audio, voice, and avatar tools to produce platform-ready video clips.
 
+A separate **Voice Agent** system (`src/voiceagent/`) provides a real-time conversational AI assistant ("Jarvis") with wake-word activation, streaming ASR, local LLM reasoning, and voice-cloned TTS. It runs independently of the MCP server and is not packaged in the ClipCannon wheel.
+
 ## Architecture
 
-ClipCannon runs as three separate processes:
+ClipCannon runs as three separate processes, plus an optional voice agent:
 
 | Process | Port | Technology | Purpose |
 |---------|------|------------|---------|
 | MCP Server | stdio (or SSE on 3366) | `mcp` SDK + Python asyncio | Exposes 51 tools to AI assistants via MCP protocol |
 | License Server | 3100 | FastAPI + Uvicorn | Credit billing, HMAC balance integrity, Stripe webhooks |
 | Dashboard | 3200 | FastAPI + static HTML | Web UI for credits, projects, provenance, editing, review, and system health |
+| Voice Agent | 8765 (WebSocket) or local mic | Pipecat + FastAPI + PyAudio | Real-time voice assistant with wake word, ASR, LLM, TTS |
 
-The MCP server uses stdio transport by default (the `clipcannon` console script). The license server and dashboard are separate FastAPI applications.
+The MCP server uses stdio transport by default (the `clipcannon` console script). The license server and dashboard are separate FastAPI applications. The voice agent is a standalone system with its own CLI (`python -m voiceagent`).
 
 ## Technology Stack
 
@@ -37,10 +40,12 @@ The MCP server uses stdio transport by default (the `clipcannon` console script)
 | GPU (optional) | `torch>=2.3.0`, `faster-whisper>=1.0.0`, `transformers>=4.40.0`, `sentence-transformers>=3.0.0`, `demucs>=4.0.0`, `librosa>=0.10.0` |
 | Audio (Phase 2) | `pydub` (audio mixing), `pedalboard` (effects processing), `midiutil` (MIDI composition), `pyfluidsynth` (MIDI rendering), `ace-step` (AI music generation) |
 | Video (Phase 2) | `mediapipe` (face detection for smart cropping), `opencv-python` (scene analysis, frame processing), `rembg` (subject extraction) |
-| Voice (Phase 3) | Qwen3-TTS (voice synthesis), `marksverdhei/Qwen3-Voice-Embedding-12Hz-1.7B` (2048-dim ECAPA-TDNN speaker encoder), `resemble-enhance` (audio denoising + bandwidth extension) |
+| Voice (Phase 3) | Qwen3-TTS 1.7B (video voice synthesis), `marksverdhei/Qwen3-Voice-Embedding-12Hz-1.7B` (2048-dim ECAPA-TDNN speaker encoder), `resemble-enhance` (audio denoising + bandwidth extension) |
+| Multi-Voice | `MultiVoiceSynth` (`src/clipcannon/voice/multi_voice.py`): instant voice swapping for multi-speaker conversation generation |
 | Avatar (Phase 3) | LatentSync 1.6 (ByteDance diffusion-based lip-sync) |
+| Voice Agent | `faster-qwen3-tts` 0.6B (real-time TTS, ~500ms TTFB), `faster-whisper` (Whisper Large v3 ASR), Qwen3-14B FP8 via vLLM or Ollama (local LLM), Silero VAD, Pipecat (pipeline framework), PyAudio (local transport) |
 
-ML dependencies are in the `[ml]` optional extra and are not required for the MCP server to start. Phase 2 audio/video dependencies are in the `[phase2]` optional extra. Phase 3 voice/avatar reuses the `[ml]` group.
+ML dependencies are in the `[ml]` optional extra and are not required for the MCP server to start. Phase 2 audio/video dependencies are in the `[phase2]` optional extra. Phase 3 voice/avatar reuses the `[ml]` group. The voice agent has its own dependencies managed separately.
 
 ## MCP Tools (51 Total)
 
@@ -225,6 +230,9 @@ All exceptions carry a `message` string and a `details` dictionary.
 | `clipcannon` | `clipcannon.server:main` | MCP server on stdio transport (defined in pyproject.toml `[project.scripts]`) |
 | License server | `license_server.server:app` | Run via `uvicorn license_server.server:app --port 3100` |
 | Dashboard | `clipcannon.dashboard.app:create_app` | Run via `uvicorn clipcannon.dashboard.app:app --port 3200` |
+| Voice Agent (talk) | `voiceagent.pipecat_agent:run_agent` | Run via `python -m voiceagent talk --voice boris` (Pipecat + Ollama, recommended) |
+| Voice Agent (talk-legacy) | `voiceagent.agent:VoiceAgent.talk_interactive` | Run via `python -m voiceagent talk-legacy` (custom pipeline with vLLM) |
+| Voice Agent (serve) | `voiceagent.agent:VoiceAgent.start` | Run via `python -m voiceagent serve --port 8765` (WebSocket server) |
 
 ## Credit System
 
@@ -273,7 +281,7 @@ Cross-stream intelligence tools for finding optimal editing moments. Purpose-awa
 
 ### Voice Engine (`src/clipcannon/voice/`)
 
-Voice cloning pipeline with data preparation (silence-boundary splitting, transcript matching, phonemization, train/val manifests), voice profile management (SQLite CRUD with 2048-dim Qwen3-TTS ECAPA-TDNN speaker embeddings), Qwen3-TTS voice synthesis with iterative multi-gate verification (sanity -> intelligibility -> identity), SECS-optimized best-of-N candidate selection, and Resemble Enhance post-processing (denoise + latent flow matching to upsample 24kHz TTS output to 44.1kHz broadcast quality).
+Voice cloning pipeline with data preparation (silence-boundary splitting, transcript matching, phonemization, train/val manifests), voice profile management (SQLite CRUD with 2048-dim Qwen3-TTS ECAPA-TDNN speaker embeddings), Qwen3-TTS 1.7B voice synthesis with iterative multi-gate verification (sanity -> intelligibility -> identity), SECS-optimized best-of-N candidate selection, Resemble Enhance post-processing (denoise + latent flow matching to upsample 24kHz TTS output to 44.1kHz broadcast quality), and multi-voice conversation generation (`MultiVoiceSynth`) for instant voice swapping between loaded profiles.
 
 ### Avatar Engine (`src/clipcannon/avatar/`)
 
@@ -286,3 +294,7 @@ Automated scene analysis that runs during ingest after frame extraction and tran
 ### Narrative Analysis (`src/clipcannon/pipeline/narrative_llm.py`)
 
 Qwen3-8B LLM-based narrative structure analysis. Runs after transcription to identify story beats, open loops, chapter boundaries, key moments, and generate a narrative summary. Runs in a subprocess for clean GPU memory management. Results stored in the `narrative_analysis` table.
+
+### Voice Agent (`src/voiceagent/`)
+
+Real-time conversational AI assistant with on-demand GPU lifecycle management. Lifecycle states: DORMANT (wake word only, zero GPU) -> LOADING (~10-20s model load) -> ACTIVE (full conversation) -> UNLOADING -> DORMANT. Two operation modes: `talk` (local mic via Pipecat + Ollama) and `serve` (WebSocket server for remote clients). Components: streaming ASR (faster-whisper Large v3), local LLM brain (Qwen3-14B FP8 via vLLM/Ollama), fast TTS (faster-qwen3-tts 0.6B with CUDA graphs, ~500ms TTFB), Silero VAD, wake word detection ("Hey Jarvis"), conversation state management, and SQLite-backed conversation logging. The voice agent pauses other GPU workers on activation and resumes them on deactivation to manage VRAM on shared GPUs. See [16_voice_agent.md](16_voice_agent.md) for full details.

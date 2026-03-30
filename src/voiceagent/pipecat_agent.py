@@ -5,6 +5,7 @@ All local, no cloud APIs:
   - LLM: Ollama serving Qwen3-14B locally (GGUF, ~120 tok/s)
   - TTS: faster-qwen3-tts (Qwen3-TTS 0.6B with CUDA graphs)
   - VAD: Silero VAD
+  - AEC: NLMS adaptive filter (pyroomacoustics) + mic gating
   - Transport: PyAudio local mic/speaker
 
 Pipecat handles:
@@ -12,6 +13,12 @@ Pipecat handles:
   - Turn-taking (Silero VAD)
   - Barge-in (interrupt agent mid-sentence)
   - Frame-based pipeline architecture
+
+Echo cancellation:
+  - Layer 1: Mic gating while bot speaks (AECFilter)
+  - Layer 2: NLMS adaptive filter for echo tail (pyroomacoustics)
+  - Layer 3: Energy gate for residual echo suppression
+  - EchoReferenceProcessor feeds speaker output to AEC
 """
 from __future__ import annotations
 
@@ -57,6 +64,7 @@ def _ensure_ollama_running() -> None:
             if not any("qwen3" in m for m in models):
                 logger.error(
                     "Ollama has no qwen3 model. Run: ollama pull qwen3:14b"
+                    " then create nothink variant"
                 )
                 sys.exit(1)
             logger.info("Ollama OK: %s", models)
@@ -76,28 +84,46 @@ async def run_agent(voice_name: str = "boris") -> None:
     _ensure_ollama_running()
 
     from pipecat.audio.vad.silero import SileroVADAnalyzer
+    from pipecat.audio.vad.vad_analyzer import VADParams
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.runner import PipelineRunner
     from pipecat.pipeline.task import PipelineParams, PipelineTask
     from pipecat.processors.aggregators.openai_llm_context import (
         OpenAILLMContext,
     )
-    from pipecat.services.ollama.llm import OLLamaLLMService
+    from pipecat.services.ollama.llm import OLLamaLLMService, OllamaLLMSettings
     from pipecat.services.whisper.stt import WhisperSTTService
     from pipecat.transports.local.audio import (
         LocalAudioTransport,
         LocalAudioTransportParams,
     )
 
+    from voiceagent.audio.aec_filter import AECFilter
+    from voiceagent.audio.echo_ref_processor import EchoReferenceProcessor
     from voiceagent.pipecat_tts import FastQwen3TTSService
 
-    # --- Transport: local mic + speaker ---
+    # --- AEC: Echo cancellation filter ---
+    aec_filter = AECFilter(
+        filter_taps=4800,   # 300ms impulse response at 16kHz
+        mu=0.4,             # NLMS step size
+        echo_tail_ms=600,   # Echo tail window after bot stops
+    )
+
+    # --- Transport: local mic + speaker with AEC ---
     transport = LocalAudioTransport(
         LocalAudioTransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
+            audio_in_filter=aec_filter,
             vad_enabled=True,
-            vad_analyzer=SileroVADAnalyzer(),
+            vad_analyzer=SileroVADAnalyzer(
+                params=VADParams(
+                    confidence=0.8,    # Higher = less false positives from echo
+                    start_secs=0.3,    # Require 300ms of speech to trigger
+                    stop_secs=0.5,     # Require 500ms silence to end turn
+                    min_volume=0.8,    # Higher = reject quieter echo
+                ),
+            ),
             audio_out_sample_rate=24000,
             audio_in_sample_rate=16000,
         ),
@@ -111,14 +137,23 @@ async def run_agent(voice_name: str = "boris") -> None:
         no_speech_prob=0.4,
     )
 
-    # --- LLM: local Ollama (qwen3:14b) ---
+    # --- LLM: local Ollama (qwen3:14b, thinking disabled) ---
     llm = OLLamaLLMService(
-        model="qwen3:14b",
+        model="qwen3:14b-nothink",
         base_url="http://localhost:11434/v1",
+        settings=OllamaLLMSettings(
+            max_tokens=150,
+            temperature=0.6,
+            top_p=0.8,
+            top_k=20,
+        ),
     )
 
     # --- TTS: local faster-qwen3-tts ---
     tts = FastQwen3TTSService(voice_name=voice_name)
+
+    # --- Echo reference processor (feeds speaker audio to AEC) ---
+    echo_ref = EchoReferenceProcessor(aec_filter=aec_filter)
 
     # --- System prompt (concise, voice-optimized) ---
     from datetime import datetime
@@ -141,6 +176,8 @@ async def run_agent(voice_name: str = "boris") -> None:
     context_aggregator = llm.create_context_aggregator(context)
 
     # --- Pipeline ---
+    # Echo ref processor sits between TTS and output transport to
+    # capture speaker audio and bot speaking state for AEC
     pipeline = Pipeline(
         [
             transport.input(),
@@ -148,6 +185,7 @@ async def run_agent(voice_name: str = "boris") -> None:
             context_aggregator.user(),
             llm,
             tts,
+            echo_ref,
             transport.output(),
             context_aggregator.assistant(),
         ],
@@ -163,14 +201,15 @@ async def run_agent(voice_name: str = "boris") -> None:
 
     runner = PipelineRunner()
 
-    print("\n=== Voice Agent (Pipecat) ===")
+    print("\n=== Voice Agent (Pipecat + AEC) ===")
     print(f"Voice: {voice_name}")
-    print("LLM: Ollama qwen3:14b (local, ~120 tok/s)")
+    print("LLM: Ollama qwen3:14b-nothink (local, ~120 tok/s)")
     print("ASR: Whisper Large v3 (local, float16)")
     print("TTS: faster-qwen3-tts 0.6B (local, CUDA graphs)")
+    print("AEC: NLMS adaptive filter (pyroomacoustics)")
     print("---")
     print("Speak to start. Press Ctrl+C to quit.")
-    print("=" * 30 + "\n")
+    print("=" * 35 + "\n")
 
     await runner.run(task)
 

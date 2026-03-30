@@ -462,3 +462,46 @@ Handles upgrading Phase 2 databases to Phase 3 schema:
 7. Commits and closes.
 
 New projects created via `create_project_db` include all Phase 2 and Phase 3 tables from the start.
+
+---
+
+## 10. Voice Agent Database
+
+Source: `src/voiceagent/db/`
+
+The voice agent stores its data in a **separate database** at `~/.voiceagent/agent.db`, independent of ClipCannon project databases. Schema is initialized via `init_db()` (idempotent).
+
+### `conversations`
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | TEXT | PRIMARY KEY | UUID conversation identifier |
+| `started_at` | TEXT | NOT NULL | ISO-8601 start timestamp |
+| `ended_at` | TEXT | | ISO-8601 end timestamp |
+| `voice_profile` | TEXT | NOT NULL DEFAULT 'boris' | ClipCannon voice profile used |
+| `turn_count` | INTEGER | NOT NULL DEFAULT 0 | Number of turns in conversation |
+
+### `turns`
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | TEXT | PRIMARY KEY | UUID turn identifier |
+| `conversation_id` | TEXT | NOT NULL, FK -> conversations | Parent conversation |
+| `role` | TEXT | NOT NULL, CHECK(IN 'user','assistant') | Speaker role |
+| `text` | TEXT | NOT NULL | Transcript of the turn |
+| `started_at` | TEXT | NOT NULL | ISO-8601 start timestamp |
+| `ended_at` | TEXT | | ISO-8601 end timestamp |
+| `asr_ms` | REAL | | ASR latency in milliseconds |
+| `llm_ttft_ms` | REAL | | LLM time to first token in ms |
+| `tts_ttfb_ms` | REAL | | TTS time to first byte in ms |
+| `total_ms` | REAL | | Total turn-around time in ms |
+
+### `metrics`
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | TEXT | PRIMARY KEY | UUID metric identifier |
+| `timestamp` | TEXT | NOT NULL | ISO-8601 timestamp |
+| `metric_name` | TEXT | NOT NULL | Metric name (e.g., "asr_latency") |
+| `value` | REAL | NOT NULL | Metric value |
+| `metadata` | TEXT | | Optional JSON metadata |

@@ -44,21 +44,31 @@ class FastQwen3TTSService(TTSService):
         self._adapter = None
 
     async def start(self, frame: StartFrame) -> None:
-        """Initialize the TTS adapter when the pipeline starts."""
+        """Initialize and pre-load the TTS adapter + model when pipeline starts."""
         await super().start(frame)
+        import asyncio
+
         from voiceagent.adapters.fast_tts import FastTTSAdapter
 
         self._adapter = FastTTSAdapter(voice_name=self._voice_name)
+
+        # Pre-load model and warm up CUDA graphs NOW so first response is fast
+        def _preload() -> None:
+            self._adapter._warmup()
+
+        await asyncio.to_thread(_preload)
         logger.info(
-            "FastQwen3TTSService started (voice=%s)", self._voice_name,
+            "FastQwen3TTSService started and warmed up (voice=%s)",
+            self._voice_name,
         )
 
     async def run_tts(
         self, text: str, context_id: str,
     ) -> AsyncGenerator[Frame, None]:
-        """Convert text to audio frames.
+        """Convert text to audio frames using streaming synthesis.
 
         Called by Pipecat when a complete sentence arrives from the LLM.
+        Streams chunks as they're generated for lower TTFB.
         """
         if not text or not text.strip():
             return
@@ -72,13 +82,16 @@ class FastQwen3TTSService(TTSService):
         yield TTSStartedFrame()
 
         try:
-            audio = await self._adapter.synthesize(text)
-            audio_int16 = (audio * 32767).astype(np.int16)
-            yield TTSAudioRawFrame(
-                audio=audio_int16.tobytes(),
-                sample_rate=24000,
-                num_channels=1,
-            )
+            chunk_count = 0
+            async for chunk in self._adapter.synthesize_streaming(text):
+                audio_int16 = (chunk * 32767).astype(np.int16)
+                yield TTSAudioRawFrame(
+                    audio=audio_int16.tobytes(),
+                    sample_rate=24000,
+                    num_channels=1,
+                )
+                chunk_count += 1
+            logger.info("TTS yielded %d audio chunks", chunk_count)
         except Exception as e:
             logger.error("TTS synthesis failed: %s", e)
 

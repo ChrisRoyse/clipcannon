@@ -238,3 +238,76 @@ Every database connection applies these pragmas:
 | `cache_size` | `-64000` | 64 MB page cache (negative value = kilobytes) |
 | `foreign_keys` | `ON` | Enforce foreign key constraints |
 | `temp_store` | `MEMORY` | Store temporary tables and indexes in memory |
+
+---
+
+## Voice Agent Configuration
+
+Source: `src/voiceagent/config.py`
+
+The voice agent has a separate configuration system from ClipCannon.
+
+### Config File Location
+
+| File | Purpose |
+|------|---------|
+| `~/.voiceagent/config.json` | User overrides. If missing, all defaults are used. |
+
+### VoiceAgentConfig
+
+All sub-configs are frozen dataclasses (immutable after creation). `load_config()` reads from `~/.voiceagent/config.json` with sensible defaults.
+
+```python
+@dataclass(frozen=True)
+class VoiceAgentConfig:
+    llm: LLMConfig
+    asr: ASRConfig
+    tts: TTSConfig
+    conversation: ConversationConfig
+    transport: TransportConfig
+    gpu: GPUConfig
+    data_dir: str = "~/.voiceagent"
+```
+
+### LLMConfig
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `llm.model_path` | `str` | Qwen3-14B-FP8 local path | Path to LLM model weights |
+| `llm.quantization` | `str` | `"fp8"` | Model quantization level |
+| `llm.gpu_memory_utilization` | `float` | `0.45` | vLLM GPU memory fraction (0.1-1.0) |
+| `llm.max_model_len` | `int` | `32768` | Max context window tokens |
+| `llm.max_tokens` | `int` | `150` | Max output tokens per response (1-131072) |
+
+### ASRConfig
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `asr.model_name` | `str` | `"Systran/faster-whisper-large-v3"` | Whisper model for ASR |
+| `asr.vad_threshold` | `float` | `0.5` | Silero VAD speech probability threshold (0.0-1.0) |
+| `asr.endpoint_silence_ms` | `int` | `600` | Silence duration to endpoint a turn (100-5000) |
+| `asr.chunk_ms` | `int` | `200` | Audio chunk size in ms |
+| `asr.sample_rate` | `int` | `16000` | Input audio sample rate |
+
+### TTSConfig
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `tts.voice_name` | `str` | `"boris"` | ClipCannon voice profile name |
+| `tts.sample_rate` | `int` | `24000` | TTS output sample rate |
+| `tts.enhance` | `bool` | `false` | Enable Resemble Enhance post-processing |
+
+### TransportConfig
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `transport.host` | `str` | `"0.0.0.0"` | WebSocket bind address |
+| `transport.port` | `int` | `8765` | WebSocket port (1-65535) |
+| `transport.ws_path` | `str` | `"/ws"` | WebSocket endpoint path |
+
+### GPUConfig (Voice Agent)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `gpu.device` | `str` | `"cuda"` | CUDA device identifier |
+| `gpu.compute_type` | `str` | `"float16"` | Compute precision for ASR |

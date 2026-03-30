@@ -34,7 +34,9 @@ Test video: `testdata/2026-03-20 14-43-20.mp4` (209.9s, 2560x1440, 60fps h264).
 
 ---
 
-## Unit Tests (425 total across 24 files)
+## Unit Tests (626 total across 43 files)
+
+### ClipCannon Tests (425 tests, 24 files)
 
 | File | Tests | Domain |
 |---|---|---|
@@ -63,6 +65,30 @@ Test video: `testdata/2026-03-20 14-43-20.mp4` (209.9s, 2560x1440, 60fps h264).
 | `test_voice_data_prep.py` | 11 | Voice data preparation, profile CRUD |
 | `integration/test_full_pipeline.py` | 22 | Full pipeline with real video |
 
+### Voice Agent Tests (201 tests, 19 files)
+
+| File | Tests | Domain |
+|---|---|---|
+| `voiceagent/test_agent.py` | -- | Agent lifecycle, activation/deactivation, talk/serve modes |
+| `voiceagent/test_asr_types.py` | -- | ASR event types and data models |
+| `voiceagent/test_chunker.py` | -- | Sentence chunking for streaming TTS |
+| `voiceagent/test_cli.py` | -- | CLI commands (serve, talk, talk-legacy) |
+| `voiceagent/test_clipcannon_adapter.py` | -- | ClipCannon TTS adapter bridging |
+| `voiceagent/test_config.py` | -- | Config loading, validation, range checks |
+| `voiceagent/test_context.py` | -- | Context manager, token counting |
+| `voiceagent/test_conversation.py` | -- | Conversation manager, state transitions |
+| `voiceagent/test_db.py` | -- | Database schema, connection, CRUD |
+| `voiceagent/test_hotkey.py` | -- | Hotkey activation (Ctrl+Space) |
+| `voiceagent/test_integration.py` | -- | End-to-end integration |
+| `voiceagent/test_llm.py` | -- | LLM brain, streaming generation |
+| `voiceagent/test_prompts.py` | -- | System prompt building |
+| `voiceagent/test_server.py` | -- | FastAPI server endpoints |
+| `voiceagent/test_streaming_asr.py` | -- | Streaming ASR, VAD, endpointing |
+| `voiceagent/test_streaming_tts.py` | -- | Streaming TTS, adapter pattern |
+| `voiceagent/test_vad.py` | -- | Silero VAD wrapper |
+| `voiceagent/test_wake_word.py` | -- | Wake word detection ("Hey Jarvis") |
+| `voiceagent/test_websocket.py` | -- | WebSocket transport, client handling |
+
 ---
 
 ## FSV (Full State Verification) Scripts
@@ -87,7 +113,8 @@ Standalone forensic testing (`python tests/fsv_*.py`). Each script: imports ever
 ## Running
 
 ```bash
-pytest                              # Full suite (425 tests)
+pytest                              # Full suite (626 tests)
+pytest tests/voiceagent/            # Voice agent only (201 tests)
 pytest tests/integration/           # Integration only
 python tests/fsv_core_infrastructure.py  # Individual FSV script
 ruff check src/                     # Lint

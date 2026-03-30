@@ -76,6 +76,7 @@ src/
             optimize.py                     # SECS-optimized synthesis: best-of-N candidate selection, reference clip scoring, OptimizedSpeakResult
             profiles.py                     # Voice profile SQLite CRUD: create/get/list/update/delete profiles in ~/.clipcannon/voice_profiles.db
             enhance.py                      # Resemble Enhance post-processing: denoise + latent flow matching, upsamples 24kHz TTS output to 44.1kHz broadcast quality
+            multi_voice.py                  # MultiVoiceSynth: instant voice swapping for multi-speaker conversation generation, loads voice prompts once, concatenates segments with configurable pause
 
         avatar/                             # Avatar / lip-sync engine (Phase 3)
             __init__.py                     # Package docstring
@@ -159,6 +160,61 @@ src/
         server.py                           # FastAPI app on port 3100. SQLite-backed credit balance with HMAC integrity
         stripe_webhooks.py                  # Stripe checkout.session.completed webhook handler
         d1_sync.py                          # Cloudflare D1 sync stub (local-only)
+
+    voiceagent/                             # Voice Agent -- real-time conversational AI (separate from ClipCannon)
+        __init__.py                         # Package root. Exports __version__ = "0.1.0"
+        __main__.py                         # python -m voiceagent entry point -> cli()
+        agent.py                            # VoiceAgent orchestrator: lifecycle (DORMANT/LOADING/ACTIVE/UNLOADING), on-demand GPU load/unload, talk_interactive + serve modes
+        cli.py                              # Click CLI: serve (WebSocket server), talk (Pipecat + Ollama), talk-legacy (custom vLLM pipeline)
+        config.py                           # Frozen dataclass config: LLMConfig, ASRConfig, TTSConfig, ConversationConfig, TransportConfig, GPUConfig. Loads from ~/.voiceagent/config.json
+        errors.py                           # Exception hierarchy: VoiceAgentError, ASRError, TTSError, LLMError, ConfigError, DatabaseError, TransportError
+        gpu_manager.py                      # GPU worker management: pause_gpu_workers (SIGSTOP), resume_gpu_workers (SIGCONT), force_free_gpu_memory
+        pipecat_agent.py                    # Pipecat-based pipeline: Whisper ASR + Ollama LLM + faster-qwen3-tts + Silero VAD + PyAudio transport. All local, no cloud APIs
+        pipecat_tts.py                      # Pipecat TTS service wrapping FastTTSAdapter for frame-based streaming
+        server.py                           # FastAPI app for WebSocket voice agent server
+
+        activation/
+            __init__.py                     # Re-exports WakeWordDetector, HotkeyActivator
+            wake_word.py                    # "Hey Jarvis" wake word detector using openWakeWord with Silero VAD pre-filter
+            hotkey.py                       # Ctrl+Space hotkey activation via pynput
+
+        adapters/
+            __init__.py                     # Re-exports
+            clipcannon.py                   # ClipCannonAdapter: bridges voice agent TTS to ClipCannon's 1.7B voice engine
+            fast_tts.py                     # FastTTSAdapter: faster-qwen3-tts 0.6B with CUDA graphs (~500ms TTFB), runtime voice switching, Full ICL mode
+
+        asr/
+            __init__.py                     # Re-exports StreamingASR, VADFilter
+            streaming.py                    # StreamingASR: faster-whisper + Silero VAD, chunk-based processing, endpoint detection
+            endpointing.py                  # Speech endpoint detection with configurable silence threshold
+            types.py                        # ASREvent, ASRConfig types
+            vad.py                          # VADFilter: Silero VAD wrapper with configurable threshold
+
+        brain/
+            __init__.py                     # Re-exports LLMBrain, ContextManager
+            llm.py                          # LLMBrain: vLLM-based Qwen3-14B FP8 local inference with streaming token generation
+            context.py                      # ContextManager: sliding window context with token counting, system prompt management
+            prompts.py                      # System prompt builder for Jarvis personality, voice-profile-aware prompting
+
+        conversation/
+            __init__.py                     # Re-exports ConversationManager
+            manager.py                      # ConversationManager: wires ASR -> Brain -> TTS with state transitions, turn logging, echo suppression coordination
+            state.py                        # ConversationState enum: IDLE, LISTENING, THINKING, SPEAKING
+
+        db/
+            __init__.py                     # Re-exports get_connection, init_db
+            connection.py                   # SQLite connection factory with WAL mode for voice agent database
+            schema.py                       # DDL: conversations, turns, metrics tables. init_db() idempotent
+
+        transport/
+            __init__.py                     # Re-exports
+            local_audio.py                  # LocalAudioTransport: PyAudio mic/speaker with echo suppression (bot_speaking gate + post-speech guard window)
+            websocket.py                    # WebSocketTransport: FastAPI WebSocket endpoint for remote voice agent clients
+
+        tts/
+            __init__.py                     # Re-exports StreamingTTS, SentenceChunker
+            chunker.py                      # SentenceChunker: splits LLM output into sentence-sized chunks for streaming TTS
+            streaming.py                    # StreamingTTS: chunk-by-chunk synthesis with adapter pattern (FastTTSAdapter or ClipCannonAdapter)
 ```
 
 ## Module Dependency Graph
@@ -269,6 +325,41 @@ clipcannon.dashboard.app
     -> clipcannon.__init__ (__version__)
     -> clipcannon.dashboard.auth (is_dev_mode)
     -> clipcannon.dashboard.routes (all 7 routers)
+
+voiceagent.__main__
+    -> voiceagent.cli (cli)
+
+voiceagent.cli
+    -> voiceagent.agent (VoiceAgent)
+    -> voiceagent.config (VoiceAgentConfig, TTSConfig, TransportConfig)
+    -> voiceagent.pipecat_agent (run_agent)
+
+voiceagent.agent
+    -> voiceagent.config (VoiceAgentConfig, load_config)
+    -> voiceagent.db.connection (get_connection)
+    -> voiceagent.db.schema (init_db)
+    -> voiceagent.gpu_manager (pause_gpu_workers, resume_gpu_workers, force_free_gpu_memory)
+    -> voiceagent.asr.streaming (StreamingASR)
+    -> voiceagent.brain.llm (LLMBrain)
+    -> voiceagent.brain.context (ContextManager)
+    -> voiceagent.brain.prompts (build_system_prompt)
+    -> voiceagent.adapters.fast_tts (FastTTSAdapter)
+    -> voiceagent.tts.chunker (SentenceChunker)
+    -> voiceagent.tts.streaming (StreamingTTS)
+    -> voiceagent.conversation.manager (ConversationManager)
+    -> voiceagent.activation.wake_word (WakeWordDetector)
+    -> voiceagent.activation.hotkey (HotkeyActivator)
+    -> voiceagent.transport.local_audio (LocalAudioTransport)
+    -> voiceagent.transport.websocket (WebSocketTransport)
+    -> voiceagent.server (create_app)
+
+voiceagent.adapters.fast_tts
+    -> clipcannon.voice.profiles (get_voice_profile)  [reads voice profile DB]
+    -> clipcannon.voice.inference (VoiceSynthesizer)   [for reference embedding]
+
+voiceagent.pipecat_agent
+    -> voiceagent.adapters.fast_tts (FastTTSAdapter)
+    -> voiceagent.pipecat_tts (PipecatTTSService)
 ```
 
 ## Entry Points
@@ -312,4 +403,4 @@ From `pyproject.toml`:
 packages = ["src/clipcannon", "src/license_server"]
 ```
 
-Both `clipcannon` and `license_server` packages are included in the built wheel.
+Both `clipcannon` and `license_server` packages are included in the built wheel. The `voiceagent` package is NOT included in the wheel -- it is run directly via `python -m voiceagent` and has its own dependency set.

@@ -55,3 +55,33 @@ Fields: `device_name`, `compute_capability`, `vram_total_bytes`, `vram_used_byte
 ## Per-Stage GPU Memory Pattern
 
 Pipeline stages manage GPU memory independently from ModelManager. Each stage: import model libraries -> load to device -> run inference -> `del model` -> `torch.cuda.empty_cache()`. Used by: source_separation, transcribe, visual_embed, emotion_embed, speaker_embed, shot_type.
+
+## Voice Agent GPU Lifecycle (`src/voiceagent/agent.py`, `src/voiceagent/gpu_manager.py`)
+
+The voice agent manages GPU memory with an on-demand lifecycle that is independent of ClipCannon's ModelManager.
+
+### VRAM Budget (RTX 5090 32GB target)
+
+| Component | VRAM Estimate |
+|-----------|---------------|
+| Whisper Large v3 float32 | ~6 GB |
+| Qwen3-14B FP8 (vLLM) | ~15 GB |
+| faster-qwen3-tts 0.6B | ~4 GB |
+| KV caches + activations | ~5 GB headroom |
+| **Total** | **~30 GB** (leaves 2GB free) |
+
+### Lifecycle States
+
+| State | GPU Usage | Description |
+|-------|-----------|-------------|
+| DORMANT | Zero | Only wake word detector runs on CPU |
+| LOADING | Growing | Models loaded sequentially with GC between each |
+| ACTIVE | Full | All 3 models resident, conversation active |
+| UNLOADING | Shrinking | Models released in reverse order (TTS -> LLM -> ASR), aggressive cleanup |
+
+### GPU Worker Management (`gpu_manager.py`)
+
+- `pause_gpu_workers()`: Sends SIGSTOP to other GPU-using processes (e.g., ClipCannon pipeline stages) to free VRAM for voice agent. Returns list of paused PIDs.
+- `resume_gpu_workers(pids)`: Sends SIGCONT to restore paused processes.
+- `force_free_gpu_memory()`: Aggressively clears CUDA cache and IPC.
+- Memory fraction capped at 93% via `torch.cuda.set_per_process_memory_fraction(0.93)` to prevent OOM thrashing.
