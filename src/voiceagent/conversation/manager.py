@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+# Strip Qwen3 <think>...</think> reasoning blocks from LLM output
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 import numpy as np
 
@@ -13,6 +17,13 @@ from voiceagent.conversation.state import ConversationState
 from voiceagent.errors import ConversationError
 
 logger = logging.getLogger(__name__)
+
+# Patterns for voice switching commands
+_VOICE_SWITCH_RE = re.compile(
+    r"(?:switch\s+to|use|change\s+(?:to|voice\s+to))\s+"
+    r"(\w+?)(?:\s*(?:'s\s+)?voice)?$",
+    re.IGNORECASE,
+)
 
 VALID_TRANSITIONS: dict[ConversationState, set[ConversationState]] = {
     ConversationState.IDLE: {ConversationState.LISTENING},
@@ -55,6 +66,15 @@ class ContextProtocol(Protocol):
     ) -> list[dict[str, str]]: ...
 
 
+@runtime_checkable
+class VoiceSwitcherProtocol(Protocol):
+    def switch_voice(self, voice_name: str) -> None: ...
+    @property
+    def active_voice(self) -> str: ...
+    @property
+    def available_voices(self) -> list[str]: ...
+
+
 class ConversationManager:
     def __init__(
         self,
@@ -64,6 +84,7 @@ class ConversationManager:
         transport: TransportProtocol,
         context_manager: ContextProtocol,
         system_prompt: str,
+        voice_switcher: VoiceSwitcherProtocol | None = None,
     ) -> None:
         self._state = ConversationState.IDLE
         self._asr = asr
@@ -72,6 +93,7 @@ class ConversationManager:
         self._transport = transport
         self._context = context_manager
         self._system_prompt = system_prompt
+        self._voice_switcher = voice_switcher
         self._history: list[dict[str, str]] = []
 
     @property
@@ -130,8 +152,44 @@ class ConversationManager:
                 return True
         return False
 
+    def _check_voice_switch(self, text: str) -> str | None:
+        """Check if user text is a voice switch command.
+
+        Returns voice name if matched, None otherwise.
+        """
+        match = _VOICE_SWITCH_RE.search(text.strip())
+        if match:
+            return match.group(1).lower()
+        return None
+
+    async def _handle_voice_switch(self, voice_name: str) -> None:
+        """Switch voice and speak confirmation."""
+        if self._voice_switcher is None:
+            return
+
+        available = self._voice_switcher.available_voices
+        if voice_name not in available:
+            response = f"I don't have a voice called {voice_name}. Available voices: {', '.join(available)}."
+        else:
+            self._voice_switcher.switch_voice(voice_name)
+            response = f"Switched to {voice_name} voice."
+            logger.info("Voice switched to: %s", voice_name)
+
+        await self._set_state(ConversationState.SPEAKING)
+        async for audio_chunk in self._tts.stream(self._iter_text(response)):
+            await self._transport.send_audio(audio_chunk)
+        self._history.append({"role": "user", "content": f"[switch to {voice_name}]"})
+        self._history.append({"role": "assistant", "content": response})
+        await self._set_state(ConversationState.LISTENING)
+
     async def _generate_response(self, user_text: str) -> None:
-        self._history.append({"role": "user", "content": user_text})
+        # Check for voice switch command before hitting LLM
+        if self._voice_switcher:
+            switch_target = self._check_voice_switch(user_text)
+            if switch_target:
+                await self._handle_voice_switch(switch_target)
+                return
+
         messages = self._context.build_messages(
             self._system_prompt, self._history, user_text
         )
@@ -140,12 +198,25 @@ class ConversationManager:
         async for token in self._brain.generate_stream(messages):
             full_response += token
 
+        # Strip <think>...</think> reasoning blocks (Qwen3 chain-of-thought)
+        spoken_text = _THINK_RE.sub("", full_response).strip()
+        # Also strip any unclosed <think> block (model hit max tokens mid-thought)
+        if "<think>" in spoken_text:
+            spoken_text = spoken_text.split("</think>")[-1].strip()
+            if spoken_text.startswith("<think>"):
+                spoken_text = ""
+
+        if not spoken_text:
+            spoken_text = "I'm not sure how to respond to that."
+            logger.warning("LLM produced only <think> content, using fallback")
+
         await self._set_state(ConversationState.SPEAKING)
 
-        async for audio_chunk in self._tts.stream(self._iter_text(full_response)):
+        async for audio_chunk in self._tts.stream(self._iter_text(spoken_text)):
             await self._transport.send_audio(audio_chunk)
 
-        self._history.append({"role": "assistant", "content": full_response or "[empty response]"})
+        self._history.append({"role": "user", "content": user_text})
+        self._history.append({"role": "assistant", "content": spoken_text})
         await self._set_state(ConversationState.LISTENING)
 
     async def dismiss(self) -> None:

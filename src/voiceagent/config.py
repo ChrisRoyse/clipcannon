@@ -61,7 +61,7 @@ class TransportConfig:
 @dataclass(frozen=True)
 class GPUConfig:
     device: str = "cuda"
-    compute_type: str = "int8"
+    compute_type: str = "float32"
 
 
 @dataclass(frozen=True)

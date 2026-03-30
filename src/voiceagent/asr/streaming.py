@@ -24,7 +24,7 @@ class StreamingASR:
             self.model = faster_whisper.WhisperModel(
                 config.model_name,
                 device="cuda",
-                compute_type="int8",
+                compute_type="float32",
             )
         except Exception as e:
             raise ASRError(

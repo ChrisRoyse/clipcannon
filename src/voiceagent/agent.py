@@ -98,15 +98,20 @@ class VoiceAgent:
         self._brain = LLMBrain(self.config.llm)
         logger.info("LLM loaded (%.1f GB)", self._brain.vram_bytes / (1024**3))
 
-        # TTS
-        from voiceagent.adapters.clipcannon import ClipCannonAdapter
+        # TTS (faster-qwen3-tts 0.6B for real-time voice agent)
+        from voiceagent.adapters.fast_tts import FastTTSAdapter
         from voiceagent.tts.chunker import SentenceChunker
         from voiceagent.tts.streaming import StreamingTTS
-        self._tts_adapter = ClipCannonAdapter(
+        self._tts_adapter = FastTTSAdapter(
             voice_name=self.config.tts.voice_name,
         )
         self._tts = StreamingTTS(self._tts_adapter, SentenceChunker())
-        logger.info("TTS loaded (voice=%s)", self.config.tts.voice_name)
+        logger.info("TTS loaded (voice=%s, fast mode)", self.config.tts.voice_name)
+
+        # Pre-load additional voices for instant switching
+        for extra_voice in ("boris", "taylor"):
+            if extra_voice != self.config.tts.voice_name:
+                self._tts_adapter.preload_voice(extra_voice)
 
         # Context + prompt
         from voiceagent.brain.context import ContextManager
@@ -164,6 +169,7 @@ class VoiceAgent:
             transport=transport,
             context_manager=self._context,
             system_prompt=self._system_prompt,
+            voice_switcher=self._tts_adapter,
         )
 
     # ------------------------------------------------------------------
@@ -173,8 +179,13 @@ class VoiceAgent:
     async def _activate(self, transport: object) -> None:
         """Load models and announce readiness."""
         if self._lifecycle != AgentLifecycle.DORMANT:
+            logger.debug("Ignoring activation -- already %s", self._lifecycle.value)
             return
+
+        # Set LOADING immediately to prevent re-entrant activation
+        self._lifecycle = AgentLifecycle.LOADING
         logger.info("Activating...")
+
         self._load_models()
         self._wire_conversation(transport)
         self._lifecycle = AgentLifecycle.ACTIVE
@@ -218,8 +229,15 @@ class VoiceAgent:
         if not isinstance(audio, np.ndarray) or audio.size == 0:
             return
 
+        # Echo suppression: drop mic audio while agent is speaking or thinking.
+        # TTS output feeds back through speakers -> mic, causing false triggers.
+        if self._lifecycle == AgentLifecycle.ACTIVE and self._conversation:
+            from voiceagent.conversation.state import ConversationState
+            state = self._conversation.state
+            if state in (ConversationState.SPEAKING, ConversationState.THINKING):
+                return  # Suppress echo
+
         if self._lifecycle == AgentLifecycle.DORMANT:
-            # Check wake word (expects ~1280 samples)
             if (
                 self._wake_word is not None
                 and self._wake_word.detect(audio)
@@ -228,8 +246,11 @@ class VoiceAgent:
                 await self._activate(transport)
             return
 
-        if self._lifecycle == AgentLifecycle.ACTIVE and self._conversation:
-            # Feed audio to conversation manager
+        # Skip if loading or unloading
+        if self._lifecycle != AgentLifecycle.ACTIVE:
+            return
+
+        if self._conversation:
             await self._conversation.handle_audio_chunk(audio)
 
             # Check for dismiss keyword in ASR output
@@ -261,7 +282,7 @@ class VoiceAgent:
         # Init wake word detector (CPU only)
         try:
             from voiceagent.activation.wake_word import WakeWordDetector
-            self._wake_word = WakeWordDetector(threshold=0.6)
+            self._wake_word = WakeWordDetector()
             logger.info("Wake word detector ready (say 'Hey Jarvis' to activate)")
         except Exception as e:
             logger.warning(
@@ -324,7 +345,7 @@ class VoiceAgent:
         # Activation (optional)
         try:
             from voiceagent.activation.wake_word import WakeWordDetector
-            self._wake_word = WakeWordDetector(threshold=0.6)
+            self._wake_word = WakeWordDetector()
         except Exception as e:
             logger.warning("Wake word unavailable: %s", e)
 

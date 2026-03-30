@@ -32,6 +32,7 @@ def build_system_prompt(voice_name: str, datetime_str: str | None = None) -> str
         f"Active voice profile: {voice_name}\n"
         f"\n"
         f"Rules:\n"
+        f"- Do NOT use <think> reasoning. Respond directly with spoken words only.\n"
         f"- Respond in 1-3 sentences for simple questions. Elaborate only when asked.\n"
         f"- Ask clarifying questions rather than guessing when a request is ambiguous.\n"
         f'- Say "I don\'t know" when you genuinely don\'t know the answer.\n'

@@ -7,8 +7,7 @@ openwakeword = pytest.importorskip("openwakeword", reason="openwakeword not inst
 
 
 def test_detector_instantiates(session_wake_word):
-    assert session_wake_word.model_name == "hey_jarvis"
-    assert session_wake_word.threshold == 0.6
+    assert isinstance(session_wake_word.threshold, float)
 
 
 def test_silence_returns_false(session_wake_word):

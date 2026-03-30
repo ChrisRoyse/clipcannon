@@ -6,12 +6,19 @@ No network, no WebSocket -- audio goes directly to/from hardware devices.
 Audio formats:
   Input:  16kHz, mono, float32 (sounddevice) -> converted to int16 for ASR
   Output: 24kHz, mono, float32 (from TTS) -> played through speakers
+
+On WSL2, automatically detects and configures the PulseAudio TCP bridge
+to the Windows host for proper mic input and speaker output.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import queue
+import shutil
+import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -22,6 +29,79 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_wsl2_pulse_tcp() -> None:
+    """On WSL2, switch PULSE_SERVER to the Windows host TCP bridge.
+
+    The default WSLg PulseAudio (unix:/mnt/wslg/PulseServer) routes
+    speaker output but returns near-silence from the microphone.
+    The Windows PulseAudio TCP bridge provides real mic input.
+    """
+    # Only apply on WSL2
+    if not Path("/proc/sys/fs/binfmt_misc/WSLInterop").exists():
+        return
+
+    current = os.environ.get("PULSE_SERVER", "")
+    if current.startswith("tcp:"):
+        return  # Already using TCP
+
+    # Get Windows host IP from default route
+    try:
+        result = subprocess.run(
+            ["ip", "route", "show", "default"],
+            capture_output=True, text=True, timeout=5,
+        )
+        parts = result.stdout.strip().split()
+        win_ip = parts[2] if len(parts) >= 3 else None
+    except Exception:
+        win_ip = None
+
+    if not win_ip:
+        logger.warning("Could not detect Windows host IP for PulseAudio TCP")
+        return
+
+    # Ensure Windows PulseAudio is running before trying to connect
+    if shutil.which("tasklist.exe"):
+        try:
+            tasklist = subprocess.run(
+                ["tasklist.exe"], capture_output=True, text=True, timeout=5,
+            )
+            if "pulseaudio.exe" not in tasklist.stdout.lower():
+                logger.info("Starting Windows PulseAudio...")
+                subprocess.Popen(
+                    ["powershell.exe", "-Command",
+                     "Start-Process -FilePath "
+                     "'C:\Program Files (x86)\PulseAudio\bin\pulseaudio.exe' "
+                     "-ArgumentList '--exit-idle-time=-1','--daemonize=no' "
+                     "-WindowStyle Hidden"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                import time; time.sleep(3)
+        except Exception:
+            pass
+
+    # Verify TCP connection works before switching
+    tcp_server = f"tcp:{win_ip}"
+    try:
+        check = subprocess.run(
+            ["pactl", "info"],
+            capture_output=True, text=True, timeout=3,
+            env={**os.environ, "PULSE_SERVER": tcp_server},
+        )
+        if check.returncode != 0:
+            logger.warning(
+                "PulseAudio TCP at %s not available. "
+                "Using WSLg (mic may not work). "
+                "Fix: enable module-native-protocol-tcp in Windows PulseAudio.",
+                tcp_server,
+            )
+            return
+    except Exception:
+        return
+
+    os.environ["PULSE_SERVER"] = tcp_server
+    logger.info("WSL2: switched PULSE_SERVER to %s for real mic/speaker", tcp_server)
 
 INPUT_SAMPLE_RATE = 16000
 OUTPUT_SAMPLE_RATE = 24000
@@ -40,6 +120,9 @@ class LocalAudioTransport:
         output_device: int | str | None = None,
         chunk_ms: int = 200,
     ) -> None:
+        # Auto-configure PulseAudio TCP on WSL2 before opening any streams
+        _ensure_wsl2_pulse_tcp()
+
         try:
             import sounddevice as sd
             self._sd = sd

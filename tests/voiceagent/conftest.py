@@ -75,4 +75,4 @@ def session_wake_word(check_gpu):
         "openwakeword", reason="openwakeword not installed"
     )
     from voiceagent.activation.wake_word import WakeWordDetector
-    return WakeWordDetector(model_name="hey_jarvis", threshold=0.6)
+    return WakeWordDetector()
