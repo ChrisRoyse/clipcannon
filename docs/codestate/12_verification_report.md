@@ -28,7 +28,7 @@ Ruff: Python 3.12, line length 100, rules E/F/W/I/N/UP/ANN/B/SIM/TCH. Source roo
 |---|---|
 | Source packages | `src/clipcannon/`, `src/license_server/`, `src/voiceagent/` |
 | Pipeline stages | 22 |
-| MCP tools | 53 |
+| MCP tools | 54 |
 | Database tables (ClipCannon) | 23 core + 1 narrative + 4 vector + 6 editing/rendering + 1 voice = 35 |
 | Database tables (Voice Agent) | 3 (conversations, turns, metrics) |
 | Encoding profiles | 7 |

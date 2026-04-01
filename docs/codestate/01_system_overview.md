@@ -17,7 +17,7 @@ ClipCannon runs as three separate processes, plus an optional voice agent:
 
 | Process | Port | Technology | Purpose |
 |---------|------|------------|---------|
-| MCP Server | stdio (or SSE on 3366) | `mcp` SDK + Python asyncio | Exposes 53 tools to AI assistants via MCP protocol |
+| MCP Server | stdio (or SSE on 3366) | `mcp` SDK + Python asyncio | Exposes 54 tools to AI assistants via MCP protocol |
 | License Server | 3100 | FastAPI + Uvicorn | Credit billing, HMAC balance integrity, Stripe webhooks |
 | Dashboard | 3200 | FastAPI + static HTML | Web UI for credits, projects, provenance, editing, review, and system health |
 | Voice Agent | 8765 (WebSocket) or local mic | Pipecat + FastAPI + PyAudio | Real-time voice assistant with wake word, ASR, LLM, TTS |
@@ -42,12 +42,12 @@ The MCP server uses stdio transport by default (the `clipcannon` console script)
 | Video (Phase 2) | `mediapipe` (face detection for smart cropping), `opencv-python` (scene analysis, frame processing), `rembg` (subject extraction) |
 | Voice (Phase 3) | Qwen3-TTS 1.7B (video voice synthesis), `marksverdhei/Qwen3-Voice-Embedding-12Hz-1.7B` (2048-dim ECAPA-TDNN speaker encoder), `resemble-enhance` (audio denoising + bandwidth extension) |
 | Multi-Voice | `MultiVoiceSynth` (`src/clipcannon/voice/multi_voice.py`): instant voice swapping for multi-speaker conversation generation |
-| Avatar (Phase 3) | LatentSync 1.6 (ByteDance diffusion-based lip-sync) |
+| Avatar (Phase 3) | LatentSync 1.6 (ByteDance diffusion-based lip-sync), InsightFace (face detection + 106-point landmarks), kornia (affine transforms), DeepCache (inference acceleration) |
 | Voice Agent | `faster-qwen3-tts` 0.6B (real-time TTS, ~500ms TTFB), `faster-whisper` (Whisper Large v3 ASR), Qwen3-14B FP8 via vLLM or Ollama (local LLM), Silero VAD, Pipecat (pipeline framework), PyAudio (local transport) |
 
 ML dependencies are in the `[ml]` optional extra and are not required for the MCP server to start. Phase 2 audio/video dependencies are in the `[phase2]` optional extra. Phase 3 voice/avatar reuses the `[ml]` group. The voice agent has its own dependencies managed separately.
 
-## MCP Tools (53 Total)
+## MCP Tools (54 Total)
 
 ### Project Management (5 tools)
 
@@ -141,11 +141,12 @@ ML dependencies are in the `[ml]` optional extra and are not required for the MC
 | `clipcannon_speak` | Synthesize speech in a cloned voice via Qwen3-TTS with iterative multi-gate verification (sanity, intelligibility, identity). Auto-enhances via Resemble Enhance (denoise + 44.1kHz upsample). |
 | `clipcannon_speak_optimized` | SECS-optimized synthesis: generate N candidates, score by speaker encoder cosine similarity, return best match. Auto-enhances via Resemble Enhance. |
 
-### Avatar (1 tool)
+### Avatar (2 tools)
 
 | Tool | Description |
 |------|-------------|
-| `clipcannon_lip_sync` | Generate lip-synced talking-head video using LatentSync 1.6 (ByteDance) diffusion pipeline. Takes audio + driver video, produces synced output. |
+| `clipcannon_lip_sync` | Generate lip-synced talking-head video using LatentSync 1.6 (ByteDance) diffusion pipeline. Takes audio + driver video, produces synced output preserving original resolution. Supports guidance_scale tuning and DeepCache acceleration. |
+| `clipcannon_extract_webcam` | Extract the webcam/face region from an ingested video as a standalone driver video for lip-sync. Uses scene_map face detection data, applies configurable padding, outputs FFmpeg-cropped video. |
 
 ### Video Generation (1 tool)
 
@@ -287,7 +288,7 @@ Voice cloning pipeline with data preparation (silence-boundary splitting, transc
 
 ### Avatar Engine (`src/clipcannon/avatar/`)
 
-Lip-sync video generation using LatentSync 1.6 (ByteDance) diffusion pipeline. Takes audio + driver video input, produces lip-synced talking-head output at 512x512 resolution with configurable inference steps. Integrated with voice synthesis for end-to-end video generation from text scripts.
+Lip-sync video generation using LatentSync 1.6 (ByteDance) diffusion pipeline. Takes audio + driver video input, preserves original video resolution (face crops processed at 512x512 internally, then restored via inverse affine transform with soft mask blending). Supports DeepCache for ~1.5-2x speedup, configurable inference steps and guidance scale, automatic video looping (ping-pong) for audio longer than video. Includes webcam extraction tool to produce driver videos from ingested screen recordings. Integrated with voice synthesis for end-to-end video generation from text scripts with optional auto-webcam-extraction.
 
 ### Scene Analysis (`src/clipcannon/pipeline/scene_analysis.py`)
 

@@ -59,7 +59,7 @@ Test video: `testdata/2026-03-20 14-43-20.mp4` (209.9s, 2560x1440, 60fps h264).
 | `test_feedback.py` | 30 | Natural language feedback application |
 | `test_preview_segment.py` | 3 | Segment preview rendering |
 | `test_segment_cache.py` | 17 | Segment-level render caching |
-| `test_avatar.py` | 12 | Lip-sync engine (LatentSync) |
+| `test_avatar.py` | 30 | Lip-sync engine, webcam extraction, tool definitions, dispatch |
 | `test_voice_verify.py` | 16 | Multi-gate voice verification (WER, SECS, sanity) |
 | `test_voice_inference.py` | 5 | Qwen3-TTS voice synthesis |
 | `test_voice_data_prep.py` | 11 | Voice data preparation, profile CRUD |

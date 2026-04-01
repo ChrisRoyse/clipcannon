@@ -56,6 +56,22 @@ phase2 = [
     "pedalboard>=0.9.0",
 ]
 
+phase3 = [
+    # Avatar / lip-sync (LatentSync 1.6)
+    "diffusers>=0.32.0",
+    "omegaconf>=2.3.0",
+    "einops>=0.7.0",
+    "kornia>=0.8.0",
+    "insightface>=0.7.3",
+    "onnxruntime-gpu>=1.20.0",
+    "decord>=0.6.0",
+    "accelerate>=0.26.0",
+    "DeepCache>=0.1.1",
+    # Voice (Qwen3-TTS, Resemble Enhance)
+    "soundfile>=0.12.0",
+    "resemble-enhance>=0.0.1",
+]
+
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23.0",

@@ -339,6 +339,10 @@ async def _handle_speak(arguments: dict[str, object]) -> dict[str, object]:
         return _error("SYNTHESIS_FAILED", str(exc))
 
     # Post-process: enhance audio to remove vocoder artifacts
+    enhanced_audio_path = result.audio_path
+    enhanced_duration_ms = result.duration_ms
+    enhanced_sample_rate = result.sample_rate
+
     enhance = arguments.get("enhance", True)
     if enhance:
         try:
@@ -346,12 +350,12 @@ async def _handle_speak(arguments: dict[str, object]) -> dict[str, object]:
 
             enhanced_path = output_path.parent / f"{asset_id}_voice_enhanced.wav"
             enhance_speech(result.audio_path, enhanced_path)
-            result.audio_path = enhanced_path
+            enhanced_audio_path = enhanced_path
             # Update duration/SR from enhanced file
             import soundfile as _sf
             _info = _sf.info(str(enhanced_path))
-            result.duration_ms = int(_info.duration * 1000)
-            result.sample_rate = _info.samplerate
+            enhanced_duration_ms = int(_info.duration * 1000)
+            enhanced_sample_rate = _info.samplerate
         except Exception as exc:
             logger.warning("Enhancement failed, using raw TTS output: %s", exc)
 
@@ -359,9 +363,9 @@ async def _handle_speak(arguments: dict[str, object]) -> dict[str, object]:
 
     response: dict[str, object] = {
         "audio_asset_id": asset_id,
-        "file_path": str(result.audio_path),
-        "duration_ms": result.duration_ms,
-        "sample_rate": result.sample_rate,
+        "file_path": str(enhanced_audio_path),
+        "duration_ms": enhanced_duration_ms,
+        "sample_rate": enhanced_sample_rate,
         "attempts": result.attempts,
         "parameters_used": result.parameters_used,
         "elapsed_ms": elapsed_ms,
@@ -448,6 +452,10 @@ async def _handle_speak_optimized(arguments: dict[str, object]) -> dict[str, obj
         return _error("SYNTHESIS_FAILED", str(exc))
 
     # Post-process: enhance audio to remove vocoder artifacts
+    enhanced_audio_path = result.audio_path
+    enhanced_duration_ms = result.duration_ms
+    enhanced_sample_rate = result.sample_rate
+
     enhance = arguments.get("enhance", True)
     if enhance:
         try:
@@ -455,19 +463,19 @@ async def _handle_speak_optimized(arguments: dict[str, object]) -> dict[str, obj
 
             enhanced_path = output_path.parent / f"{asset_id}_voice_opt_enhanced.wav"
             enhance_speech(result.audio_path, enhanced_path)
-            result.audio_path = enhanced_path
+            enhanced_audio_path = enhanced_path
             import soundfile as _sf
             _info = _sf.info(str(enhanced_path))
-            result.duration_ms = int(_info.duration * 1000)
-            result.sample_rate = _info.samplerate
+            enhanced_duration_ms = int(_info.duration * 1000)
+            enhanced_sample_rate = _info.samplerate
         except Exception as exc:
             logger.warning("Enhancement failed, using raw TTS output: %s", exc)
 
     return {
         "audio_asset_id": asset_id,
-        "file_path": str(result.audio_path),
-        "duration_ms": result.duration_ms,
-        "sample_rate": result.sample_rate,
+        "file_path": str(enhanced_audio_path),
+        "duration_ms": enhanced_duration_ms,
+        "sample_rate": enhanced_sample_rate,
         "secs_score": round(result.secs_score, 4),
         "candidates_generated": result.candidates_generated,
         "best_candidate_index": result.best_candidate_index,

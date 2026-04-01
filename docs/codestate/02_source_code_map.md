@@ -83,7 +83,7 @@ src/
 
         avatar/                             # Avatar / lip-sync engine (Phase 3)
             __init__.py                     # Package docstring
-            lip_sync.py                     # LipSyncEngine: LatentSync 1.6 (ByteDance) diffusion pipeline, VAE + UNet3D + DDIM scheduler, 512x512 output, LipSyncResult
+            lip_sync.py                     # LipSyncEngine: LatentSync 1.6 (ByteDance) diffusion pipeline, VAE + UNet3D + DDIM scheduler, preserves original resolution (512x512 internal face processing), DeepCache support, auto video looping, LipSyncResult
 
         tools/
             __init__.py                     # Tool registry. Combines all tool definitions (53 total) and dispatcher functions from 13 modules into ALL_TOOL_DEFINITIONS and TOOL_DISPATCHERS
@@ -110,8 +110,8 @@ src/
             feedback.py                     # Feedback intent parser: translates natural language feedback into structured EDL changes via regex + keyword detection
             voice.py                        # 4 voice tools: prepare_voice_data, voice_profiles, speak, speak_optimized. dispatch_voice_tool
             voice_defs.py                   # JSON schema definitions for 4 voice MCP tools
-            avatar.py                       # 1 avatar tool: lip_sync. dispatch_avatar_tool
-            avatar_defs.py                  # JSON schema definition for lip_sync tool
+            avatar.py                       # 2 avatar tools: lip_sync, extract_webcam. dispatch_avatar_tool, _get_webcam_region, _get_source_info
+            avatar_defs.py                  # JSON schema definitions for 2 avatar MCP tools (lip_sync, extract_webcam)
             generate_video.py               # 1 generate tool: generate_video (end-to-end voice + lip-sync). dispatch_generate_tool
             generate_defs.py                # JSON schema definition for generate_video tool
             storyboard.py                   # Contact sheet generation: build_contact_sheet creates grid of all frames with timestamps

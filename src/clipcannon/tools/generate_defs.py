@@ -9,12 +9,14 @@ GENERATE_TOOL_DEFINITIONS: list[Tool] = [
         name="clipcannon_generate_video",
         description=(
             "Generate a complete video from a text script. "
-            "End-to-end pipeline: (1) Qwen3-TTS synthesizes speech "
-            "in the target voice with verification loop, (2) LatentSync "
-            "maps the audio onto a driver video for lip sync. "
-            "Every step is verified. Returns paths to the generated "
-            "audio and lip-synced video. Requires a driver video "
-            "of the target person's face."
+            "End-to-end pipeline: (1) optionally extracts webcam from "
+            "the ingested project as driver video, (2) Qwen3-TTS "
+            "synthesizes speech in the target voice with verification, "
+            "(3) LatentSync maps the audio onto the driver video for "
+            "lip sync. If driver_video_path is omitted, the webcam "
+            "region is auto-extracted from the project's source video "
+            "(requires prior ingest with face detection). Returns paths "
+            "to the generated audio and lip-synced video."
         ),
         inputSchema={
             "type": "object",
@@ -30,8 +32,9 @@ GENERATE_TOOL_DEFINITIONS: list[Tool] = [
                 "driver_video_path": {
                     "type": "string",
                     "description": (
-                        "Path to a webcam video of the target person. "
-                        "Face must be clearly visible. Will be looped to match audio length."
+                        "Path to a video of the target person's face. "
+                        "If omitted, webcam is auto-extracted from the "
+                        "project's source video using scene_map data."
                     ),
                 },
                 "voice_name": {
@@ -53,12 +56,19 @@ GENERATE_TOOL_DEFINITIONS: list[Tool] = [
                     "default": 20,
                     "description": "LatentSync diffusion steps (20=quality, 10=fast)",
                 },
+                "guidance_scale": {
+                    "type": "number",
+                    "default": 1.5,
+                    "description": (
+                        "Lip-sync guidance: 1.5 = balanced, 2.0 = stronger sync"
+                    ),
+                },
                 "seed": {
                     "type": "integer",
                     "description": "Random seed for reproducibility",
                 },
             },
-            "required": ["project_id", "script", "driver_video_path"],
+            "required": ["project_id", "script"],
         },
     ),
 ]

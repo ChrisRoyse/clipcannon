@@ -21,6 +21,12 @@ MODELS = [
     ("silero-vad", "snakers4/silero-vad", 0.01),
 ]
 
+# LatentSync checkpoints (separate from snapshot_download workflow)
+LATENTSYNC_FILES = [
+    ("latentsync_unet.pt", 4.72),
+    ("whisper/tiny.pt", 0.07),
+]
+
 MODELS_DIR = Path.home() / ".clipcannon" / "models"
 
 
@@ -70,6 +76,70 @@ def download_model(name: str, repo_id: str, size_gb: float) -> bool:
         return False
 
 
+def download_latentsync() -> bool:
+    """Download LatentSync repo and checkpoints.
+
+    Clones the repo if missing, then downloads checkpoints
+    from HuggingFace via huggingface-cli.
+
+    Returns:
+        True if setup succeeded.
+    """
+    import subprocess
+
+    latentsync_dir = MODELS_DIR / "latentsync"
+
+    # Clone repo if missing
+    if not latentsync_dir.exists():
+        print("  [latentsync] Cloning ByteDance/LatentSync...")
+        result = subprocess.run(
+            ["git", "clone", "https://github.com/bytedance/LatentSync.git",
+             str(latentsync_dir)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            print(f"  [latentsync] ERROR: git clone failed: {result.stderr.strip()[:200]}")
+            return False
+        print("  [latentsync] Repo cloned.")
+    else:
+        print("  [latentsync] Repo already exists.")
+
+    # Download checkpoints
+    checkpoints_dir = latentsync_dir / "checkpoints"
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+
+    for filename, size_gb in LATENTSYNC_FILES:
+        target = checkpoints_dir / filename
+        if target.exists():
+            print(f"  [latentsync] {filename} already downloaded, skipping.")
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        print(f"  [latentsync] Downloading {filename} (~{size_gb:.2f}GB)...")
+
+        try:
+            from huggingface_hub import hf_hub_download
+
+            hf_hub_download(
+                repo_id="ByteDance/LatentSync-1.6",
+                filename=filename,
+                local_dir=str(checkpoints_dir),
+                token=token,
+            )
+            print(f"  [latentsync] {filename} done.")
+        except ImportError:
+            print("  [latentsync] ERROR: huggingface_hub not installed.")
+            return False
+        except Exception as exc:
+            print(f"  [latentsync] ERROR downloading {filename}: {exc}")
+            return False
+
+    print("  [latentsync] Setup complete.")
+    return True
+
+
 def main() -> None:
     """Download all models."""
     total_gb = get_total_size()
@@ -109,8 +179,17 @@ def main() -> None:
             failed += 1
         print()
 
+    # LatentSync setup
+    print("--- LatentSync (lip-sync) ---")
+    if download_latentsync():
+        succeeded += 1
+    else:
+        failed += 1
+    print()
+
+    total_count = len(MODELS) + 1  # +1 for LatentSync
     print("=" * 60)
-    print(f"  Downloaded: {succeeded}/{len(MODELS)}")
+    print(f"  Downloaded: {succeeded}/{total_count}")
     if failed:
         print(f"  Failed: {failed}")
     print("=" * 60)

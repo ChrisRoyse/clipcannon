@@ -1,6 +1,7 @@
 """Full autonomous video generation orchestrator for ClipCannon.
 
-End-to-end pipeline: Script --> Voice Clone --> Lip Sync --> Edit --> Render.
+End-to-end pipeline: Script --> Voice Clone --> Lip Sync --> Output.
+Optionally extracts webcam from an ingested project for the driver video.
 Every step has verification gates. Bad output never propagates forward.
 """
 
@@ -39,13 +40,19 @@ async def clipcannon_generate_video(
     """Generate a complete video from a text script.
 
     Pipeline:
-    1. VOICE: Qwen3-TTS generates speech (with verification loop)
-    2. LIP SYNC: LatentSync maps audio onto driver video
-    3. Result: A video file of the person speaking the script
+    1. WEBCAM (optional): Extract webcam from ingested project
+    2. VOICE: Qwen3-TTS generates speech (with verification loop)
+    3. LIP SYNC: LatentSync maps audio onto driver video
+    4. Result: A video file of the person speaking the script
+
+    If ``driver_video_path`` is not provided but the project has
+    scene_map data with detected faces, the webcam region is
+    automatically extracted and used as the driver video.
 
     Args:
         arguments: Tool arguments including script, voice_name,
-            driver_video_path, and optional style parameters.
+            driver_video_path (or auto-extract from project),
+            and optional style parameters.
 
     Returns:
         Result dict with paths to generated audio and video.
@@ -57,18 +64,13 @@ async def clipcannon_generate_video(
     speed = float(arguments.get("speed", 1.0))
     max_voice_attempts = int(arguments.get("max_voice_attempts", 5))
     lip_sync_steps = int(arguments.get("lip_sync_steps", 20))
+    guidance_scale = float(arguments.get("guidance_scale", 1.5))
     seed = arguments.get("seed")
 
     if not script:
         return _error("MISSING_PARAMETER", "script text is required")
     if not project_id:
         return _error("MISSING_PARAMETER", "project_id is required")
-    if not driver_video_path:
-        return _error("MISSING_PARAMETER", "driver_video_path is required")
-
-    driver_path = Path(driver_video_path)
-    if not driver_path.exists():
-        return _error("FILE_NOT_FOUND", f"Driver video not found: {driver_path}")
 
     projects_dir = _projects_dir()
     project_dir = projects_dir / project_id
@@ -81,6 +83,40 @@ async def clipcannon_generate_video(
 
     start = time.monotonic()
     steps_completed: list[str] = []
+
+    # ============================================================
+    # STEP 0: Driver Video Resolution
+    # ============================================================
+    driver_path: Path | None = None
+
+    if driver_video_path:
+        driver_path = Path(driver_video_path)
+        if not driver_path.exists():
+            return _error("FILE_NOT_FOUND", f"Driver video not found: {driver_path}")
+    else:
+        # Auto-extract webcam from the ingested project
+        logger.info("Generate %s: No driver video -- extracting webcam from project", gen_id)
+        from clipcannon.tools.avatar import _handle_extract_webcam
+
+        extract_result = await _handle_extract_webcam({
+            "project_id": project_id,
+            "padding_pct": 0.15,
+        })
+        if "error" in extract_result:
+            return _error(
+                "WEBCAM_EXTRACTION_FAILED",
+                f"Could not extract webcam from project: "
+                f"{extract_result['error']['message']}. "
+                f"Either provide driver_video_path or ensure the project "
+                f"is ingested and contains a visible face.",
+                {"extraction_error": extract_result["error"]},
+            )
+        driver_path = Path(str(extract_result["video_path"]))
+        steps_completed.append("webcam_extract")
+        logger.info(
+            "Generate %s: Webcam extracted — %s (%s)",
+            gen_id, extract_result["resolution"], extract_result["video_path"],
+        )
 
     # ============================================================
     # STEP 1: Voice Generation
@@ -121,7 +157,7 @@ async def clipcannon_generate_video(
         logger.exception("Generate %s: Voice synthesis failed", gen_id)
         return _error("VOICE_FAILED", str(exc), {"step": "voice", "gen_id": gen_id})
 
-    voice_info = {
+    voice_info: dict[str, object] = {
         "audio_path": str(voice_result.audio_path),
         "duration_ms": voice_result.duration_ms,
         "attempts": voice_result.attempts,
@@ -154,7 +190,19 @@ async def clipcannon_generate_video(
             audio_path=voice_path,
             output_path=lipsync_path,
             inference_steps=lip_sync_steps,
+            guidance_scale=guidance_scale,
             seed=int(seed) if seed is not None else None,
+        )
+    except RuntimeError as exc:
+        if "Face not detected" in str(exc):
+            return _error(
+                "FACE_NOT_DETECTED", str(exc),
+                {"step": "lip_sync", "gen_id": gen_id, "voice": voice_info},
+            )
+        logger.exception("Generate %s: Lip sync failed", gen_id)
+        return _error(
+            "LIP_SYNC_FAILED", str(exc),
+            {"step": "lip_sync", "gen_id": gen_id, "voice": voice_info},
         )
     except Exception as exc:
         logger.exception("Generate %s: Lip sync failed", gen_id)
@@ -196,18 +244,7 @@ async def dispatch_generate_tool(
     name: str,
     arguments: dict[str, object],
 ) -> dict[str, object]:
-    """Dispatch a generate tool call by name.
-
-    Wraps ``clipcannon_generate_video`` so it matches the
-    ``(name, arguments)`` signature expected by the MCP server dispatcher.
-
-    Args:
-        name: Tool name.
-        arguments: Tool arguments.
-
-    Returns:
-        Tool result dictionary.
-    """
+    """Dispatch a generate tool call by name."""
     if name == "clipcannon_generate_video":
         return await clipcannon_generate_video(arguments)
     return _error("INTERNAL_ERROR", f"Unknown generate tool: {name}")

@@ -1,4 +1,4 @@
-# MCP Tools Reference (53 Tools)
+# MCP Tools Reference (54 Tools)
 
 ## Tool Dispatch
 
@@ -18,7 +18,7 @@ The MCP server registers `list_tools()` -> `ALL_TOOL_DEFINITIONS` and `call_tool
 | `tools/audio.py` | `dispatch_audio_tool` | 6 |
 | `tools/discovery.py` | `dispatch_discovery_tool` | 4 |
 | `tools/voice.py` | `dispatch_voice_tool` | 4 |
-| `tools/avatar.py` | `dispatch_avatar_tool` | 1 |
+| `tools/avatar.py` | `dispatch_avatar_tool` | 2 |
 | `tools/generate_video.py` | `dispatch_generate_tool` | 1 |
 
 Helper files: `tools/editing_defs.py`, `tools/editing_helpers.py`, `tools/rendering_defs.py`, `tools/audio_defs.py`, `tools/audio_cleanup.py`, `tools/audio_smart.py`, `tools/discovery_defs.py`, `tools/voice_defs.py`, `tools/avatar_defs.py`, `tools/generate_defs.py`, `tools/storyboard.py`, `tools/understanding_search.py`, `tools/understanding_visual.py`, `tools/video_probe.py`.
@@ -217,11 +217,15 @@ SECS-optimized TTS with best-of-N selection. Auto-enhances via Resemble Enhance.
 
 ---
 
-## Avatar Tools (1)
+## Avatar Tools (2)
 
 ### clipcannon_lip_sync
 
-Lip-sync talking-head video via LatentSync 1.6. Params: `project_id`, `audio_path`, `driver_video_path`, `inference_steps` (default 20), `seed`.
+Lip-sync talking-head video via LatentSync 1.6. Output preserves original video resolution. DeepCache enabled by default for ~1.5-2x speedup. Params: `project_id`, `audio_path`, `driver_video_path`, `inference_steps` (default 20), `guidance_scale` (default 1.5), `seed`.
+
+### clipcannon_extract_webcam
+
+Extract webcam/face region from an ingested video as a standalone driver video. Uses scene_map face detection data from ingest. Params: `project_id`, `start_ms` (optional), `end_ms` (optional), `padding_pct` (default 0.15).
 
 ---
 
@@ -229,4 +233,4 @@ Lip-sync talking-head video via LatentSync 1.6. Params: `project_id`, `audio_pat
 
 ### clipcannon_generate_video
 
-End-to-end video from text script: voice synthesis + lip-sync. Params: `script`, `project_id`, `driver_video_path`, `voice_name`, `speed`, `max_voice_attempts`, `lip_sync_steps`, `seed`.
+End-to-end video from text script: optional webcam extraction + voice synthesis + lip-sync. If `driver_video_path` is omitted, auto-extracts webcam from the project's ingested source video. Params: `project_id`, `script`, `driver_video_path` (optional), `voice_name`, `speed`, `max_voice_attempts`, `lip_sync_steps`, `guidance_scale`, `seed`.
