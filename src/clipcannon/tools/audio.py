@@ -1,8 +1,4 @@
-"""Audio generation MCP tools for ClipCannon.
-
-Provides tools for generating AI music, composing MIDI tracks,
-and creating programmatic sound effects.
-"""
+"""Audio generation MCP tools for ClipCannon."""
 
 from __future__ import annotations
 
@@ -12,14 +8,15 @@ import secrets
 import time
 from pathlib import Path
 
-from mcp.types import Tool
-
 from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_one
 from clipcannon.exceptions import ClipCannonError
+from clipcannon.tools.audio_defs import AUDIO_TOOL_DEFINITIONS
 
 logger = logging.getLogger(__name__)
+
+__all__ = ["AUDIO_TOOL_DEFINITIONS", "dispatch_audio_tool"]
 
 
 def _error(
@@ -53,66 +50,6 @@ def _audio_dir(project_id: str) -> Path:
     audio_path = _project_dir(project_id) / "audio"
     audio_path.mkdir(parents=True, exist_ok=True)
     return audio_path
-
-
-async def _extract_audio_from_source(
-    proj_dir: Path, project_id: str
-) -> Path | None:
-    """Extract audio from source video when stems are missing.
-
-    This is a self-healing fallback: if disk_cleanup removed stems,
-    we re-extract audio directly from the source video using ffmpeg.
-
-    Args:
-        proj_dir: Project directory path.
-        project_id: Project identifier (for logging).
-
-    Returns:
-        Path to extracted audio WAV, or None if extraction fails.
-    """
-    import asyncio
-
-    source_dir = proj_dir / "source"
-    if not source_dir.exists():
-        return None
-    videos = list(source_dir.glob("*.mp4")) + list(source_dir.glob("*.mkv"))
-    if not videos:
-        return None
-
-    stems_dir = proj_dir / "stems"
-    stems_dir.mkdir(parents=True, exist_ok=True)
-    output = stems_dir / "audio_original.wav"
-
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", str(videos[0]),
-        "-vn", "-acodec", "pcm_s16le",
-        str(output),
-    ]
-    logger.info(
-        "Stems missing for %s — extracting audio from source video", project_id
-    )
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            logger.error(
-                "Audio extraction failed for %s: %s",
-                project_id, stderr.decode()[-500:],
-            )
-            return None
-    except FileNotFoundError:
-        logger.error("ffmpeg not found — cannot extract audio")
-        return None
-
-    if output.exists() and output.stat().st_size > 0:
-        logger.info("Audio extracted to %s (%d bytes)", output, output.stat().st_size)
-        return output
-    return None
 
 
 def _validate_project(project_id: str) -> dict[str, object] | None:
@@ -178,17 +115,29 @@ async def clipcannon_generate_music(
     duration_s: float,
     seed: int | None = None,
     volume_db: float = -18.0,
+    model: str = "ace-step",
 ) -> dict[str, object]:
-    """Generate AI music from a text prompt, store as audio asset."""
+    """Generate AI music from a text prompt, store as audio asset.
+
+    Args:
+        model: "ace-step" (default) or "musicgen". No fallback --
+            if the specified model is unavailable, an error is returned.
+    """
     start_time = time.monotonic()
 
-    # Validate project and edit
     err = _validate_project(project_id)
     if err is not None:
         return err
     err = _validate_edit(project_id, edit_id)
     if err is not None:
         return err
+
+    if model not in ("ace-step", "musicgen"):
+        return _error(
+            "INVALID_PARAMETER",
+            f"Unknown model: {model}. Must be 'ace-step' or 'musicgen'.",
+            {"model": model},
+        )
 
     if duration_s <= 0 or duration_s > 300:
         return _error(
@@ -202,49 +151,50 @@ async def clipcannon_generate_music(
     output_path = audio_dir / f"{asset_id}_music.wav"
 
     try:
-        from clipcannon.audio.music_gen import generate_music
+        if model == "musicgen":
+            from clipcannon.audio.musicgen import generate_music_musicgen
 
-        result = await generate_music(
-            prompt=prompt,
-            duration_s=duration_s,
-            output_path=output_path,
-            seed=seed,
-        )
+            result = await generate_music_musicgen(
+                prompt=prompt,
+                duration_s=duration_s,
+                output_path=output_path,
+                seed=seed,
+            )
+        else:
+            from clipcannon.audio.music_gen import generate_music
+
+            result = await generate_music(
+                prompt=prompt,
+                duration_s=duration_s,
+                output_path=output_path,
+                seed=seed,
+            )
     except ImportError as exc:
+        dep = "audiocraft" if model == "musicgen" else "ace-step"
         return _error(
-            "DEPENDENCY_MISSING",
-            str(exc),
-            {"dependency": "ace-step"},
+            "DEPENDENCY_MISSING", str(exc), {"dependency": dep},
         )
     except Exception as exc:
-        logger.exception("Music generation failed")
+        logger.exception("Music generation failed (model=%s)", model)
         return _error(
             "GENERATION_FAILED",
-            f"Music generation failed: {exc}",
-            {"error": str(exc)},
+            f"Music generation failed ({model}): {exc}",
+            {"error": str(exc), "model": model},
         )
 
-    # Store in database
     _store_audio_asset(
-        project_id=project_id,
-        edit_id=edit_id,
-        asset_id=asset_id,
-        asset_type="music",
-        file_path=str(result.file_path),
-        duration_ms=result.duration_ms,
-        sample_rate=result.sample_rate,
+        project_id=project_id, edit_id=edit_id, asset_id=asset_id,
+        asset_type="music", file_path=str(result.file_path),
+        duration_ms=result.duration_ms, sample_rate=result.sample_rate,
         model_used=result.model_used,
         generation_params={
-            "prompt": prompt,
-            "duration_s": duration_s,
-            "guidance_scale": 15.0,
+            "prompt": prompt, "duration_s": duration_s,
+            "model": model,
         },
-        seed=result.seed,
-        volume_db=volume_db,
+        seed=result.seed, volume_db=volume_db,
     )
 
     elapsed = time.monotonic() - start_time
-
     return {
         "audio_asset_id": asset_id,
         "file_path": str(result.file_path),
@@ -266,27 +216,19 @@ async def clipcannon_compose_midi(
     """Compose MIDI from preset, render to WAV, store as audio asset."""
     start_time = time.monotonic()
 
-    # Validate project and edit
     err = _validate_project(project_id)
     if err is not None:
         return err
     err = _validate_edit(project_id, edit_id)
     if err is not None:
         return err
-
     if duration_s <= 0 or duration_s > 600:
-        return _error(
-            "INVALID_PARAMETER",
-            "duration_s must be between 0 and 600 seconds",
-            {"duration_s": duration_s},
-        )
-
+        return _error("INVALID_PARAMETER", "duration_s must be between 0 and 600 seconds")
     asset_id = f"audio_{secrets.token_hex(6)}"
     audio_dir = _audio_dir(project_id)
     midi_path = audio_dir / f"{asset_id}_composition.mid"
     wav_path = audio_dir / f"{asset_id}_composition.wav"
 
-    # Step 1: Compose MIDI
     try:
         from clipcannon.audio.midi_compose import compose_midi
 
@@ -321,8 +263,6 @@ async def clipcannon_compose_midi(
         "preset": preset, "duration_s": duration_s,
         "tempo_bpm": midi_result.tempo_bpm, "key": midi_result.key,
     }
-
-    # Step 2: Render MIDI to WAV
     wav_rendered = False
     try:
         from clipcannon.audio.midi_render import render_midi_to_wav
@@ -335,7 +275,6 @@ async def clipcannon_compose_midi(
         logger.exception("MIDI rendering failed")
         return _error("RENDER_FAILED", f"MIDI rendering failed: {exc}")
 
-    # Store in database
     out_path = wav_path if wav_rendered else midi_path
     model = "midiutil+fluidsynth" if wav_rendered else "midiutil"
     _store_audio_asset(
@@ -347,7 +286,6 @@ async def clipcannon_compose_midi(
     )
 
     elapsed = time.monotonic() - start_time
-
     result: dict[str, object] = {
         "audio_asset_id": asset_id,
         "file_path": str(out_path),
@@ -373,14 +311,12 @@ async def clipcannon_generate_sfx(
     """Generate a DSP sound effect, store as audio asset."""
     start_time = time.monotonic()
 
-    # Validate project and edit
     err = _validate_project(project_id)
     if err is not None:
         return err
     err = _validate_edit(project_id, edit_id)
     if err is not None:
         return err
-
     if duration_ms <= 0 or duration_ms > 30000:
         return _error(
             "INVALID_PARAMETER",
@@ -415,27 +351,15 @@ async def clipcannon_generate_sfx(
             {"error": str(exc)},
         )
 
-    # Store in database
     _store_audio_asset(
-        project_id=project_id,
-        edit_id=edit_id,
-        asset_id=asset_id,
-        asset_type="sfx",
-        file_path=str(result.file_path),
-        duration_ms=result.duration_ms,
-        sample_rate=result.sample_rate,
+        project_id=project_id, edit_id=edit_id, asset_id=asset_id,
+        asset_type="sfx", file_path=str(result.file_path),
+        duration_ms=result.duration_ms, sample_rate=result.sample_rate,
         model_used="dsp",
-        generation_params={
-            "sfx_type": sfx_type,
-            "duration_ms": duration_ms,
-            "params": params or {},
-        },
-        seed=None,
-        volume_db=0.0,
+        generation_params={"sfx_type": sfx_type, "duration_ms": duration_ms, "params": params or {}},
+        seed=None, volume_db=0.0,
     )
-
     elapsed = time.monotonic() - start_time
-
     return {
         "audio_asset_id": asset_id,
         "file_path": str(result.file_path),
@@ -445,117 +369,42 @@ async def clipcannon_generate_sfx(
     }
 
 
-_PID = {"type": "string", "description": "Project identifier"}
-_EID = {"type": "string", "description": "Edit identifier to attach audio to"}
+async def clipcannon_auto_music(
+    project_id: str, edit_id: str,
+    style_override: str | None = None,
+    tier: str = "auto",
+    duration_override_s: float | None = None,
+) -> dict[str, object]:
+    """Analyze video edit and generate matching background music."""
+    from clipcannon.tools.audio_smart import (
+        clipcannon_auto_music as _impl,
+    )
+    return await _impl(
+        project_id, edit_id, style_override, tier, duration_override_s,
+        validate_project=_validate_project, validate_edit=_validate_edit,
+        db_path_fn=_db_path, audio_dir_fn=_audio_dir,
+        store_asset_fn=_store_audio_asset, error_fn=_error,
+    )
 
-AUDIO_TOOL_DEFINITIONS: list[Tool] = [
-    Tool(
-        name="clipcannon_generate_music",
-        description=(
-            "Generate original AI background music from a text prompt "
-            "using ACE-Step v1.5. Requires GPU with 4+ GB VRAM."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": _PID,
-                "edit_id": _EID,
-                "prompt": {"type": "string", "description": "Music description"},
-                "duration_s": {"type": "number", "description": "Duration in seconds"},
-                "seed": {"type": "integer", "description": "Seed for reproducibility"},
-                "volume_db": {"type": "number", "description": "Volume in dB", "default": -18},
-            },
-            "required": ["project_id", "edit_id", "prompt", "duration_s"],
-        },
-    ),
-    Tool(
-        name="clipcannon_compose_midi",
-        description=(
-            "Compose a MIDI track from preset and render to WAV. "
-            "CPU-only. Presets: ambient_pad, upbeat_pop, corporate, "
-            "dramatic, minimal_piano, intro_jingle."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": _PID,
-                "edit_id": _EID,
-                "preset": {
-                    "type": "string", "description": "Composition preset",
-                    "enum": [
-                        "ambient_pad", "upbeat_pop", "corporate",
-                        "dramatic", "minimal_piano", "intro_jingle",
-                    ],
-                },
-                "duration_s": {"type": "number", "description": "Duration in seconds"},
-                "tempo_bpm": {"type": "integer", "description": "Override tempo in BPM"},
-                "key": {"type": "string", "description": "Override musical key"},
-            },
-            "required": ["project_id", "edit_id", "preset", "duration_s"],
-        },
-    ),
-    Tool(
-        name="clipcannon_generate_sfx",
-        description=(
-            "Generate a DSP sound effect. CPU-only, instant. Types: "
-            "whoosh, riser, downer, impact, chime, tick, bass_drop, shimmer, stinger."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": _PID,
-                "edit_id": _EID,
-                "sfx_type": {
-                    "type": "string", "description": "Sound effect type",
-                    "enum": [
-                        "whoosh", "riser", "downer", "impact", "chime",
-                        "tick", "bass_drop", "shimmer", "stinger",
-                    ],
-                },
-                "duration_ms": {
-                    "type": "integer", "description": "Duration in ms",
-                    "default": 500,
-                },
-                "params": {"type": "object", "description": "Effect-specific params"},
-            },
-            "required": ["project_id", "edit_id", "sfx_type"],
-        },
-    ),
-    Tool(
-        name="clipcannon_audio_cleanup",
-        description=(
-            "Clean up audio by removing noise, hum, sibilance, or normalizing loudness. "
-            "Operations: noise_reduction (gentle denoising), de_hum (remove 50/60Hz hum), "
-            "de_ess (reduce sibilance), normalize_loudness (EBU R128 normalization). "
-            "Creates cleaned audio file stored as audio asset."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": _PID,
-                "edit_id": _EID,
-                "operations": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "enum": [
-                            "noise_reduction", "de_hum",
-                            "de_ess", "normalize_loudness",
-                        ],
-                    },
-                    "minItems": 1,
-                    "description": "Cleanup operations to apply",
-                },
-                "hum_frequency": {
-                    "type": "integer",
-                    "default": 50,
-                    "description": "Hum frequency: 50 (EU) or 60 (US) Hz",
-                },
-            },
-            "required": ["project_id", "edit_id", "operations"],
-        },
-    ),
-]
+
+async def clipcannon_compose_music(
+    project_id: str, edit_id: str,
+    description: str, duration_s: float,
+    tempo_bpm: int | None = None,
+    key: str | None = None,
+    energy: str | None = None,
+) -> dict[str, object]:
+    """Compose music from a natural language description via MIDI."""
+    from clipcannon.tools.audio_smart import (
+        clipcannon_compose_music as _impl,
+    )
+    return await _impl(
+        project_id, edit_id, description, duration_s,
+        tempo_bpm, key, energy,
+        validate_project=_validate_project, validate_edit=_validate_edit,
+        audio_dir_fn=_audio_dir, store_asset_fn=_store_audio_asset,
+        error_fn=_error,
+    )
 
 
 async def clipcannon_audio_cleanup(
@@ -564,89 +413,16 @@ async def clipcannon_audio_cleanup(
     operations: list[str],
     hum_frequency: int = 50,
 ) -> dict[str, object]:
-    """Clean up audio with FFmpeg filters."""
-    from clipcannon.audio.cleanup import SUPPORTED_CLEANUP_OPS, cleanup_audio
+    """Clean up audio with FFmpeg filters. Delegates to audio_cleanup module."""
+    from clipcannon.tools.audio_cleanup import run_audio_cleanup
 
-    err = _validate_project(project_id)
-    if err is not None:
-        return err
-    err = _validate_edit(project_id, edit_id)
-    if err is not None:
-        return err
-
-    # Validate operations
-    invalid = [op for op in operations if op not in SUPPORTED_CLEANUP_OPS]
-    if invalid:
-        return _error("INVALID_PARAMETER", f"Unknown operations: {invalid}")
-
-    # Find source audio
-    proj_dir = _project_dir(project_id)
-    audio_dir = proj_dir / "edits" / edit_id / "audio"
-    audio_dir.mkdir(parents=True, exist_ok=True)
-
-    # Use vocal stem if available, otherwise extracted audio
-    source_audio = proj_dir / "stems" / "vocals.wav"
-    if not source_audio.exists():
-        source_audio = proj_dir / "stems" / "audio_original.wav"
-    if not source_audio.exists():
-        source_audio = proj_dir / "stems" / "audio_16k.wav"
-    if not source_audio.exists():
-        # Try any WAV in project (stems/ first, then root)
-        wavs = list((proj_dir / "stems").glob("*.wav")) if (proj_dir / "stems").exists() else []
-        if not wavs:
-            wavs = list(proj_dir.glob("*.wav"))
-        if wavs:
-            source_audio = wavs[0]
-        else:
-            # Self-heal: extract audio from source video on the fly
-            source_audio = await _extract_audio_from_source(proj_dir, project_id)
-            if source_audio is None:
-                return _error(
-                    "AUDIO_NOT_FOUND",
-                    "No audio stems found and source video extraction failed. "
-                    "Run ingest again or check source video has audio.",
-                )
-
-    output_path = audio_dir / f"cleaned_{secrets.token_hex(4)}.wav"
-
-    start = time.monotonic()
-    try:
-        result = await cleanup_audio(
-            input_path=source_audio,
-            output_path=output_path,
-            operations=operations,
-            hum_frequency=hum_frequency,
-        )
-    except (ValueError, FileNotFoundError, RuntimeError) as exc:
-        return _error("CLEANUP_FAILED", str(exc))
-
-    elapsed_ms = int((time.monotonic() - start) * 1000)
-
-    # Store as audio asset
-    _store_audio_asset(
-        project_id=project_id,
-        edit_id=edit_id,
-        asset_id=result.asset_id,
-        asset_type="cleaned",
-        file_path=str(result.file_path),
-        duration_ms=result.duration_ms,
-        sample_rate=result.sample_rate,
-        model_used="ffmpeg",
-        generation_params={
-            "operations": operations,
-            "hum_frequency": hum_frequency,
-        },
-        seed=None,
-        volume_db=0.0,
+    return await run_audio_cleanup(
+        project_id=project_id, edit_id=edit_id,
+        operations=operations, hum_frequency=hum_frequency,
+        validate_project=_validate_project, validate_edit=_validate_edit,
+        project_dir_fn=_project_dir, store_asset_fn=_store_audio_asset,
+        error_fn=_error,
     )
-
-    return {
-        "asset_id": result.asset_id,
-        "file_path": str(result.file_path),
-        "duration_ms": result.duration_ms,
-        "operations_applied": result.operations_applied,
-        "elapsed_ms": elapsed_ms,
-    }
 
 
 async def dispatch_audio_tool(
@@ -662,6 +438,7 @@ async def dispatch_audio_tool(
             duration_s=float(arguments["duration_s"]),  # type: ignore[arg-type]
             seed=int(seed_raw) if seed_raw is not None else None,  # type: ignore[arg-type]
             volume_db=float(arguments.get("volume_db", -18)),  # type: ignore[arg-type]
+            model=str(arguments.get("model", "ace-step")),
         )
     if name == "clipcannon_compose_midi":
         tempo_raw = arguments.get("tempo_bpm")
@@ -681,6 +458,28 @@ async def dispatch_audio_tool(
             sfx_type=str(arguments["sfx_type"]),
             duration_ms=int(arguments.get("duration_ms", 500)),  # type: ignore[arg-type]
             params=arguments.get("params"),  # type: ignore[arg-type]
+        )
+    if name == "clipcannon_auto_music":
+        dur_raw = arguments.get("duration_override_s")
+        return await clipcannon_auto_music(
+            project_id=str(arguments["project_id"]),
+            edit_id=str(arguments["edit_id"]),
+            style_override=str(arguments["style_override"]) if arguments.get("style_override") else None,
+            tier=str(arguments.get("tier", "auto")),
+            duration_override_s=float(dur_raw) if dur_raw is not None else None,  # type: ignore[arg-type]
+        )
+    if name == "clipcannon_compose_music":
+        tempo_raw = arguments.get("tempo_bpm")
+        key_raw = arguments.get("key")
+        energy_raw = arguments.get("energy")
+        return await clipcannon_compose_music(
+            project_id=str(arguments["project_id"]),
+            edit_id=str(arguments["edit_id"]),
+            description=str(arguments["description"]),
+            duration_s=float(arguments["duration_s"]),  # type: ignore[arg-type]
+            tempo_bpm=int(tempo_raw) if tempo_raw is not None else None,  # type: ignore[arg-type]
+            key=str(key_raw) if key_raw is not None else None,
+            energy=str(energy_raw) if energy_raw is not None else None,
         )
     if name == "clipcannon_audio_cleanup":
         return await clipcannon_audio_cleanup(

@@ -194,12 +194,12 @@ class TestComposeMidi:
         # Files should be different
         assert out1.read_bytes() != out2.read_bytes()
 
-    def test_all_6_presets(self, midi_dir: Path) -> None:
-        """All 6 presets produce output."""
+    def test_all_presets(self, midi_dir: Path) -> None:
+        """All 12 presets produce output."""
         pytest.importorskip("midiutil")
         from clipcannon.audio.midi_compose import PRESETS, compose_midi
 
-        assert len(PRESETS) == 6
+        assert len(PRESETS) == 12
         for name in PRESETS:
             out = midi_dir / f"{name}.mid"
             result = compose_midi(name, 5.0, out)

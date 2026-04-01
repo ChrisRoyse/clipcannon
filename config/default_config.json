@@ -16,9 +16,12 @@
     "max_clip_duration_ms": 600000
   },
   "audio": {
-    "music_model": "ace-step",
-    "music_guidance_scale": 3.5,
+    "music_model": "ace-step-v1.5",
+    "music_guidance_scale": 15.0,
+    "music_infer_steps": 100,
     "music_default_volume_db": -12,
+    "musicgen_model_size": "medium",
+    "auto_music_tier": "auto",
     "duck_under_speech": true,
     "duck_level_db": -18,
     "sfx_on_transitions": true,

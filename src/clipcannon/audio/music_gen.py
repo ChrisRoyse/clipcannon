@@ -1,11 +1,11 @@
 """ACE-Step v1.5 AI music generation integration.
 
 Generates original background music from text prompts using the ACE-Step
-diffusion model. Requires GPU with at least 4GB VRAM for cpu_offload
-mode or 8GB for full GPU mode.
+v1.5 hybrid LM+DiT architecture. Requires GPU with at least 4GB VRAM.
 
 Model weights are cached at ~/.cache/ace-step/checkpoints and are
-downloaded once from HuggingFace on first use.
+downloaded once from HuggingFace on first use. No internet required
+after initial download.
 
 Example:
     result = await generate_music(
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Persistent local cache — model weights never re-downloaded
+# Persistent local cache -- model weights never re-downloaded
 _CHECKPOINT_DIR = os.path.join(
     os.path.expanduser("~"), ".cache", "ace-step", "checkpoints"
 )
@@ -70,15 +70,16 @@ def _validate_output(output_path: Path, requested_duration_s: float) -> int:
     """
     if not output_path.exists():
         raise RuntimeError(
-            f"Generated audio file not found at {output_path}"
+            f"Generated audio file not found at {output_path}. "
+            "ACE-Step pipeline completed but produced no output file."
         )
     file_size = output_path.stat().st_size
     if file_size == 0:
         raise RuntimeError(
-            f"Generated audio file is empty at {output_path}"
+            f"Generated audio file is empty at {output_path}. "
+            "ACE-Step pipeline produced a zero-byte file."
         )
 
-    # Try to read WAV header to get actual duration
     try:
         import wave
 
@@ -87,20 +88,22 @@ def _validate_output(output_path: Path, requested_duration_s: float) -> int:
             rate = wf.getframerate()
             actual_duration_s = frames / rate
             actual_duration_ms = int(actual_duration_s * 1000)
-    except Exception:
-        # If we cannot read WAV header, estimate from file size
-        # ACE-Step outputs 16-bit stereo 48kHz: 4 bytes per sample
+    except Exception as exc:
+        logger.warning(
+            "Cannot read WAV header from %s: %s. Estimating from file size.",
+            output_path, exc,
+        )
+        # ACE-Step v1.5 outputs 16-bit stereo 48kHz: 4 bytes per sample
         estimated_samples = (file_size - 44) // 4  # 44-byte WAV header
         actual_duration_ms = int((estimated_samples / 48000) * 1000)
         actual_duration_s = actual_duration_ms / 1000.0
 
-    # Check duration is within 10% of requested
     tolerance = requested_duration_s * 0.10
     if abs(actual_duration_s - requested_duration_s) > max(tolerance, 1.0):
         logger.warning(
-            "Generated audio duration %.1fs differs from requested %.1fs",
-            actual_duration_s,
-            requested_duration_s,
+            "Generated audio duration %.1fs differs from requested %.1fs "
+            "(tolerance: %.1fs). File: %s",
+            actual_duration_s, requested_duration_s, tolerance, output_path,
         )
 
     return actual_duration_ms
@@ -113,53 +116,70 @@ async def generate_music(
     seed: int | None = None,
     guidance_scale: float = 15.0,
     gpu_device: str = "cuda:0",
+    tags: str = "",
+    lyrics: str = "",
+    infer_steps: int = 100,
 ) -> MusicResult:
-    """Generate original music using ACE-Step v1 3.5B model.
+    """Generate original music using ACE-Step v1.5 hybrid LM+DiT model.
 
-    Loads the ACE-Step pipeline (auto-downloads weights on first use
+    Loads the ACE-Step v1.5 pipeline (auto-downloads weights on first use
     to ~/.cache/ace-step/checkpoints), generates audio from the text
     prompt, saves to the output path, validates the result, and cleans
     up GPU memory.
 
+    All processing is local. No cloud APIs or internet required after
+    initial model download.
+
     Args:
         prompt: Text description of the desired music.
-        duration_s: Desired duration in seconds.
+        duration_s: Desired duration in seconds (max 600).
         output_path: Path to save the generated WAV file.
         seed: Random seed for reproducibility. Generated if None.
         guidance_scale: Classifier-free guidance scale (default 15.0).
         gpu_device: CUDA device identifier.
+        tags: Genre/mood tags for v1.5 (e.g. "pop, upbeat, 120bpm").
+        lyrics: Optional lyrics for vocal music generation.
+        infer_steps: Number of DiT inference steps (default 100).
 
     Returns:
         MusicResult with generation details.
 
     Raises:
-        ImportError: If acestep is not installed.
+        ImportError: If ace-step is not installed.
         RuntimeError: If generation or validation fails.
     """
     try:
         from acestep.pipeline_ace_step import ACEStepPipeline  # type: ignore[import-untyped]
-    except ImportError as exc:
+    except ImportError:
+        logger.error(
+            "ACE-Step not installed. Cannot generate AI music. "
+            "Install with: pip install git+https://github.com/ace-step/ACE-Step.git"
+        )
         raise ImportError(
-            "ACE-Step not installed. Install with: "
-            "pip install --no-deps git+https://github.com/ace-step/ACE-Step.git"
-        ) from exc
+            "ACE-Step not installed. "
+            "Install with: pip install git+https://github.com/ace-step/ACE-Step.git"
+        )
 
     try:
         import torch  # type: ignore[import-untyped]
-    except ImportError as exc:
+    except ImportError:
+        logger.error("PyTorch not installed. Required for ACE-Step music generation.")
         raise ImportError(
             "PyTorch not installed. Install with: pip install torch"
-        ) from exc
+        )
 
     if seed is None:
         seed = random.randint(0, 2**31 - 1)
 
+    if duration_s <= 0:
+        raise ValueError(f"duration_s must be positive, got {duration_s}")
+    if duration_s > 600:
+        raise ValueError(f"duration_s must be <= 600, got {duration_s}")
+
     logger.info(
-        "Generating music: prompt=%r, duration=%.1fs, seed=%d, guidance=%.1f",
-        prompt[:80],
-        duration_s,
-        seed,
-        guidance_scale,
+        "Generating music: prompt=%r, duration=%.1fs, seed=%d, "
+        "guidance=%.1f, steps=%d, tags=%r",
+        prompt[:80], duration_s, seed, guidance_scale, infer_steps, tags[:50],
     )
 
     # Determine VRAM availability for cpu_offload decision
@@ -170,16 +190,23 @@ async def generate_music(
             device_idx = int(gpu_device.split(":")[-1]) if ":" in gpu_device else 0
             total_mem = torch.cuda.get_device_properties(device_idx).total_memory
             total_gb = total_mem / (1024**3)
-            cpu_offload = total_gb < 8.0
-        except Exception:
+            # v1.5 needs ~4GB VRAM minimum
+            cpu_offload = total_gb < 4.0
+            logger.info(
+                "GPU %d: %.1f GB VRAM, cpu_offload=%s",
+                device_idx, total_gb, cpu_offload,
+            )
+        except Exception as exc:
+            logger.warning("GPU detection failed, using cpu_offload: %s", exc)
             cpu_offload = True
+    else:
+        logger.warning("No CUDA GPU available. Using CPU offload (slow).")
 
     # Ensure output directory exists
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     pipeline = None
     try:
-        # Checkpoint dir is persistent local cache
         os.makedirs(_CHECKPOINT_DIR, exist_ok=True)
 
         pipeline = ACEStepPipeline(
@@ -188,11 +215,9 @@ async def generate_music(
             cpu_offload=cpu_offload,
         )
 
-        # __call__ handles checkpoint loading, text encoding, diffusion,
-        # decoding, and WAV saving in one shot.
         result = pipeline(
             prompt=prompt,
-            lyrics="",
+            lyrics=lyrics,
             audio_duration=duration_s,
             guidance_scale=guidance_scale,
             manual_seeds=[seed],
@@ -200,16 +225,25 @@ async def generate_music(
             batch_size=1,
         )
 
-        logger.info("Music generated successfully at %s", output_path)
+        logger.info("ACE-Step generation completed. Output: %s", output_path)
 
+    except ImportError:
+        raise
+    except Exception as exc:
+        logger.error(
+            "ACE-Step generation failed: %s. prompt=%r, duration=%.1fs, seed=%d",
+            exc, prompt[:80], duration_s, seed,
+        )
+        raise RuntimeError(
+            f"ACE-Step music generation failed: {exc}. "
+            f"Prompt: {prompt[:80]!r}, Duration: {duration_s}s, Seed: {seed}"
+        ) from exc
     finally:
-        # __call__ already runs cleanup_memory(); just release the ref
         if pipeline is not None:
             del pipeline
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    # Validate output
     actual_duration_ms = _validate_output(output_path, duration_s)
 
     return MusicResult(
@@ -217,6 +251,6 @@ async def generate_music(
         duration_ms=actual_duration_ms,
         sample_rate=48000,
         seed=seed,
-        model_used="ACE-Step-v1-3.5B",
+        model_used="ACE-Step-v1.5",
         prompt=prompt,
     )

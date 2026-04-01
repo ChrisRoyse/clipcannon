@@ -56,9 +56,12 @@ class ProcessingConfig(BaseModel):
 class AudioConfig(BaseModel):
     """Audio generation and mixing configuration."""
 
-    music_model: str = "ace-step"
-    music_guidance_scale: float = 3.5
+    music_model: str = "ace-step-v1.5"
+    music_guidance_scale: float = 15.0
+    music_infer_steps: int = 100
     music_default_volume_db: float = -12
+    musicgen_model_size: str = "medium"
+    auto_music_tier: str = "auto"
     duck_under_speech: bool = True
     duck_level_db: float = -18
     sfx_on_transitions: bool = True
