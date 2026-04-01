@@ -1,4 +1,4 @@
-# MCP Tools Reference (51 Tools)
+# MCP Tools Reference (53 Tools)
 
 ## Tool Dispatch
 
@@ -15,13 +15,13 @@ The MCP server registers `list_tools()` -> `ALL_TOOL_DEFINITIONS` and `call_tool
 | `tools/billing_tools.py` | `dispatch_billing_tool` | 4 |
 | `tools/editing.py` | `dispatch_editing_tool` | 11 |
 | `tools/rendering.py` | `dispatch_rendering_tool` | 8 |
-| `tools/audio.py` | `dispatch_audio_tool` | 4 |
+| `tools/audio.py` | `dispatch_audio_tool` | 6 |
 | `tools/discovery.py` | `dispatch_discovery_tool` | 4 |
 | `tools/voice.py` | `dispatch_voice_tool` | 4 |
 | `tools/avatar.py` | `dispatch_avatar_tool` | 1 |
 | `tools/generate_video.py` | `dispatch_generate_tool` | 1 |
 
-Helper files: `tools/editing_defs.py`, `tools/editing_helpers.py`, `tools/rendering_defs.py`, `tools/discovery_defs.py`, `tools/voice_defs.py`, `tools/avatar_defs.py`, `tools/generate_defs.py`, `tools/storyboard.py`, `tools/understanding_search.py`, `tools/understanding_visual.py`, `tools/video_probe.py`.
+Helper files: `tools/editing_defs.py`, `tools/editing_helpers.py`, `tools/rendering_defs.py`, `tools/audio_defs.py`, `tools/audio_cleanup.py`, `tools/audio_smart.py`, `tools/discovery_defs.py`, `tools/voice_defs.py`, `tools/avatar_defs.py`, `tools/generate_defs.py`, `tools/storyboard.py`, `tools/understanding_search.py`, `tools/understanding_visual.py`, `tools/video_probe.py`.
 
 Note: `tools/provenance_tools.py` exports an empty `PROVENANCE_TOOL_DEFINITIONS` list. Provenance is accessed via the dashboard API and direct database queries.
 
@@ -149,23 +149,31 @@ Low-quality preview of a specific segment. No credits. Params: `project_id`, `ed
 
 ---
 
-## Audio Tools (4)
+## Audio Tools (6)
 
 ### clipcannon_generate_music
 
-AI music via ACE-Step v1.5 diffusion. Params: `project_id`, `edit_id`, `prompt`, `duration_s` (max 300), `seed`, `volume_db` (default -18).
+AI music generation. Supports ACE-Step v1.5 (GPU, 4+ GB VRAM) and Meta MusicGen (GPU). Params: `project_id`, `edit_id`, `prompt`, `duration_s`, `seed`, `volume_db` (default -18), `model` (ace-step/musicgen, default ace-step).
 
 ### clipcannon_compose_midi
 
-MIDI from presets, rendered to WAV via FluidSynth. Params: `project_id`, `edit_id`, `preset` (ambient_pad/upbeat_pop/corporate/dramatic/minimal_piano/intro_jingle), `duration_s` (max 600), `tempo_bpm`, `key`.
+MIDI from 12 presets, rendered to WAV via FluidSynth. Params: `project_id`, `edit_id`, `preset` (ambient_pad/upbeat_pop/corporate/dramatic/minimal_piano/intro_jingle/lofi_chill/cinematic_epic/tech_corporate/acoustic_folk/synth_wave/jazz_smooth), `duration_s`, `tempo_bpm`, `key`.
 
 ### clipcannon_generate_sfx
 
-Programmatic DSP sound effects. Params: `project_id`, `edit_id`, `sfx_type` (whoosh/riser/downer/impact/chime/tick/bass_drop/shimmer/stinger), `duration_ms` (default 500), `params`.
+Programmatic DSP sound effects. 13 types. Params: `project_id`, `edit_id`, `sfx_type` (whoosh/riser/downer/impact/chime/tick/bass_drop/shimmer/stinger/ambient_drone/ambient_texture/pad_swell/nature_bed), `duration_ms` (default 500), `params`.
 
 ### clipcannon_audio_cleanup
 
-Source audio cleanup. Params: `project_id`, `edit_id`, `operations[]` (noise_reduction/normalize/silence_trim/eq_adjust).
+Source audio cleanup. Params: `project_id`, `edit_id`, `operations[]` (noise_reduction/de_hum/de_ess/normalize_loudness), `hum_frequency` (50 or 60 Hz, default 50).
+
+### clipcannon_auto_music
+
+Video-aware automatic music generation. Analyzes edit emotion, pacing, and beat data to auto-select mood, tempo, and style. Params: `project_id`, `edit_id`, `style_override`, `tier` (ai/midi/auto, default auto), `duration_override_s`.
+
+### clipcannon_compose_music
+
+Compose music from natural language description via AI keyword analysis. CPU-only. Params: `project_id`, `edit_id`, `description`, `duration_s`, `tempo_bpm`, `key`, `energy` (low/medium/high).
 
 ---
 

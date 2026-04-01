@@ -17,7 +17,7 @@ ClipCannon runs as three separate processes, plus an optional voice agent:
 
 | Process | Port | Technology | Purpose |
 |---------|------|------------|---------|
-| MCP Server | stdio (or SSE on 3366) | `mcp` SDK + Python asyncio | Exposes 51 tools to AI assistants via MCP protocol |
+| MCP Server | stdio (or SSE on 3366) | `mcp` SDK + Python asyncio | Exposes 53 tools to AI assistants via MCP protocol |
 | License Server | 3100 | FastAPI + Uvicorn | Credit billing, HMAC balance integrity, Stripe webhooks |
 | Dashboard | 3200 | FastAPI + static HTML | Web UI for credits, projects, provenance, editing, review, and system health |
 | Voice Agent | 8765 (WebSocket) or local mic | Pipecat + FastAPI + PyAudio | Real-time voice assistant with wake word, ASR, LLM, TTS |
@@ -38,7 +38,7 @@ The MCP server uses stdio transport by default (the `clipcannon` console script)
 | Billing | `stripe>=8.0.0` (webhook handling, credit packages) |
 | Database | SQLite3 (stdlib) + `sqlite-vec>=0.1.0` (vector KNN search) |
 | GPU (optional) | `torch>=2.3.0`, `faster-whisper>=1.0.0`, `transformers>=4.40.0`, `sentence-transformers>=3.0.0`, `demucs>=4.0.0`, `librosa>=0.10.0` |
-| Audio (Phase 2) | `pydub` (audio mixing), `pedalboard` (effects processing), `midiutil` (MIDI composition), `pyfluidsynth` (MIDI rendering), `ace-step` (AI music generation) |
+| Audio (Phase 2) | `pydub` (audio mixing), `pedalboard` (effects processing), `midiutil` (MIDI composition), `pyfluidsynth` (MIDI rendering), `ace-step` (AI music generation), `audiocraft` (MusicGen music generation) |
 | Video (Phase 2) | `mediapipe` (face detection for smart cropping), `opencv-python` (scene analysis, frame processing), `rembg` (subject extraction) |
 | Voice (Phase 3) | Qwen3-TTS 1.7B (video voice synthesis), `marksverdhei/Qwen3-Voice-Embedding-12Hz-1.7B` (2048-dim ECAPA-TDNN speaker encoder), `resemble-enhance` (audio denoising + bandwidth extension) |
 | Multi-Voice | `MultiVoiceSynth` (`src/clipcannon/voice/multi_voice.py`): instant voice swapping for multi-speaker conversation generation |
@@ -47,7 +47,7 @@ The MCP server uses stdio transport by default (the `clipcannon` console script)
 
 ML dependencies are in the `[ml]` optional extra and are not required for the MCP server to start. Phase 2 audio/video dependencies are in the `[phase2]` optional extra. Phase 3 voice/avatar reuses the `[ml]` group. The voice agent has its own dependencies managed separately.
 
-## MCP Tools (51 Total)
+## MCP Tools (53 Total)
 
 ### Project Management (5 tools)
 
@@ -121,14 +121,16 @@ ML dependencies are in the `[ml]` optional extra and are not required for the MC
 | `clipcannon_get_scene_map` | Get scene map with time-window pagination: scene boundaries, face positions, webcam region, content area, pre-computed canvas regions for layouts A/B/C/D, aligned transcript. |
 | `clipcannon_preview_segment` | Low-quality preview of a specific segment. No credits. |
 
-### Audio Generation (4 tools)
+### Audio Generation (6 tools)
 
 | Tool | Description |
 |------|-------------|
-| `clipcannon_generate_music` | Generate AI music from a text prompt using ACE-Step v1.5 diffusion model (requires GPU). |
-| `clipcannon_compose_midi` | Compose MIDI from 6 presets (ambient_pad, upbeat_pop, corporate, dramatic, minimal_piano, intro_jingle) and render to WAV via FluidSynth. |
-| `clipcannon_generate_sfx` | Generate programmatic DSP sound effects (9 types: whoosh, riser, downer, impact, chime, tick, bass_drop, shimmer, stinger). |
-| `clipcannon_audio_cleanup` | Clean up source audio: noise reduction, normalization, silence trimming, EQ adjustment. |
+| `clipcannon_generate_music` | Generate AI music from a text prompt. Supports ACE-Step v1.5 (GPU, 4+ GB VRAM) and Meta MusicGen (GPU). Use `model` param to select. |
+| `clipcannon_compose_midi` | Compose MIDI from 12 presets (ambient_pad, upbeat_pop, corporate, dramatic, minimal_piano, intro_jingle, lofi_chill, cinematic_epic, tech_corporate, acoustic_folk, synth_wave, jazz_smooth) and render to WAV via FluidSynth. |
+| `clipcannon_generate_sfx` | Generate programmatic DSP sound effects (13 types: whoosh, riser, downer, impact, chime, tick, bass_drop, shimmer, stinger, ambient_drone, ambient_texture, pad_swell, nature_bed). |
+| `clipcannon_audio_cleanup` | Clean up source audio: noise reduction, de-hum, de-ess, loudness normalization. |
+| `clipcannon_auto_music` | Automatically analyze a video edit and generate matching background music using emotion, pacing, and beat data. Supports tier selection: ai (ACE-Step GPU), midi (CPU), or auto (AI with MIDI fallback). |
+| `clipcannon_compose_music` | Compose background music from a natural language description. Uses AI keyword analysis to select MIDI preset, tempo, and key, then composes and renders to WAV. CPU-only. |
 
 ### Voice (4 tools)
 
@@ -273,7 +275,7 @@ Async FFmpeg-based rendering pipeline with 7 platform-optimized encoding profile
 
 ### Audio Engine (`src/clipcannon/audio/`)
 
-Three-tier audio generation: AI music via ACE-Step v1.5 diffusion model (GPU), MIDI composition from 6 presets with FluidSynth rendering, and 9 programmatic DSP sound effects. Includes speech-aware audio mixing with automatic ducking, peak normalization, audio cleanup (noise reduction, normalization, silence trimming, EQ), and effects processing.
+Four-tier audio generation: AI music via ACE-Step v1.5 diffusion model (GPU) or Meta MusicGen (GPU), AI-enhanced MIDI composition from 12 presets with FluidSynth rendering and LLM-driven planning (Qwen3-8B), and 13 programmatic DSP sound effects. Includes video-aware music planning (reads emotion curves, pacing, and beat data to auto-select mood/tempo/style), speech-aware audio mixing with automatic ducking, peak normalization, audio cleanup (noise reduction, de-hum, de-ess, loudness normalization), and effects processing.
 
 ### Discovery Engine (`src/clipcannon/tools/discovery.py`)
 
@@ -297,4 +299,4 @@ Qwen3-8B LLM-based narrative structure analysis. Runs after transcription to ide
 
 ### Voice Agent (`src/voiceagent/`)
 
-Real-time conversational AI assistant with on-demand GPU lifecycle management. Lifecycle states: DORMANT (wake word only, zero GPU) -> LOADING (~10-20s model load) -> ACTIVE (full conversation) -> UNLOADING -> DORMANT. Two operation modes: `talk` (local mic via Pipecat + Ollama) and `serve` (WebSocket server for remote clients). Components: streaming ASR (faster-whisper Large v3), local LLM brain (Qwen3-14B FP8 via vLLM/Ollama), fast TTS (faster-qwen3-tts 0.6B with CUDA graphs, ~500ms TTFB), Silero VAD, wake word detection ("Hey Jarvis"), conversation state management, and SQLite-backed conversation logging. The voice agent pauses other GPU workers on activation and resumes them on deactivation to manage VRAM on shared GPUs. See [16_voice_agent.md](16_voice_agent.md) for full details.
+Real-time conversational AI assistant with on-demand GPU lifecycle management. Lifecycle states: DORMANT (wake word only, zero GPU) -> LOADING (~10-20s model load) -> ACTIVE (full conversation) -> UNLOADING -> DORMANT. Two operation modes: `talk` (local mic via Pipecat + Ollama) and `serve` (WebSocket server for remote clients). Components: streaming ASR (faster-whisper Large v3), local LLM brain (Qwen3-14B FP8 via vLLM/Ollama), fast TTS (faster-qwen3-tts 0.6B with CUDA graphs, ~500ms TTFB), Silero VAD, wake word detection ("Hey Jarvis"), always-on wake listener (lightweight VAD + whisper-tiny CPU process), acoustic echo cancellation (mic gating + spectral suppression for speaker playback), voice command detection (sentence embedding similarity), conversation state management, and SQLite-backed conversation logging. The voice agent pauses other GPU workers on activation and resumes them on deactivation to manage VRAM on shared GPUs. See [16_voice_agent.md](16_voice_agent.md) for full details.

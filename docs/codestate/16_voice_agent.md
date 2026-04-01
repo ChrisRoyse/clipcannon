@@ -98,6 +98,13 @@ FastAPI WebSocket server for remote clients. Loads all models immediately (no do
 
 - **WakeWordDetector** (`wake_word.py`): "Hey Jarvis" detection using openWakeWord with Silero VAD pre-filter. CPU-only, runs in dormant state.
 - **HotkeyActivator** (`hotkey.py`): Ctrl+Space keyboard activation via pynput.
+- **WakeListener** (`wake_listener.py`): Always-on lightweight wake word listener using Silero VAD (~1% CPU idle) + faster-whisper tiny (CPU, ~50ms per segment) + sentence embedding similarity for wake phrase matching. Launches the full Pipecat agent as a subprocess on detection, resumes listening when agent exits.
+
+### Audio Processing (`audio/`)
+
+- **AECFilter** (`aec_filter.py`): Two-layer acoustic echo cancellation for Pipecat: Layer 1 mic gating (silences mic during bot speech + echo tail), Layer 2 spectral suppression (attenuates frequencies matching echo reference). Designed for WSL2/PulseAudio speaker playback without headphones.
+- **EchoRefProcessor** (`echo_ref_processor.py`): Pipecat processor that captures speaker output audio frames as AEC reference signal and tracks bot speaking state for mic gating.
+- **VoiceCommandDetector** (`voice_command_detector.py`): Detects voice switch commands from ASR text using sentence embedding similarity (~5ms per query on CPU). Runs as Pipecat processor between STT and LLM, intercepting commands before they reach the LLM.
 
 ### Conversation (`conversation/`)
 

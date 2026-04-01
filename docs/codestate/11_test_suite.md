@@ -34,9 +34,9 @@ Test video: `testdata/2026-03-20 14-43-20.mp4` (209.9s, 2560x1440, 60fps h264).
 
 ---
 
-## Unit Tests (626 total across 43 files)
+## Unit Tests (663 total across 44 files)
 
-### ClipCannon Tests (425 tests, 24 files)
+### ClipCannon Tests (462 tests, 25 files)
 
 | File | Tests | Domain |
 |---|---|---|
@@ -63,6 +63,7 @@ Test video: `testdata/2026-03-20 14-43-20.mp4` (209.9s, 2560x1440, 60fps h264).
 | `test_voice_verify.py` | 16 | Multi-gate voice verification (WER, SECS, sanity) |
 | `test_voice_inference.py` | 5 | Qwen3-TTS voice synthesis |
 | `test_voice_data_prep.py` | 11 | Voice data preparation, profile CRUD |
+| `test_music_planner.py` | 37 | Music planner, auto_music/compose_music tools, mood mapping |
 | `integration/test_full_pipeline.py` | 22 | Full pipeline with real video |
 
 ### Voice Agent Tests (201 tests, 19 files)
@@ -113,7 +114,7 @@ Standalone forensic testing (`python tests/fsv_*.py`). Each script: imports ever
 ## Running
 
 ```bash
-pytest                              # Full suite (626 tests)
+pytest                              # Full suite (663 tests)
 pytest tests/voiceagent/            # Voice agent only (201 tests)
 pytest tests/integration/           # Integration only
 python tests/fsv_core_infrastructure.py  # Individual FSV script

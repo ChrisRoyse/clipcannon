@@ -59,14 +59,17 @@ src/
             preview.py                      # Preview generation: low-quality 540p preview clips, canvas layout preview frames, segment previews
 
         audio/                              # Audio generation engine
-            __init__.py                     # Re-exports MidiResult, MixResult, MusicResult, SfxResult, CleanupResult, PRESETS, SAMPLE_RATE, SUPPORTED_EFFECTS, SUPPORTED_CLEANUP_OPS, SUPPORTED_SFX_TYPES, all generation functions
+            __init__.py                     # Re-exports MidiResult, MidiPlan, MidiSection, MixResult, MusicResult, MusicBrief, SfxResult, CleanupResult, PRESETS, SAMPLE_RATE, SUPPORTED_EFFECTS, SUPPORTED_CLEANUP_OPS, SUPPORTED_SFX_TYPES, all generation functions
             effects.py                      # Audio effects chain via pedalboard: reverb, compression, eq_low_cut, eq_high_cut, limiter. apply_effects function
-            midi_compose.py                 # MIDI composition from 6 presets with theory-correct chord progressions, melody patterns, optional drums. compose_midi function, PresetConfig, MidiResult
+            midi_compose.py                 # MIDI composition from 12 presets with theory-correct chord progressions, melody patterns, optional drums. compose_midi, compose_midi_sectioned functions, PresetConfig, MidiResult
             midi_render.py                  # MIDI-to-WAV rendering via FluidSynth/SoundFont. render_midi_to_wav async function
+            midi_ai.py                      # LLM-driven MIDI planning: plan_midi_from_keywords (keyword matching), plan_midi_from_prompt (Qwen3-8B subprocess). MidiPlan, MidiSection
             mixer.py                        # Audio mixing with speech-aware ducking: mix_audio layers music+speech+SFX with RMS-based speech detection, peak normalization. MixResult
             music_gen.py                    # AI music generation via ACE-Step v1.5 diffusion model. generate_music async function, MusicResult
-            sfx.py                          # 9 DSP sound effects (whoosh, riser, downer, impact, chime, tick, bass_drop, shimmer, stinger). generate_sfx function, SfxResult
-            cleanup.py                      # Audio cleanup: noise reduction, normalization, silence trimming, EQ adjustment. cleanup_audio function, CleanupResult, SUPPORTED_CLEANUP_OPS
+            musicgen.py                     # AI music generation via Meta AudioCraft MusicGen (small/medium/large). generate_music_musicgen async function, windowed generation for >30s
+            music_planner.py                # Video-aware music planning: MusicPlanner.plan_for_edit reads emotion/pacing/beats data to auto-generate MusicBrief (mood, tempo, key, preset, ACE-Step prompt)
+            sfx.py                          # 13 DSP sound effects (whoosh, riser, downer, impact, chime, tick, bass_drop, shimmer, stinger, ambient_drone, ambient_texture, pad_swell, nature_bed). generate_sfx function, SfxResult
+            cleanup.py                      # Audio cleanup: noise reduction, de-hum, de-ess, loudness normalization. cleanup_audio function, CleanupResult, SUPPORTED_CLEANUP_OPS
 
         voice/                              # Voice cloning engine (Phase 3)
             __init__.py                     # Package docstring
@@ -83,7 +86,7 @@ src/
             lip_sync.py                     # LipSyncEngine: LatentSync 1.6 (ByteDance) diffusion pipeline, VAE + UNet3D + DDIM scheduler, 512x512 output, LipSyncResult
 
         tools/
-            __init__.py                     # Tool registry. Combines all tool definitions (51 total) and dispatcher functions from 13 modules into ALL_TOOL_DEFINITIONS and TOOL_DISPATCHERS
+            __init__.py                     # Tool registry. Combines all tool definitions (53 total) and dispatcher functions from 13 modules into ALL_TOOL_DEFINITIONS and TOOL_DISPATCHERS
             project.py                      # 5 project tools: create, open, list, status, delete
             provenance_tools.py             # Provenance tools (definitions exported but currently empty list; provenance accessed via dashboard/direct DB)
             disk.py                         # 2 disk tools: status, cleanup
@@ -98,7 +101,10 @@ src/
             editing_helpers.py              # Builder functions for EDL construction (build_segments, build_caption_spec, build_crop_spec, etc.), DB storage helpers
             rendering.py                    # 8 rendering tools: render, get_editing_context, analyze_frame, preview_clip, inspect_render, preview_layout, get_scene_map, preview_segment. dispatch_rendering_tool
             rendering_defs.py               # JSON schema definitions for 8 rendering MCP tools
-            audio.py                        # 4 audio tools: generate_music, compose_midi, generate_sfx, audio_cleanup. dispatch_audio_tool
+            audio.py                        # 6 audio tools: generate_music, compose_midi, generate_sfx, audio_cleanup, auto_music, compose_music. dispatch_audio_tool
+            audio_defs.py                   # JSON schema definitions for 6 audio MCP tools (separated from audio.py to keep under 500 lines)
+            audio_cleanup.py                # Audio cleanup tool implementation: source audio discovery, FFmpeg extraction fallback, cleanup execution
+            audio_smart.py                  # Smart music tool implementations: clipcannon_auto_music (video-aware), clipcannon_compose_music (NL description)
             discovery.py                    # 4 discovery tools: find_best_moments, find_cut_points, get_narrative_flow, find_safe_cuts. dispatch_discovery_tool
             discovery_defs.py               # JSON schema definitions for 4 discovery MCP tools
             feedback.py                     # Feedback intent parser: translates natural language feedback into structured EDL changes via regex + keyword detection
@@ -172,6 +178,7 @@ src/
         pipecat_agent.py                    # Pipecat-based pipeline: Whisper ASR + Ollama LLM + faster-qwen3-tts + Silero VAD + PyAudio transport. All local, no cloud APIs
         pipecat_tts.py                      # Pipecat TTS service wrapping FastTTSAdapter for frame-based streaming
         server.py                           # FastAPI app for WebSocket voice agent server
+        wake_listener.py                    # Always-on wake word listener: Silero VAD + faster-whisper tiny (CPU) + sentence embedding similarity. Launches Pipecat agent as subprocess on wake detection
 
         activation/
             __init__.py                     # Re-exports WakeWordDetector, HotkeyActivator
@@ -182,6 +189,12 @@ src/
             __init__.py                     # Re-exports
             clipcannon.py                   # ClipCannonAdapter: bridges voice agent TTS to ClipCannon's 1.7B voice engine
             fast_tts.py                     # FastTTSAdapter: faster-qwen3-tts 0.6B with CUDA graphs (~500ms TTFB), runtime voice switching, Full ICL mode
+
+        audio/
+            __init__.py                     # Re-exports
+            aec_filter.py                   # Acoustic Echo Cancellation filter for Pipecat: mic gating during bot speech + spectral suppression for residual echo
+            echo_ref_processor.py           # Pipecat processor: captures speaker output audio as AEC reference signal, tracks bot speaking state
+            voice_command_detector.py        # Voice command detector using sentence embedding similarity: intercepts switch commands between STT and LLM
 
         asr/
             __init__.py                     # Re-exports StreamingASR, VADFilter
@@ -271,10 +284,16 @@ clipcannon.tools.rendering
 
 clipcannon.tools.audio
     -> clipcannon.audio.music_gen (generate_music)
-    -> clipcannon.audio.midi_compose (compose_midi)
+    -> clipcannon.audio.musicgen (generate_music_musicgen)
+    -> clipcannon.audio.midi_compose (compose_midi, compose_midi_sectioned)
     -> clipcannon.audio.midi_render (render_midi_to_wav)
+    -> clipcannon.audio.midi_ai (plan_midi_from_keywords, plan_midi_from_prompt)
+    -> clipcannon.audio.music_planner (MusicPlanner)
     -> clipcannon.audio.sfx (generate_sfx)
     -> clipcannon.audio.cleanup (cleanup_audio)
+    -> clipcannon.tools.audio_defs (AUDIO_TOOL_DEFINITIONS)
+    -> clipcannon.tools.audio_cleanup (run_audio_cleanup)
+    -> clipcannon.tools.audio_smart (clipcannon_auto_music, clipcannon_compose_music)
 
 clipcannon.tools.voice
     -> clipcannon.voice.data_prep (prepare_voice_training_data)
@@ -372,7 +391,7 @@ Defined in `pyproject.toml` under `[project.scripts]`:
 clipcannon = "clipcannon.server:main"
 ```
 
-Calls `server.main()` which sets up structured JSON logging to stderr, creates the MCP Server with all 51 tools registered, and runs it on stdio transport via `asyncio.run(run_stdio())`.
+Calls `server.main()` which sets up structured JSON logging to stderr, creates the MCP Server with all 53 tools registered, and runs it on stdio transport via `asyncio.run(run_stdio())`.
 
 ### Narrative LLM stage dependencies
 
