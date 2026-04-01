@@ -7,7 +7,7 @@ name = "clipcannon"
 version = "0.1.0"
 description = "AI-powered video understanding and editing pipeline via MCP"
 readme = "README.md"
-license = "MIT"
+license = "BSL-1.1"
 requires-python = ">=3.12"
 authors = [
     { name = "ClipCannon Team" },

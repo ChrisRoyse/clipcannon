@@ -853,4 +853,4 @@ The system's architecture -- local-first execution, tamper-evident provenance, c
 
 ---
 
-*ClipCannon is open-source software licensed under MIT. For more information, visit the project repository.*
+*ClipCannon is source-available under the Business Source License 1.1. Free to use, modify, and self-host. Converts to Apache 2.0 on 2030-03-31. For commercial licensing inquiries, visit the project repository.*

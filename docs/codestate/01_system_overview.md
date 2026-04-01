@@ -2,7 +2,7 @@
 
 **Version**: 0.1.0 (Phase 1 + Phase 2 + Phase 3 + Voice Agent)
 **Python**: >=3.12
-**License**: MIT
+**License**: BSL 1.1 (converts to Apache 2.0 on 2030-03-31)
 **Build System**: Hatchling
 
 ## What ClipCannon Is

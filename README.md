@@ -5,7 +5,7 @@
 **AI-powered video understanding, editing, and voice synthesis -- all running locally on your GPU.**
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg?style=flat-square)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg?style=flat-square)](LICENSE)
+[![License: BSL 1.1](https://img.shields.io/badge/license-BSL_1.1-orange.svg?style=flat-square)](LICENSE)
 [![MCP Protocol](https://img.shields.io/badge/MCP-compatible-purple.svg?style=flat-square)](https://modelcontextprotocol.io)
 [![Tests](https://img.shields.io/badge/tests-626_passing-brightgreen.svg?style=flat-square)](#testing)
 [![Tools](https://img.shields.io/badge/MCP_tools-51-orange.svg?style=flat-square)](#mcp-tools)
@@ -418,7 +418,9 @@ Contributions are welcome. Please:
 
 ## License
 
-[MIT](LICENSE) -- Chris Royse, 2026
+[Business Source License 1.1](LICENSE) -- Chris Royse, 2026
+
+You can use, modify, and self-host ClipCannon freely. The one restriction: you cannot use it to offer a competing commercial Video Production Service to third parties. On **2030-03-31** (or 4 years after each version's release), the license automatically converts to **Apache 2.0**.
 
 ---
 
