@@ -32,6 +32,8 @@ ClipCannon is an MCP server that turns any AI assistant into a professional vide
 
 **The core idea**: instead of scrubbing through hours of footage manually, let an AI understand the content through neural embeddings and structured analysis, then have a conversation about what to create.
 
+www.clipcannon.com
+
 ```
 You: "Find the most emotionally intense moments and create a 60-second TikTok highlight reel"
 Claude: [uses clipcannon tools to find moments, create edit, render 1080x1920 clip with captions]
