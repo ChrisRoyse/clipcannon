@@ -39,16 +39,18 @@ AVATAR_TOOL_DEFINITIONS: list[Tool] = [
                 },
                 "inference_steps": {
                     "type": "integer",
-                    "default": 20,
+                    "default": 30,
                     "description": (
-                        "Diffusion steps: 20 = good quality, 30-40 = better, 10 = faster"
+                        "Diffusion steps: 30 = good quality (default), "
+                        "40 = best, 20 = faster, 10 = draft"
                     ),
                 },
                 "guidance_scale": {
                     "type": "number",
-                    "default": 1.5,
+                    "default": 2.0,
                     "description": (
-                        "Classifier-free guidance: 1.5 = balanced, 2.0 = stronger lip sync"
+                        "Classifier-free guidance: 2.0 = good sync (default), "
+                        "1.5 = softer, 2.5 = strongest"
                     ),
                 },
                 "seed": {

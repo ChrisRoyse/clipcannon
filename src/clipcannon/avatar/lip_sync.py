@@ -322,6 +322,34 @@ class LipSyncEngine:
                 f"LatentSync completed but output not found at {output_path}"
             )
 
+        # LatentSync outputs 16kHz AAC audio (downsampled from input).
+        # Replace with the original high-quality audio to preserve
+        # 44.1kHz broadcast quality. The video timing already matches.
+        remuxed_path = output_path.parent / f"{output_path.stem}_hq{output_path.suffix}"
+        remux_cmd = [
+            "ffmpeg", "-y", "-loglevel", "error", "-nostdin",
+            "-i", str(output_path),
+            "-i", str(audio_path),
+            "-map", "0:v:0",      # video from lip-sync output
+            "-map", "1:a:0",      # audio from original input
+            "-c:v", "copy",       # no re-encode video
+            "-c:a", "aac", "-b:a", "192k",  # high-quality AAC
+            "-shortest",          # trim to shorter stream
+            "-movflags", "+faststart",
+            str(remuxed_path),
+        ]
+        remux_proc = subprocess.run(remux_cmd, capture_output=True, text=True)
+        if remux_proc.returncode == 0 and remuxed_path.exists():
+            # Replace original with remuxed version
+            output_path.unlink(missing_ok=True)
+            remuxed_path.rename(output_path)
+            logger.info("Audio remuxed: replaced 16kHz with original quality")
+        else:
+            logger.warning(
+                "Audio remux failed (keeping LatentSync audio): %s",
+                remux_proc.stderr.strip()[:200],
+            )
+
         # Probe output for metadata
         probe = subprocess.run(
             ["ffprobe", "-v", "quiet", "-print_format", "json",
