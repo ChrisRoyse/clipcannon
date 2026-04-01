@@ -43,6 +43,7 @@ async def _handle_lip_sync(arguments: dict[str, object]) -> dict[str, object]:
     inference_steps = int(arguments.get("inference_steps", 20))
     guidance_scale = float(arguments.get("guidance_scale", 1.5))
     seed = arguments.get("seed")
+    n_candidates = int(arguments.get("n_candidates", 1))
 
     if not project_id:
         return _error("MISSING_PARAMETER", "project_id is required")
@@ -76,14 +77,25 @@ async def _handle_lip_sync(arguments: dict[str, object]) -> dict[str, object]:
         from clipcannon.avatar.lip_sync import get_engine
 
         engine = get_engine()
-        result = engine.generate(
-            video_path=driver_path,
-            audio_path=audio_path,
-            output_path=output_path,
-            inference_steps=inference_steps,
-            guidance_scale=guidance_scale,
-            seed=int(seed) if seed is not None else None,
-        )
+
+        if n_candidates > 1:
+            result = engine.generate_best_of_n(
+                video_path=driver_path,
+                audio_path=audio_path,
+                output_path=output_path,
+                n_candidates=n_candidates,
+                inference_steps=inference_steps,
+                guidance_scale=guidance_scale,
+            )
+        else:
+            result = engine.generate(
+                video_path=driver_path,
+                audio_path=audio_path,
+                output_path=output_path,
+                inference_steps=inference_steps,
+                guidance_scale=guidance_scale,
+                seed=int(seed) if seed is not None else None,
+            )
     except FileNotFoundError as exc:
         return _error("PREREQUISITE_MISSING", str(exc))
     except RuntimeError as exc:
@@ -283,13 +295,15 @@ async def _handle_extract_webcam(
     output_id = f"webcam_{secrets.token_hex(6)}"
     output_path = avatar_dir / f"{output_id}.mp4"
 
-    # FFmpeg crop
+    # FFmpeg crop + force 25fps (LatentSync is hardcoded to 25fps;
+    # feeding 60fps causes audio-visual sync drift)
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error", "-nostdin",
         *ss_arg,
         "-i", str(source_path),
         *to_arg,
         "-vf", f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y}",
+        "-r", "25",
         "-c:v", "libx264", "-crf", "18",
         "-c:a", "aac",
         "-movflags", "+faststart",

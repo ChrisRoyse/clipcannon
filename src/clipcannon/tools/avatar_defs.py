@@ -55,7 +55,15 @@ AVATAR_TOOL_DEFINITIONS: list[Tool] = [
                 },
                 "seed": {
                     "type": "integer",
-                    "description": "Random seed for reproducibility",
+                    "description": "Random seed for reproducibility (ignored when n_candidates > 1)",
+                },
+                "n_candidates": {
+                    "type": "integer",
+                    "default": 1,
+                    "description": (
+                        "Generate N candidates with different seeds and pick "
+                        "the best. Set to 3-5 for quality mode. 1 = single generation."
+                    ),
                 },
             },
             "required": ["project_id", "audio_path", "driver_video_path"],
