@@ -46,9 +46,10 @@ class FastTTSAdapter:
     VOICE_DATA_DIR: str = "~/.clipcannon/voice_data"
     DEFAULT_DB: str = "~/.clipcannon/voice_profiles.db"
 
-    # Known real mic recordings (produce much better clones than Demucs clips)
+    # Best reference clips per voice (manually curated for quality)
     REAL_MIC_OVERRIDES: dict[str, str] = {
         "boris": "~/.clipcannon/projects/proj_f0101c2d/audio/chris_real_reference.wav",
+        "taylor": "~/.clipcannon/voice_data/taylor/wavs/clip_77702bd4_trimmed.wav",
     }
 
     def __init__(
@@ -64,7 +65,7 @@ class FastTTSAdapter:
         self._ref_text: str | None = None  # For Full ICL mode
         self._sample_rate = SAMPLE_RATE
         self._warmed_up = False
-        self._loaded_voices: dict[str, dict] = {}  # name -> {ref_audio, ref_text}
+        self._loaded_voices: dict[str, dict[str, str | None]] = {}
 
         # Find reference audio
         self._ref_audio, self._ref_text = self._find_reference_with_text(
@@ -86,6 +87,9 @@ class FastTTSAdapter:
 
         Args:
             voice_name: Name of the voice to switch to.
+
+        Raises:
+            TTSError: If no reference audio exists for the voice.
         """
         if voice_name == self._voice_name:
             return
@@ -100,17 +104,19 @@ class FastTTSAdapter:
 
         # Load new voice
         ref_audio, ref_text = self._find_reference_with_text(voice_name)
-        if ref_audio:
-            self._ref_audio = ref_audio
-            self._ref_text = ref_text
-            self._voice_name = voice_name
-            self._loaded_voices[voice_name] = {
-                "ref_audio": ref_audio,
-                "ref_text": ref_text,
-            }
-            logger.info("Switched to voice: %s (newly loaded)", voice_name)
-        else:
-            logger.warning("Could not find reference audio for voice: %s", voice_name)
+        if not ref_audio:
+            raise TTSError(
+                f"No reference audio for voice '{voice_name}'. "
+                f"Create a voice profile with reference recordings first."
+            )
+        self._ref_audio = ref_audio
+        self._ref_text = ref_text
+        self._voice_name = voice_name
+        self._loaded_voices[voice_name] = {
+            "ref_audio": ref_audio,
+            "ref_text": ref_text,
+        }
+        logger.info("Switched to voice: %s (newly loaded)", voice_name)
 
     @property
     def active_voice(self) -> str:
@@ -163,7 +169,8 @@ class FastTTSAdapter:
         try:
             from clipcannon.voice.profiles import get_voice_profile
             profile = get_voice_profile(db, voice_name)
-        except Exception:
+        except (ImportError, OSError, KeyError) as e:
+            logger.debug("Voice profile lookup failed for %s: %s", voice_name, e)
             profile = None
 
         if profile:
@@ -208,7 +215,7 @@ class FastTTSAdapter:
             text = " ".join(s.text.strip() for s in segs)
             logger.info("Transcribed ref (%d chars): %s...", len(text), text[:60])
             return text if text.strip() else None
-        except Exception as e:
+        except (ImportError, OSError, RuntimeError) as e:
             logger.warning("Transcription failed for %s: %s", audio_path, e)
             return None
 
@@ -235,13 +242,28 @@ class FastTTSAdapter:
         logger.info("faster-qwen3-tts loaded")
         return self._engine
 
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Estimate max TTS tokens from character count.
+
+        At 12Hz token rate, 1 token = ~83ms of audio.
+        English speech averages 14-16 characters per second.
+        Formula: (chars / 14) * 12 tokens/sec * 1.3 headroom.
+        """
+        chars = len(text.strip())
+        tokens = int(chars / 14.0 * 12.0 * 1.3)
+        # Min 12 tokens (1s) for prosodic closure, max 360 (30s)
+        return max(12, min(tokens, 360))
+
     def _clone_kwargs(
-        self, text: str, max_new_tokens: int = 256,
+        self, text: str, max_new_tokens: int | None = None,
     ) -> dict:
         """Build kwargs for generate_voice_clone.
 
         Uses Full ICL when ref_text is available (better accent/cadence),
         falls back to xvec_only when only ref_audio is available.
+        Scales temperature down for short utterances to make EOS
+        prediction more reliable (prevents runaway generation).
 
         Raises:
             TTSError: If no reference audio is loaded.
@@ -252,13 +274,22 @@ class FastTTSAdapter:
                 f"Provide a voice profile or place WAV files in "
                 f"{self.VOICE_DATA_DIR}/{self._voice_name}/wavs/"
             )
+        if max_new_tokens is None:
+            max_new_tokens = self._estimate_tokens(text)
+
+        # Lower temperature for short text = more reliable EOS detection
+        text_len = len(text.strip())
+        temperature = 0.3 if text_len < 30 else 0.5
+        top_p = 0.7 if text_len < 30 else 0.85
+
         kwargs: dict = {
             "text": text,
             "language": "English",
             "ref_audio": self._ref_audio,
-            "temperature": 0.5,
-            "top_p": 0.85,
+            "temperature": temperature,
+            "top_p": top_p,
             "max_new_tokens": max_new_tokens,
+            "repetition_penalty": 1.2,
         }
         if self._ref_text:
             kwargs["ref_text"] = self._ref_text
@@ -268,20 +299,96 @@ class FastTTSAdapter:
         return kwargs
 
     def _warmup(self) -> None:
-        """Warm up CUDA graphs on first call."""
+        """Warm up CUDA graphs at multiple sequence lengths.
+
+        Three passes at short/medium/long to populate graph caches
+        for varying input sizes, preventing recompilation during use.
+        """
         if self._warmed_up:
             return
         engine = self._ensure_engine()
-        logger.info("Warming up CUDA graphs...")
-        engine.generate_voice_clone(**self._clone_kwargs("Warmup.", max_new_tokens=64))
+        logger.info("Warming up CUDA graphs (3 passes)...")
+        warmup_cases = [
+            ("Hi.", 12),
+            ("I'm ready to help you today.", 36),
+            ("The quick brown fox jumps over the lazy dog near the river bank.", 96),
+        ]
+        for text, tokens in warmup_cases:
+            engine.generate_voice_clone(
+                **self._clone_kwargs(text, max_new_tokens=tokens),
+            )
         self._warmed_up = True
         logger.info("CUDA graphs ready (mode=%s)", "ICL" if self._ref_text else "xvec")
+
+    @staticmethod
+    def _trim_silence(audio: np.ndarray, sr: int = 24000) -> np.ndarray:
+        """Trim trailing silence and degraded audio from TTS output.
+
+        Two-pass trimming:
+        1. Forward pass: find where speech energy drops significantly
+           compared to the peak energy (catches garbled/degraded tail)
+        2. Backward pass: find last non-silent window (catches silence)
+
+        This prevents both:
+        - Silence padding (model generates tokens past EOS)
+        - Voice quality degradation (model output becomes generic/garbled)
+        """
+        if len(audio) == 0:
+            return audio
+
+        window = int(sr * 0.1)  # 100ms windows
+        silence_threshold = 0.003
+
+        # Forward pass: compute energy per window, find where it drops
+        energies = []
+        for i in range(0, len(audio) - window, window):
+            chunk = audio[i : i + window]
+            rms = float(np.sqrt(np.mean(chunk ** 2)))
+            energies.append(rms)
+
+        if not energies:
+            return audio
+
+        # Find the peak energy in the first half (where real speech is)
+        half = max(1, len(energies) // 2)
+        peak_energy = max(energies[:half]) if any(e > 0 for e in energies[:half]) else 0.01
+
+        # Find where energy drops below 10% of peak for 3+ consecutive windows
+        # This catches the transition from real speech to garbled/degraded output
+        cutoff_window = len(energies)
+        consecutive_low = 0
+        for i, e in enumerate(energies):
+            if e < peak_energy * 0.1:
+                consecutive_low += 1
+                if consecutive_low >= 3:
+                    cutoff_window = i - 2  # Back up to start of low region
+                    break
+            else:
+                consecutive_low = 0
+
+        # Backward pass: from cutoff, find last non-silent window
+        last_speech = cutoff_window * window
+        for i in range(min(cutoff_window, len(energies)) - 1, -1, -1):
+            if energies[i] > silence_threshold:
+                last_speech = (i + 1) * window + int(sr * 0.15)  # 150ms pad
+                break
+
+        last_speech = min(last_speech, len(audio))
+        if last_speech < len(audio):
+            audio = audio[:last_speech]
+            # Gentle 50ms fade-out
+            fade_len = min(int(sr * 0.05), len(audio))
+            if fade_len > 0:
+                fade = np.linspace(1.0, 0.0, fade_len)
+                audio[-fade_len:] *= fade
+
+        return audio
 
     async def synthesize(self, text: str) -> np.ndarray:
         """Synthesize text to float32 audio array (non-streaming).
 
-        Returns complete audio after full generation.
-        ~500-900ms for short sentences after warmup.
+        Returns complete audio after full generation, with trailing
+        silence trimmed. ~500-900ms for short sentences after warmup.
         """
         if not text or not text.strip():
             raise TTSError("Cannot synthesize empty text.")
@@ -294,7 +401,8 @@ class FastTTSAdapter:
             wav = wavs[0]
             if not isinstance(wav, np.ndarray):
                 wav = wav.cpu().numpy()
-            return wav.astype(np.float32)
+            wav = wav.astype(np.float32)
+            return self._trim_silence(wav, sr)
 
         return await asyncio.to_thread(_generate)
 
@@ -327,7 +435,7 @@ class FastTTSAdapter:
                 for chunk_audio, sr, _info in engine.generate_voice_clone_streaming(**kwargs):
                     self._sample_rate = sr
                     q.put(chunk_audio.astype(np.float32))
-            except Exception as e:
+            except (TTSError, RuntimeError, OSError) as e:
                 logger.error("TTS streaming error: %s", e)
             finally:
                 q.put(None)  # sentinel

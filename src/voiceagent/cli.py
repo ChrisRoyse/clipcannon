@@ -67,6 +67,20 @@ def talk(voice: str) -> None:
         click.echo("Shutting down...")
 
 
+@cli.command()
+@click.option("--voice", default="boris", show_default=True, help="Default voice profile")
+@click.option("--threshold", default=0.72, show_default=True, help="Wake phrase similarity threshold")
+def listen(voice: str, threshold: float) -> None:
+    """Always-on wake word listener. Say 'Hey Jarvis' to activate."""
+    from voiceagent.wake_listener import WakeWordListener
+
+    listener = WakeWordListener(voice_name=voice, threshold=threshold)
+    try:
+        listener.run()
+    except KeyboardInterrupt:
+        click.echo("Shutting down...")
+
+
 @cli.command(name="talk-legacy")
 @click.option("--voice", default="boris", show_default=True, help="ClipCannon voice profile name")
 def talk_legacy(voice: str) -> None:

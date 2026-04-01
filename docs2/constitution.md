@@ -63,7 +63,7 @@
 
   <!-- ML Models — Voice Agent (real-time conversational AI, separate from ClipCannon) -->
   <voice_agent_models>
-    <model name="Qwen3-14B-FP8" version="latest" vram_fp8="~14GB" license="Apache-2.0">Conversational LLM brain (vLLM, 0.45 GPU utilization)</model>
+    <model name="Qwen3-14B" version="latest" vram="~14GB" license="Apache-2.0">Conversational LLM brain (Ollama GGUF serving, ~120 tok/s local)</model>
     <model name="faster-whisper-large-v3" version="large-v3" license="MIT">Streaming ASR with VAD endpointing</model>
     <model name="faster-qwen3-tts" version="0.6B" license="Apache-2.0">Low-latency TTS (~500ms TTFB) with CUDA graphs, Full ICL mode</model>
     <model name="silero-vad" version="5.0" vram_nvfp4="0GB" license="MIT">Voice activity detection for endpointing (CPU)</model>
@@ -105,9 +105,12 @@
 
   <!-- Voice Agent Libraries -->
   <required_libraries_voice_agent>
-    <library version="latest">vllm (Qwen3-14B-FP8 LLM serving)</library>
+    <library version="latest">pipecat-ai (frame-based voice agent pipeline framework)</library>
+    <library version="latest">ollama (Qwen3-14B GGUF local LLM serving)</library>
     <library version="latest">faster-whisper (streaming ASR)</library>
     <library version="latest">pyaudio (local audio capture/playback)</library>
+    <library version="latest">pyroomacoustics (NLMS adaptive echo cancellation)</library>
+    <library version="latest">sentence-transformers (voice command detection embeddings)</library>
     <library version="latest">websockets (WebSocket transport)</library>
     <library version="latest">numpy (audio buffer processing)</library>
   </required_libraries_voice_agent>
@@ -249,6 +252,9 @@ clipcannon/
 │       ├── errors.py                  # VoiceAgentError hierarchy (ASR, TTS, LLM, Config, Transport)
 │       ├── gpu_manager.py             # GPU memory management for voice agent models
 │       ├── server.py                  # WebSocket server (FastAPI)
+│       ├── pipecat_agent.py           # Pipecat-based voice pipeline (Ollama LLM + faster-qwen3-tts + AEC)
+│       ├── pipecat_tts.py             # Pipecat TTS service wrapping FastTTSAdapter for frame-based pipeline
+│       ├── wake_listener.py           # Always-on wake word listener (Silero VAD + faster-whisper tiny on CPU)
 │       ├── activation/                # Wake word and hotkey activation
 │       │   ├── wake_word.py           # Configurable wake word detection with audio feedback
 │       │   └── hotkey.py              # Push-to-talk hotkey activation
@@ -260,8 +266,12 @@ clipcannon/
 │       │   ├── endpointing.py         # Silence-based endpoint detection
 │       │   ├── vad.py                 # Silero VAD integration
 │       │   └── types.py               # ASR result types
+│       ├── audio/                     # Audio processing utilities
+│       │   ├── aec_filter.py          # NLMS adaptive echo cancellation filter (pyroomacoustics)
+│       │   ├── echo_ref_processor.py  # Echo reference signal capture for AEC
+│       │   └── voice_command_detector.py # Voice command detection via sentence embedding similarity
 │       ├── brain/                     # LLM reasoning
-│       │   ├── llm.py                 # Qwen3-14B-FP8 via vLLM
+│       │   ├── llm.py                 # Qwen3-14B via Ollama (GGUF, ~120 tok/s local)
 │       │   ├── context.py             # Conversation context management
 │       │   └── prompts.py             # System prompt templates
 │       ├── conversation/              # Conversation state management
@@ -348,7 +358,7 @@ clipcannon/
 │   └── publish/                       # ArXiv report, HuggingFace model card, Gradio demo app
 ├── assets/
 │   └── profanity/                     # Profanity word list
-├── docs/codestate/                    # 15 codestate reference documents
+├── docs/codestate/                    # 16 codestate reference documents
 ├── docs2/                             # PRD, planning, and guide documents
 ├── Dockerfile
 ├── pyproject.toml
@@ -473,13 +483,17 @@ clipcannon/
   <voice_agent_architecture>
     <rule id="ARCH-70">Voice agent (Jarvis) is a SEPARATE application from ClipCannon MCP — independent entry point, config, and model stack</rule>
     <rule id="ARCH-71">Voice agent uses faster-qwen3-tts 0.6B for low-latency TTS (~500ms TTFB); ClipCannon uses full 1.7B for video generation quality</rule>
-    <rule id="ARCH-72">LLM brain runs Qwen3-14B-FP8 via vLLM with 0.45 GPU memory utilization, max 150 output tokens for conversational speed</rule>
+    <rule id="ARCH-72">LLM brain runs Qwen3-14B via Ollama (GGUF, ~120 tok/s local), max 150 output tokens for conversational speed</rule>
     <rule id="ARCH-73">ASR uses faster-whisper-large-v3 with Silero VAD endpointing (600ms silence threshold)</rule>
     <rule id="ARCH-74">Conversation manager handles turn-taking, interruption detection, and history (max 50 turns)</rule>
     <rule id="ARCH-75">Transport layer supports both local audio (PyAudio) and WebSocket for remote clients</rule>
     <rule id="ARCH-76">Wake word engine supports configurable sensitivity, multi-keyword, and audio feedback</rule>
     <rule id="ARCH-77">Multi-voice synthesis enables voice swapping mid-conversation for scripted dialogue scenarios</rule>
     <rule id="ARCH-78">Voice agent config uses frozen dataclasses (immutable after creation), loaded from ~/.voiceagent/config.json</rule>
+    <rule id="ARCH-79">Pipecat frame-based pipeline handles streaming LLM→TTS, turn-taking, barge-in interruption, and AEC</rule>
+    <rule id="ARCH-80">Always-on wake listener runs as lightweight process (Silero VAD + faster-whisper tiny on CPU), launches full Pipecat agent on wake phrase detection</rule>
+    <rule id="ARCH-81">AEC uses NLMS adaptive filter (pyroomacoustics) + mic gating to prevent echo feedback during local speaker playback</rule>
+    <rule id="ARCH-82">Voice command detector uses sentence embedding similarity to intercept switch commands before they reach the LLM</rule>
   </voice_agent_architecture>
 
   <billing_architecture>
@@ -574,7 +588,7 @@ clipcannon/
 
   <!-- Voice Agent Performance -->
   <metric name="voice_agent_ttfb" target="< 500 milliseconds">Time to first audio byte from faster-qwen3-tts 0.6B</metric>
-  <metric name="voice_agent_llm_latency" target="< 2 seconds">Qwen3-14B-FP8 response generation (max 150 tokens)</metric>
+  <metric name="voice_agent_llm_latency" target="< 2 seconds">Qwen3-14B via Ollama response generation (max 150 tokens, ~120 tok/s)</metric>
   <metric name="voice_agent_asr_latency" target="< 300 milliseconds">Streaming ASR transcription latency</metric>
   <metric name="voice_agent_endpoint_silence" target="600 milliseconds">VAD silence threshold for turn-end detection</metric>
 

@@ -23,10 +23,13 @@ Echo cancellation:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -48,17 +51,15 @@ def _ensure_pulse_server() -> None:
                     logger.info(
                         "WSL2 PULSE_SERVER set to tcp:%s", parts[2],
                     )
-            except Exception:
-                pass
+            except (OSError, subprocess.TimeoutExpired) as e:
+                logger.debug("WSL2 PulseAudio detection failed: %s", e)
 
 
 def _ensure_ollama_running() -> None:
     """Verify Ollama is running and has qwen3:14b loaded."""
-    import urllib.request
     try:
         req = urllib.request.Request("http://localhost:11434/api/tags")
         with urllib.request.urlopen(req, timeout=3) as resp:
-            import json
             data = json.loads(resp.read())
             models = [m["name"] for m in data.get("models", [])]
             if not any("qwen3" in m for m in models):
@@ -68,7 +69,7 @@ def _ensure_ollama_running() -> None:
                 )
                 sys.exit(1)
             logger.info("Ollama OK: %s", models)
-    except Exception as e:
+    except (urllib.error.URLError, OSError, ValueError) as e:
         logger.error(
             "Ollama not running at localhost:11434: %s. "
             "Start it with: ollama serve",
@@ -100,13 +101,16 @@ async def run_agent(voice_name: str = "boris") -> None:
 
     from voiceagent.audio.aec_filter import AECFilter
     from voiceagent.audio.echo_ref_processor import EchoReferenceProcessor
+    from voiceagent.audio.voice_command_detector import (
+        SleepCommandDetector,
+        VoiceCommandDetector,
+    )
     from voiceagent.pipecat_tts import FastQwen3TTSService
 
     # --- AEC: Echo cancellation filter ---
     aec_filter = AECFilter(
-        filter_taps=4800,   # 300ms impulse response at 16kHz
-        mu=0.4,             # NLMS step size
-        echo_tail_ms=600,   # Echo tail window after bot stops
+        echo_tail_ms=400,   # Silence mic for 400ms after bot stops
+        fade_in_ms=100,     # Quick fade-in after echo tail
     )
 
     # --- Transport: local mic + speaker with AEC ---
@@ -118,10 +122,10 @@ async def run_agent(voice_name: str = "boris") -> None:
             vad_enabled=True,
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
-                    confidence=0.8,    # Higher = less false positives from echo
-                    start_secs=0.3,    # Require 300ms of speech to trigger
+                    confidence=0.7,    # Default confidence
+                    start_secs=0.2,    # Require 200ms of speech to trigger
                     stop_secs=0.5,     # Require 500ms silence to end turn
-                    min_volume=0.8,    # Higher = reject quieter echo
+                    min_volume=0.01,   # Low threshold -- AEC handles echo, not volume gating
                 ),
             ),
             audio_out_sample_rate=24000,
@@ -129,7 +133,7 @@ async def run_agent(voice_name: str = "boris") -> None:
         ),
     )
 
-    # --- ASR: local Whisper ---
+    # --- ASR: local Whisper (beam_size=1 for ~2x faster transcription) ---
     stt = WhisperSTTService(
         model="large-v3",
         device="cuda",
@@ -142,7 +146,7 @@ async def run_agent(voice_name: str = "boris") -> None:
         model="qwen3:14b-nothink",
         base_url="http://localhost:11434/v1",
         settings=OllamaLLMSettings(
-            max_tokens=150,
+            max_tokens=512,
             temperature=0.6,
             top_p=0.8,
             top_k=20,
@@ -155,18 +159,18 @@ async def run_agent(voice_name: str = "boris") -> None:
     # --- Echo reference processor (feeds speaker audio to AEC) ---
     echo_ref = EchoReferenceProcessor(aec_filter=aec_filter)
 
-    # --- System prompt (concise, voice-optimized) ---
+    # --- System prompt (clean, no voice switching logic) ---
     from datetime import datetime
 
     messages = [
         {
             "role": "system",
             "content": (
-                f"You are Boris, a personal AI voice assistant for "
-                f"Chris Royse. You speak naturally and concisely. "
+                f"You are a personal AI voice assistant for Chris Royse. "
+                f"You speak naturally and concisely. "
                 f"This is a SPOKEN conversation -- keep responses to "
                 f"1-3 sentences. No markdown, no lists, no formatting. "
-                f"No reasoning or thinking out loud. "
+                f"No reasoning or thinking out loud. No emojis. "
                 f"Current time: {datetime.now().isoformat()}."
             ),
         },
@@ -175,13 +179,33 @@ async def run_agent(voice_name: str = "boris") -> None:
     context = OpenAILLMContext(messages)
     context_aggregator = llm.create_context_aggregator(context)
 
+    # --- Voice command detector (embedding-based, no LLM involvement) ---
+    async def on_voice_switch(target_voice: str) -> None:
+        """Called by the command detector when a switch is detected."""
+        logger.info("Voice command detected -> switching to: %s", target_voice)
+        try:
+            tts.switch_voice(target_voice)
+            logger.info("Voice switched to %s", target_voice)
+        except (RuntimeError, OSError, ValueError) as e:
+            logger.error("Voice switch failed: %s", e)
+
+    voice_cmd_detector = VoiceCommandDetector(
+        voice_names=["boris", "taylor"],
+        switch_callback=on_voice_switch,
+        threshold=0.78,
+    )
+    sleep_detector = SleepCommandDetector()
+
     # --- Pipeline ---
-    # Echo ref processor sits between TTS and output transport to
-    # capture speaker audio and bot speaking state for AEC
+    # Voice command detector sits between STT and LLM context aggregator.
+    # It intercepts switch commands (detected via embeddings) and blocks
+    # them from reaching the LLM. Normal speech passes through.
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
+            sleep_detector,
+            voice_cmd_detector,
             context_aggregator.user(),
             llm,
             tts,

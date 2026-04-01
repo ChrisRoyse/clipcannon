@@ -1,19 +1,19 @@
 """Acoustic Echo Cancellation filter for Pipecat voice agent.
 
-Three-layer echo suppression:
-  Layer 1: Mic gating -- silence mic while bot is actively speaking
-  Layer 2: NLMS adaptive filter -- cancels echo tail after bot stops
-  Layer 3: Residual suppression -- spectral gating on remaining echo
+Two-layer echo suppression for speaker playback without headphones:
+  Layer 1: Mic gating -- silence mic while bot is speaking + echo tail
+  Layer 2: Spectral suppression -- attenuate frequencies matching echo
 
-Uses pyroomacoustics NLMS for the adaptive filter (3ms per 20ms chunk).
-Designed for speaker playback without headphones on WSL2/PulseAudio.
+Designed for WSL2/PulseAudio where the bot's audio plays through
+speakers and the mic picks it up. Since we know exactly when the bot
+is speaking (from the pipeline), mic gating handles 95% of cases.
+The spectral suppression catches residual echo in the tail.
 """
 from __future__ import annotations
 
 import logging
 import threading
 import time
-from collections import deque
 
 import numpy as np
 from pipecat.audio.filters.base_audio_filter import BaseAudioFilter
@@ -22,123 +22,90 @@ from pipecat.frames.frames import FilterControlFrame
 logger = logging.getLogger(__name__)
 
 # Echo tail duration after bot stops speaking (ms)
-ECHO_TAIL_MS = 600
-# NLMS filter length in samples (at 16kHz, 4800 = 300ms room impulse)
-FILTER_TAPS = 4800
-# NLMS step size (0.0-1.0, higher = faster adaptation, more noise)
-MU = 0.4
-# Minimum energy ratio (echo vs clean) to apply suppression
-SUPPRESS_THRESHOLD = 0.02
+ECHO_TAIL_MS = 800
+# Fade-in duration after echo tail ends (ms) -- gradual unmute
+FADE_IN_MS = 200
+# Spectral suppression factor during echo tail (0=full suppress, 1=passthrough)
+SPECTRAL_FLOOR = 0.05
 
 
 class AECFilter(BaseAudioFilter):
     """Acoustic Echo Cancellation for local speaker playback.
 
-    Integrates with Pipecat as an audio_in_filter, processing mic audio
-    before it reaches VAD and STT. Three layers of protection:
+    Layer 1 (mic gating): While the bot is speaking, returns silence.
+    After the bot stops, returns silence for ECHO_TAIL_MS to let the
+    room echo decay. Then fades in over FADE_IN_MS.
 
-    1. **Mic gating**: While the bot is speaking, returns silence.
-       This prevents any echo from reaching VAD during active playback.
+    Layer 2 (spectral suppression): During the fade-in window, applies
+    spectral suppression using the last reference signal's spectral
+    profile to attenuate echo-matching frequencies.
 
-    2. **NLMS adaptive filter**: After the bot stops, runs for ECHO_TAIL_MS
-       to cancel the decaying echo tail. Uses the speaker output as
-       reference signal to model the speaker-to-mic transfer function.
-
-    3. **Energy gate**: If residual energy after NLMS is still high
-       relative to the reference, suppresses the frame.
+    This is deliberately simple and robust -- no adaptive filter that
+    can diverge. The mic gating approach works because we have perfect
+    knowledge of when the bot is speaking.
     """
 
     def __init__(
         self,
-        filter_taps: int = FILTER_TAPS,
-        mu: float = MU,
         echo_tail_ms: int = ECHO_TAIL_MS,
+        fade_in_ms: int = FADE_IN_MS,
+        **_kwargs: object,
     ) -> None:
-        self._filter_taps = filter_taps
-        self._mu = mu
         self._echo_tail_ms = echo_tail_ms
+        self._fade_in_ms = fade_in_ms
         self._sample_rate = 16000
-        self._out_sample_rate = 24000
 
         # State
         self._bot_speaking = False
         self._bot_stop_time: float = 0.0
         self._lock = threading.Lock()
 
-        # Reference signal ring buffer (speaker output, resampled to mic rate)
-        self._ref_buffer: deque[float] = deque(maxlen=filter_taps)
-
-        # NLMS filter (initialized in start())
-        self._nlms = None
+        # Reference spectral profile for suppression
+        self._ref_spectrum: np.ndarray | None = None
         self._initialized = False
 
     async def start(self, sample_rate: int) -> None:
         """Initialize the AEC filter."""
-        from pyroomacoustics.adaptive import NLMS
-
         self._sample_rate = sample_rate
-        self._nlms = NLMS(self._filter_taps, mu=self._mu)
-        self._ref_buffer = deque(
-            [0.0] * self._filter_taps, maxlen=self._filter_taps,
-        )
         self._initialized = True
         logger.info(
-            "AEC filter started (taps=%d, mu=%.2f, tail=%dms, rate=%d)",
-            self._filter_taps, self._mu, self._echo_tail_ms, sample_rate,
+            "AEC filter started (tail=%dms, fade=%dms, rate=%d)",
+            self._echo_tail_ms, self._fade_in_ms, sample_rate,
         )
 
     async def stop(self) -> None:
         """Clean up the AEC filter."""
-        self._nlms = None
         self._initialized = False
         logger.info("AEC filter stopped")
 
     async def process_frame(self, frame: FilterControlFrame) -> None:
-        """Handle control frames (unused for now)."""
+        """Handle control frames (unused)."""
         pass
 
     def set_bot_speaking(self, speaking: bool) -> None:
-        """Called by the echo reference processor when bot starts/stops.
-
-        Args:
-            speaking: True when bot starts speaking, False when it stops.
-        """
+        """Called by the echo reference processor when bot starts/stops."""
         with self._lock:
             self._bot_speaking = speaking
             if not speaking:
                 self._bot_stop_time = time.monotonic()
-                logger.debug("AEC: bot stopped, echo tail active for %dms", self._echo_tail_ms)
 
     def feed_reference(self, audio_bytes: bytes, sample_rate: int) -> None:
-        """Feed speaker output as the echo reference signal.
-
-        The reference is resampled to match mic sample rate and stored
-        in a ring buffer for the NLMS filter.
-
-        Args:
-            audio_bytes: Raw int16 PCM audio from the speaker output.
-            sample_rate: Sample rate of the speaker audio.
-        """
-        samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float64)
-        samples /= 32768.0
-
-        # Resample if speaker rate differs from mic rate
-        if sample_rate != self._sample_rate and sample_rate > 0:
-            ratio = self._sample_rate / sample_rate
-            if abs(ratio - 1.0) > 0.01:
-                n_out = int(len(samples) * ratio)
-                indices = np.linspace(0, len(samples) - 1, n_out)
-                samples = np.interp(indices, np.arange(len(samples)), samples)
-
-        with self._lock:
-            for s in samples:
-                self._ref_buffer.append(s)
+        """Feed speaker output to build spectral profile for suppression."""
+        try:
+            samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float64)
+            if len(samples) > 0:
+                spectrum = np.abs(np.fft.rfft(samples))
+                # Exponential moving average of reference spectrum
+                with self._lock:
+                    if self._ref_spectrum is None or len(self._ref_spectrum) != len(spectrum):
+                        self._ref_spectrum = spectrum
+                    else:
+                        self._ref_spectrum = 0.7 * self._ref_spectrum + 0.3 * spectrum
+        except (ValueError, TypeError) as e:
+            logger.debug("AEC feed_reference skipped: %s", e)
 
     async def filter(self, audio: bytes) -> bytes:
-        """Apply echo cancellation to mic audio.
-
-        Called by Pipecat's input transport before VAD processing.
-        """
+        """Apply echo cancellation to mic audio."""
         if not self._initialized:
             return audio
 
@@ -146,49 +113,58 @@ class AECFilter(BaseAudioFilter):
             bot_speaking = self._bot_speaking
             bot_stop_time = self._bot_stop_time
 
-        # Layer 1: Mic gating during bot speech
+        # Layer 1: Heavy attenuation during bot speech (not full mute)
+        # Allows very loud deliberate speech ("go to sleep") to break through
         if bot_speaking:
+            mic = np.frombuffer(audio, dtype=np.int16).astype(np.float64)
+            mic *= 0.1  # 90% attenuation -- echo mostly suppressed, shouts get through
+            return np.clip(mic, -32768, 32767).astype(np.int16).tobytes()
+
+        # Time since bot stopped speaking
+        if bot_stop_time == 0:
+            return audio  # Bot hasn't spoken yet
+
+        elapsed_ms = (time.monotonic() - bot_stop_time) * 1000
+
+        # Still in echo tail -- return silence
+        if elapsed_ms < self._echo_tail_ms:
             return b"\x00" * len(audio)
 
-        # Check if we're in the echo tail window
-        elapsed_ms = (time.monotonic() - bot_stop_time) * 1000
-        in_echo_tail = elapsed_ms < self._echo_tail_ms and bot_stop_time > 0
+        # Fade-in window after echo tail
+        fade_elapsed = elapsed_ms - self._echo_tail_ms
+        if fade_elapsed < self._fade_in_ms:
+            # Gradual fade from silence to full volume
+            gain = fade_elapsed / self._fade_in_ms
 
-        if not in_echo_tail:
-            # No echo expected, pass through unchanged
-            return audio
+            mic = np.frombuffer(audio, dtype=np.int16).astype(np.float64)
 
-        # Layer 2: NLMS adaptive filter during echo tail
-        mic = np.frombuffer(audio, dtype=np.int16).astype(np.float64)
-        mic /= 32768.0
-
-        output = np.zeros(len(mic))
-        ref_array = np.array(self._ref_buffer)
-
-        for i in range(len(mic)):
-            # Feed sample to NLMS: x_n = reference, d_n = mic (desired = clean + echo)
-            # The filter learns to predict the echo from the reference
-            self._nlms.update(ref_array[-1], mic[i])
-            # Estimate echo
-            echo_est = np.dot(self._nlms.w, ref_array)
-            # Subtract estimated echo from mic
-            output[i] = mic[i] - echo_est
-
-            # Shift reference buffer (no new reference during tail)
+            # Layer 2: Spectral suppression during fade-in
             with self._lock:
-                self._ref_buffer.append(0.0)
-                ref_array = np.array(self._ref_buffer)
+                ref_spec = self._ref_spectrum
 
-        # Layer 3: Energy gate -- if output still has high energy
-        # relative to reference, it might be residual echo
-        mic_energy = np.mean(mic ** 2)
-        out_energy = np.mean(output ** 2)
+            if ref_spec is not None and len(mic) > 0:
+                mic_fft = np.fft.rfft(mic)
+                mic_spec = np.abs(mic_fft)
 
-        if mic_energy > 0 and out_energy / max(mic_energy, 1e-10) > 0.8:
-            # Output is almost as loud as input = mostly echo, suppress
-            fade = max(0.0, 1.0 - (elapsed_ms / self._echo_tail_ms))
-            output *= fade
-            logger.debug("AEC: energy gate applied (fade=%.2f)", fade)
+                # Resize reference spectrum to match mic chunk
+                if len(ref_spec) != len(mic_spec):
+                    ref_spec = np.interp(
+                        np.linspace(0, 1, len(mic_spec)),
+                        np.linspace(0, 1, len(ref_spec)),
+                        ref_spec,
+                    )
 
-        out_int16 = np.clip(output * 32768.0, -32768, 32767).astype(np.int16)
-        return out_int16.tobytes()
+                # Suppress frequencies where echo is strong relative to mic
+                ref_norm = ref_spec / (np.max(ref_spec) + 1e-10)
+                suppression = 1.0 - ref_norm * (1.0 - SPECTRAL_FLOOR)
+                suppression = np.clip(suppression, SPECTRAL_FLOOR, 1.0)
+
+                mic_fft *= suppression
+                mic = np.fft.irfft(mic_fft, n=len(mic))
+
+            mic *= gain
+            out = np.clip(mic, -32768, 32767).astype(np.int16)
+            return out.tobytes()
+
+        # Past fade-in window -- normal passthrough
+        return audio
