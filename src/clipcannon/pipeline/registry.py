@@ -16,6 +16,7 @@ from clipcannon.pipeline.finalize import run_finalize
 from clipcannon.pipeline.frame_extract import run_frame_extract
 from clipcannon.pipeline.highlights import run_highlights
 from clipcannon.pipeline.narrative_llm import run_narrative_llm
+from clipcannon.pipeline.prosody_analysis import run_prosody_analysis
 from clipcannon.pipeline.ocr import run_ocr
 from clipcannon.pipeline.orchestrator import PipelineOrchestrator, PipelineStage
 from clipcannon.pipeline.probe import run_probe
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
 #           scene_analysis -> frame_extract, transcribe
 #           semantic_embed, speaker_embed, narrative_llm -> transcribe
 #           emotion_embed, reactions, acoustic -> audio_extract
+# Level 4.5: prosody_analysis -> source_separation, transcribe
 # Level 5: profanity -> transcribe
 #           chronemic -> transcribe, speaker_embed
 # Level 6: highlights -> emotion, reactions, semantic, visual, quality,
@@ -126,6 +128,11 @@ _STAGES: list[PipelineStage] = [
         depends_on=["audio_extract"], run=run_acoustic, timeout_s=300,
     ),
     PipelineStage(
+        name="prosody_analysis", operation="prosody_analysis", required=False,
+        depends_on=["source_separation", "transcribe"], run=run_prosody_analysis,
+        timeout_s=300,
+    ),
+    PipelineStage(
         name="profanity", operation="profanity_detection", required=False,
         depends_on=["transcribe"], run=run_profanity, timeout_s=120,
     ),
@@ -147,7 +154,7 @@ _STAGES: list[PipelineStage] = [
             "transcribe", "visual_embed", "ocr", "quality",
             "shot_type", "storyboard", "semantic_embed", "narrative_llm",
             "speaker_embed", "emotion_embed", "reactions", "acoustic",
-            "profanity", "chronemic", "highlights",
+            "profanity", "chronemic", "highlights", "prosody_analysis",
         ],
         run=run_finalize, timeout_s=120,
     ),

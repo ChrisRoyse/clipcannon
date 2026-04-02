@@ -254,3 +254,71 @@ def _write_manifest(path: Path, clips: list[_ClipInfo]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for clip in clips:
             f.write(f"{clip.wav_path}|{clip.phonemes}|{clip.speaker_label}\n")
+
+
+def export_prosody_manifest(
+    project_ids: list[str],
+    output_dir: Path,
+    projects_base: Path,
+) -> Path | None:
+    """Export prosody metadata for all clips across projects.
+
+    Reads the prosody_segments table and writes a JSON manifest
+    that maps each clip path to its prosody tags.
+
+    Args:
+        project_ids: Project identifiers.
+        output_dir: Directory for the manifest file.
+        projects_base: Base directory containing project folders.
+
+    Returns:
+        Path to the prosody manifest, or None if no data.
+    """
+    import json
+    import sqlite3
+
+    entries: list[dict[str, object]] = []
+
+    for pid in project_ids:
+        db_path = projects_base / pid / "analysis.db"
+        if not db_path.exists():
+            continue
+
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT * FROM prosody_segments WHERE project_id = ? "
+                "AND clip_path IS NOT NULL ORDER BY prosody_score DESC",
+                (pid,),
+            ).fetchall()
+            for r in rows:
+                entries.append({
+                    "clip_path": str(r["clip_path"]),
+                    "project_id": pid,
+                    "start_ms": int(r["start_ms"]),
+                    "end_ms": int(r["end_ms"]),
+                    "transcript": str(r["transcript_text"]),
+                    "f0_mean": float(r["f0_mean"]),
+                    "f0_range": float(r["f0_range"]),
+                    "energy_level": str(r["energy_level"]),
+                    "pitch_contour": str(r["pitch_contour_type"]),
+                    "speaking_rate_wpm": float(r["speaking_rate_wpm"]),
+                    "prosody_score": float(r["prosody_score"]),
+                    "emotion": str(r["emotion_label"]),
+                    "has_emphasis": bool(r["has_emphasis"]),
+                })
+        except sqlite3.OperationalError:
+            continue
+        finally:
+            conn.close()
+
+    if not entries:
+        return None
+
+    manifest_path = output_dir / "prosody_manifest.json"
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2)
+
+    logger.info("Prosody manifest: %d entries written to %s", len(entries), manifest_path)
+    return manifest_path

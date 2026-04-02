@@ -261,6 +261,138 @@ Test video as audio-only. If story/emotion works without visuals, audio is solid
 
 ---
 
+## 7b. Voice Prosody: Making AI Speech Sound Human
+
+Voice cloning can perfectly replicate WHO is speaking (voice identity) but still sound robotic because it fails to replicate HOW they speak (prosody). Prosody is the rhythm, emphasis, pitch variation, breathing, and emotional delivery of speech. It is the single biggest difference between "impressive AI demo" and "I can't tell this isn't real."
+
+### What Prosody Is
+
+| Component | What It Means | Human Example |
+|-----------|--------------|---------------|
+| **Pitch contour (F0)** | How pitch rises and falls across a sentence | "Really?" rises. "Really." falls. Same word, opposite meaning. |
+| **Emphasis** | Louder + higher pitch + longer duration on key words | "I built THIS" vs "I BUILT this" vs "I built this" -- each stresses a different word |
+| **Speaking rate** | Words per minute, varies within a sentence | Humans speed up through familiar phrases, slow down for important words |
+| **Pauses** | Deliberate silence for effect | "And the result... was incredible" -- the pause creates anticipation |
+| **Breathing** | Natural inhale/exhale at phrase boundaries | Breaths between clauses signal the listener "next thought coming" |
+| **Energy arc** | How loudness and intensity change across paragraphs | Hooks are high energy, explanations settle, reveals spike again |
+
+### Why TTS Sounds AI (5 Specific Deficits)
+
+1. **Micro-prosodic jitter is missing.** Human speech has constant tiny fluctuations in pitch (1-3Hz jitter), timing (10-30ms per syllable), and amplitude (2-5dB). TTS produces unnaturally smooth curves. This is the "uncanny valley" of speech.
+
+2. **Emphasis is flat.** Humans emphasize 2-3 words per sentence by increasing duration (+20-40%), raising pitch (+10-20%), and increasing loudness (+3-6dB). TTS distributes emphasis too evenly across all words.
+
+3. **Paragraph-level prosodic arcs are absent.** Human speech builds energy through a paragraph, pauses before key points, and slows at conclusions. TTS treats each sentence independently.
+
+4. **Breathing patterns are mechanical or missing.** Real speakers breathe at natural phrase boundaries. TTS either omits breaths or inserts them mechanically.
+
+5. **Low temperature suppresses natural variation.** TTS models have a "temperature" parameter. Low values produce spectrally consistent but prosodically flat output. High values add natural variation but slightly reduce voice identity accuracy. Most systems default too low.
+
+### ClipCannon's Prosody System
+
+ClipCannon captures prosody data automatically during video ingest and uses it to select expressive reference clips for voice cloning.
+
+#### How It Works (Automatic -- No Manual Steps)
+
+**During ingest** (pipeline stage 19 of 23: `prosody_analysis`):
+
+1. The vocal stem (separated from background music/noise) is loaded
+2. For each sentence in the transcript, pyworld extracts:
+   - **F0 contour**: pitch mean, standard deviation, min, max, range (in Hz)
+   - **Energy envelope**: RMS mean, peak, standard deviation
+   - **Speaking rate**: words per minute
+3. Each sentence is classified:
+   - **Pitch contour type**: rising (questions, building tension), falling (statements, conclusions), varied (natural conversation), flat (monotone)
+   - **Energy level**: low (calm/quiet), medium (normal), high (energetic/loud)
+   - **Has emphasis**: detected when energy peak > 2.5x the mean (word-level stress)
+   - **Has breath**: detected when brief low-energy dips occur between voiced regions
+4. A **composite prosody score** (0-100) is computed:
+   - Pitch range contributes 35% (wider = more expressive)
+   - Pitch variation contributes 25% (more variation = more natural)
+   - Energy dynamics contribute 15% (more dynamic = more engaging)
+   - Speaking rate contributes 10% (natural range 120-180 WPM scores highest)
+   - Emphasis adds 8% bonus
+   - Natural breathing adds 7% bonus
+5. Each sentence is extracted as a WAV clip and stored in `{project}/prosody_clips/`
+6. All data is stored in the `prosody_segments` database table
+
+**Result:** Every ingested video becomes a prosody reference library. A 19-minute video of someone talking produces ~530 tagged clips. Three videos produce 650+.
+
+#### How It's Used (During Voice Synthesis)
+
+When calling `clipcannon_speak` with `prosody_style`, the system:
+
+1. Looks up the voice profile's training projects
+2. Queries the `prosody_segments` table across all projects
+3. Finds clips matching the target style (energy level, pitch contour, emphasis, score threshold)
+4. Returns the best-matching clip as the reference audio for Qwen3-TTS
+
+Qwen3-TTS uses **Full In-Context Learning (ICL)** mode: the reference audio's prosody directly transfers to the generated speech. A monotone reference produces monotone output. An expressive reference produces expressive output. The prosody system automates what a voice director does manually -- selecting the right "take" to set the tone.
+
+#### Available Prosody Styles
+
+| Style | What It Selects | Best For |
+|-------|----------------|----------|
+| `energetic` | Highest energy, wide pitch range, fast pace | Hooks, bold claims, excitement |
+| `calm` | Low energy, flat pitch, slow pace | Measured explanations, trust-building |
+| `emphatic` | Has emphasis (energy spikes on key words) | Statistics, reveals, authority |
+| `varied` | Mixed pitch contours, natural breathing | Conversational sections, storytelling |
+| `fast` | >160 WPM speaking rate | Rapid-fire lists, urgency |
+| `slow` | <120 WPM speaking rate | Dramatic pauses, weight |
+| `rising` | Rising pitch contour | Questions, building tension |
+| `question` | Rising pitch, wide range | Rhetorical questions |
+| `best` | Highest composite prosody score | Default -- most expressive overall |
+
+#### Script Formatting for Prosody
+
+The script text itself drives TTS prosody. These punctuation patterns produce measurable changes in the output:
+
+| Formatting | TTS Effect | Example |
+|-----------|------------|---------|
+| `!` | +15% pitch, +20% energy | "YOUR voice!" |
+| `...` | ~300ms hesitation pause | "how close... an AI clone" |
+| `--` | ~150ms emphasis break | "lip sync -- and produces" |
+| `?` | Rising terminal intonation | "The system that did this?" |
+| Short sentences | Authoritative, punchy | "Your face. Your voice. New content." |
+| Contractions | Conversational flow | "It's", "doesn't", "isn't" |
+| Complete words | Formal authority | "It is", "They are", "That is" |
+
+**Example transformation:**
+```
+Before (flat): "Ninety seven percent is how close an AI clone scored against the real voice"
+After (expressive): "Ninety-seven percent. That's how close... an AI clone scored -- against the REAL voice!"
+```
+
+#### Temperature and Its Tradeoff
+
+| Temperature | Voice Identity (SECS) | Prosody | When to Use |
+|------------|----------------------|---------|-------------|
+| 0.3 | Highest (0.97+) | Flat/monotone | Never for video |
+| 0.5 | High (0.96+) | Conservative | Legacy default |
+| **0.7** | Good (0.95+) | Natural/expressive | **Video voiceovers (recommended)** |
+| 0.8 | Acceptable (0.93+) | Very expressive | Emphatic sections |
+
+#### Per-Paragraph Generation (Advanced)
+
+For maximum prosodic variety in long scripts, generate paragraph-by-paragraph instead of all at once:
+
+1. Split the script into paragraphs
+2. For each paragraph, select a different `prosody_style` matching its emotional content
+3. Generate each paragraph independently
+4. Concatenate with natural pauses: 300ms between paragraphs, 500ms before CTA
+
+This prevents the **autoregressive regression to mean** -- TTS models tend to flatten prosody after ~10 seconds of continuous generation. Fresh generation per paragraph resets the prosody to match the new reference.
+
+#### What NOT To Do
+
+- **DO NOT select voice candidates purely by SECS score.** SECS measures voice identity, not prosody. The flattest, most monotone candidate often scores highest because spectral consistency maximizes cosine similarity.
+- **DO NOT generate the entire script in one shot** for content >30 seconds. Prosody degrades over time.
+- **DO NOT use temperature below 0.5** for video voiceovers. It produces the "AI voice" quality.
+- **DO NOT use ALL CAPS for emphasis** in scripts. TTS models handle it inconsistently. Use `!` and `--` instead.
+- **DO NOT apply face restoration (CodeFormer) to lip-synced video.** It normalizes mouth shapes back to neutral, destroying the lip sync that was generated to match the audio.
+
+---
+
 ## 8. Color and Visual Polish
 
 ### Correction vs Grading
@@ -411,7 +543,7 @@ These are the implicit skills and knowledge that human editors apply unconscious
 Humans instantly read micro-expressions (a slight eyebrow raise, lip tension, eye widening) and know which take has the most authentic emotion. We do this in milliseconds without conscious analysis. An AI needs explicit instruction: "choose the take where the speaker's expression matches the emotional weight of what they're saying."
 
 ### Breathing and Speech Rhythm
-Editors unconsciously feel where a speaker takes a breath, where their voice rises or falls, where emphasis lands. They cut on exhales, never on inhales. They feel the "weight" of a pause -- whether it's dramatic (keep) or dead air (cut). AI needs: explicit breath detection, speech prosody analysis, and rules about which pauses are intentional.
+Editors unconsciously feel where a speaker takes a breath, where their voice rises or falls, where emphasis lands. They cut on exhales, never on inhales. They feel the "weight" of a pause -- whether it's dramatic (keep) or dead air (cut). AI needs: explicit breath detection, speech prosody analysis, and rules about which pauses are intentional. ClipCannon's `prosody_analysis` pipeline stage (section 7b) captures F0 contour, energy, emphasis, and breathing per sentence -- making this implicit human skill explicit and queryable.
 
 ### Visual Weight and Balance
 Humans intuitively sense when a frame is "heavy" on one side or feels unbalanced. An editor adjusts framing without thinking about the rule of thirds -- they just feel it. AI needs: explicit composition analysis, center-of-mass calculation for visual elements, and rules about visual balance.

@@ -150,8 +150,15 @@ def build_ffmpeg_cmd(
 
     # Route to per-segment canvas builder if:
     # 1. Any segment has a per-segment canvas override, OR
-    # 2. Top-level canvas is enabled with regions
-    if has_per_segment_canvas or (canvas is not None and canvas.enabled and canvas.regions):
+    # 2. Top-level canvas is enabled with regions, OR
+    # 3. Overlays are present (only the canvas path renders them), OR
+    # 4. Global color grading is present (only the canvas path applies it)
+    if (
+        has_per_segment_canvas
+        or (canvas is not None and canvas.enabled and canvas.regions)
+        or overlays
+        or global_color is not None
+    ):
         return _build_per_segment_canvas_cmd(
             source_path, output_path, segments,
             profile, canvas, ass_path, encoding_args,
@@ -174,7 +181,7 @@ def build_ffmpeg_cmd(
             profile, pip_layout, ass_path, encoding_args,
         )
 
-    # Standard crop layout
+    # Standard crop layout (no overlays, no color grading)
     if len(segments) == 1:
         return _build_single_segment_cmd(
             source_path, output_path, segments[0],

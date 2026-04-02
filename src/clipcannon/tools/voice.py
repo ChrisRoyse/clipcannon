@@ -171,9 +171,24 @@ async def _handle_prepare_voice_data(
             f"Voice data preparation failed: {exc}",
         )
 
+    # Also export prosody manifest if prosody data exists
+    prosody_manifest = None
+    try:
+        from clipcannon.voice.data_prep import export_prosody_manifest
+
+        manifest = export_prosody_manifest(
+            project_ids=project_ids,
+            output_dir=output_dir,
+            projects_base=projects_base,
+        )
+        if manifest is not None:
+            prosody_manifest = str(manifest)
+    except Exception as exc:
+        logger.debug("Prosody manifest export skipped: %s", exc)
+
     elapsed = time.monotonic() - start_time
 
-    return {
+    response: dict[str, object] = {
         "total_clips": result.total_clips,
         "total_duration_s": result.total_duration_s,
         "train_count": result.train_count,
@@ -181,6 +196,10 @@ async def _handle_prepare_voice_data(
         "output_dir": str(result.output_dir),
         "elapsed_s": round(elapsed, 2),
     }
+    if prosody_manifest:
+        response["prosody_manifest"] = prosody_manifest
+
+    return response
 
 
 async def _handle_voice_profiles(
@@ -288,6 +307,8 @@ async def _handle_speak(arguments: dict[str, object]) -> dict[str, object]:
     voice_name = arguments.get("voice_name")
     speed = float(arguments.get("speed", 1.0))
     max_attempts = int(arguments.get("max_attempts", 5))
+    prosody_style = str(arguments.get("prosody_style", "")) or None
+    temperature = float(arguments.get("temperature", 0.7))
 
     if not project_id or not text:
         return _error("MISSING_PARAMETER", "project_id and text are required")
@@ -311,6 +332,24 @@ async def _handle_speak(arguments: dict[str, object]) -> dict[str, object]:
         if ref_audio_str:
             reference_audio_path = Path(str(ref_audio_str))
 
+    # Prosody-aware reference selection: override default ref with a
+    # clip whose prosody matches the target style
+    if prosody_style and voice_name:
+        try:
+            from clipcannon.voice.prosody_select import select_prosody_reference
+
+            prosody_ref = select_prosody_reference(
+                str(voice_name), prosody_style,
+            )
+            if prosody_ref is not None:
+                reference_audio_path = prosody_ref
+                logger.info(
+                    "Prosody style '%s': using reference %s",
+                    prosody_style, prosody_ref.name,
+                )
+        except Exception as exc:
+            logger.debug("Prosody reference selection failed: %s", exc)
+
     # Output path
     projects_dir = _projects_dir()
     project_dir = projects_dir / project_id
@@ -332,6 +371,7 @@ async def _handle_speak(arguments: dict[str, object]) -> dict[str, object]:
             reference_embedding=reference_embedding,
             verification_threshold=verification_threshold,
             max_attempts=max_attempts,
+            temperature=temperature,
             speed=speed,
         )
     except Exception as exc:

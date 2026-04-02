@@ -64,9 +64,16 @@ benchmarks/samples/**/*.wav
 # Media files - screenshots, videos
 docs/*.png
 docs/*.jpg
+docs/*.mp4
 docs2/*.png
 docs2/*.mp4
 docs2/*.jpg
+
+# Model checkpoints (large binaries)
+checkpoints/
+
+# Temp working files
+temp/
 
 # Sensitive documents - NDAs, legal
 docs2/NDA_*.md

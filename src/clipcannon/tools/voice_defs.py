@@ -137,6 +137,28 @@ VOICE_TOOL_DEFINITIONS: list[Tool] = [
                         "Adds ~10s processing time. Set false for raw TTS output."
                     ),
                 },
+                "prosody_style": {
+                    "type": "string",
+                    "enum": [
+                        "energetic", "calm", "emphatic", "varied",
+                        "fast", "slow", "rising", "question", "best",
+                    ],
+                    "description": (
+                        "Auto-select a reference clip whose prosody matches "
+                        "this style. Uses prosody_segments data from ingest. "
+                        "Overrides the default reference clip. Requires the "
+                        "voice profile's training projects to have been ingested."
+                    ),
+                },
+                "temperature": {
+                    "type": "number",
+                    "default": 0.7,
+                    "description": (
+                        "Sampling temperature (0.3-0.9). Higher = more "
+                        "expressive prosody but slightly lower identity "
+                        "match. 0.7 = balanced for video, 0.5 = conservative."
+                    ),
+                },
             },
             "required": ["project_id", "text"],
         },
