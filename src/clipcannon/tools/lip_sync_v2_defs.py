@@ -67,37 +67,4 @@ MOUTHMEMORY_TOOL_DEFINITIONS: list[Tool] = [
             "required": ["project_id", "audio_path"],
         },
     ),
-    Tool(
-        name="clipcannon_build_mouth_atlas",
-        description=(
-            "Build a mouth atlas for a voice profile from its training "
-            "project videos. One-time offline operation. Indexes mouth "
-            "frames from all training projects at 25fps, labels with "
-            "visemes, and stores in a persistent atlas database. "
-            "The atlas provides richer viseme coverage for lip_sync_v2."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "voice_name": {
-                    "type": "string",
-                    "description": "Voice profile name (e.g. 'boris')",
-                },
-                "project_ids": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "Specific project IDs to include. "
-                        "If omitted, uses all training_projects from profile."
-                    ),
-                },
-                "min_quality": {
-                    "type": "number",
-                    "default": 0.2,
-                    "description": "Minimum quality score for included frames",
-                },
-            },
-            "required": ["voice_name"],
-        },
-    ),
 ]

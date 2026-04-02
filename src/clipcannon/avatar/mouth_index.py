@@ -356,23 +356,15 @@ async def index_mouth_frames(
         lip_lm = landmarks_106[52:72]
         openness, width = _compute_mouth_geometry(lip_lm)
 
-        # Save face crop
-        bbox = face.bbox.astype(int)
-        x1, y1, x2, y2 = bbox
         h, w_frame = frame.shape[:2]
-        pad = int((x2 - x1) * 0.2)
-        cx1 = max(0, x1 - pad)
-        cy1 = max(0, y1 - pad)
-        cx2 = min(w_frame, x2 + pad)
-        cy2 = min(h, y2 + pad)
-        face_crop = frame[cy1:cy2, cx1:cx2]
-        face_path = faces_dir / f"face_{i:06d}.jpg"
-        cv2.imwrite(str(face_path), face_crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
 
-        # Save mouth crop
+        # Store raw frame path (for full-face warping in compositing)
+        face_path = frame_path  # raw extracted frame at full resolution
+
+        # Save mouth crop (for debugging/preview only)
         lip_min = lip_lm.min(axis=0).astype(int)
         lip_max = lip_lm.max(axis=0).astype(int)
-        m_pad = 15
+        m_pad = 30
         mx1 = max(0, lip_min[0] - m_pad)
         my1 = max(0, lip_min[1] - m_pad)
         mx2 = min(w_frame, lip_max[0] + m_pad)
@@ -382,7 +374,7 @@ async def index_mouth_frames(
         if mouth_crop.size > 0:
             cv2.imwrite(str(mouth_path), mouth_crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
         else:
-            mouth_path = face_path
+            mouth_path = frame_path
 
         # Viseme from timeline
         vis_data = viseme_by_frame.get(i, {})
@@ -396,15 +388,16 @@ async def index_mouth_frames(
         # Energy
         energy = _get_energy_at_time(audio, sr, timestamp_ms)
 
-        # Blur-based quality
-        gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY) if face_crop.size > 0 else np.zeros((10, 10))
+        # Blur-based quality (use mouth region for sharpness check)
+        gray = cv2.cvtColor(mouth_crop, cv2.COLOR_BGR2GRAY) if mouth_crop.size > 0 else np.zeros((10, 10))
         lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
         blur_score = min(1.0, lap_var / 500.0)
         quality = round(confidence * blur_score, 3)
 
+        # Store full 106-point landmarks (for face-to-face warping)
         records.append((
             project_id, timestamp_ms, str(face_path), str(mouth_path),
-            json.dumps(lip_lm.tolist()),
+            json.dumps(landmarks_106.tolist()),
             yaw, pitch, roll,
             viseme, phoneme, word, word_pos, prev_vis, next_vis,
             openness, width, round(energy, 6), 0.0, "neutral",

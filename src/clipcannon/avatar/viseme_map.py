@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 import re
 from functools import lru_cache
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -217,11 +216,9 @@ def build_viseme_timeline(
             ph_end = start_ms + int((i + 1) * dur_per_phoneme)
             vis = phoneme_to_viseme(ph)
 
-            if len(phonemes) == 1:
-                pos = "middle"
-            elif i == 0:
+            if i == 0 and len(phonemes) > 1:
                 pos = "start"
-            elif i == len(phonemes) - 1:
+            elif i == len(phonemes) - 1 and len(phonemes) > 1:
                 pos = "end"
             else:
                 pos = "middle"
