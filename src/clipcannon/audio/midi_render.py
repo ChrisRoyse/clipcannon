@@ -24,6 +24,8 @@ _SOUNDFONT_SEARCH_PATHS: list[str] = [
     "/usr/share/soundfonts/FluidR3_GM.sf2",
     "/usr/share/sounds/sf2/GeneralUser_GS.sf2",
     "/usr/local/share/soundfonts/GeneralUser_GS.sf2",
+    "/usr/share/sounds/sf2/default-GM.sf2",
+    "/usr/share/sounds/sf2/TimGM6mb.sf2",
     "~/.clipcannon/models/GeneralUser_GS.sf2",
 ]
 

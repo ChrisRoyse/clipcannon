@@ -1152,6 +1152,24 @@ class RenderEngine:
                 continue
 
             if asset_type == "music":
+                # Render MIDI to WAV if needed (compose_music outputs .mid)
+                if file_path.suffix.lower() in (".mid", ".midi"):
+                    try:
+                        from clipcannon.audio.midi_render import render_midi_to_wav
+                        wav_path = temp_dir / f"{file_path.stem}_rendered.wav"
+                        await render_midi_to_wav(file_path, wav_path)
+                        if wav_path.exists():
+                            file_path = wav_path
+                            logger.info(
+                                "Render %s: MIDI rendered to WAV: %s",
+                                render_id, wav_path,
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "Render %s: MIDI render failed (%s), "
+                            "continuing without music",
+                            render_id, exc,
+                        )
                 music_path = file_path
                 music_volume_db = volume_db
             elif asset_type == "sfx":
