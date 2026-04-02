@@ -2,12 +2,7 @@
   "mcpServers": {
     "claude-flow": {
       "command": "npx",
-      "args": [
-        "-y",
-        "@claude-flow/cli@latest",
-        "mcp",
-        "start"
-      ],
+      "args": ["-y", "@claude-flow/cli@latest", "mcp", "start"],
       "env": {
         "npm_config_update_notifier": "false",
         "CLAUDE_FLOW_MODE": "v3",
@@ -17,6 +12,10 @@
         "CLAUDE_FLOW_MEMORY_BACKEND": "hybrid"
       },
       "autoStart": false
+    },
+    "clipcannon": {
+      "command": "clipcannon",
+      "args": []
     }
   }
 }
