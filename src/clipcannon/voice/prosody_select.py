@@ -94,72 +94,27 @@ def select_prosody_reference(
         except Exception:
             project_ids = []
 
-    if not project_ids:
-        return None
-
     preset = STYLE_PRESETS.get(style, STYLE_PRESETS["best"])
-
-    projects_base = Path.home() / ".clipcannon" / "projects"
 
     best_clip: Path | None = None
     best_score: float = -1
 
-    for pid in project_ids:
-        db_path = projects_base / pid / "analysis.db"
-        if not db_path.exists():
-            continue
+    # Strategy 1: check per-project analysis.db files
+    if project_ids:
+        projects_base = Path.home() / ".clipcannon" / "projects"
+        for pid in project_ids:
+            result = _search_prosody_db(
+                projects_base / pid / "analysis.db", pid, preset,
+            )
+            if result and result[1] > best_score:
+                best_clip, best_score = result
 
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        try:
-            # Build query from preset
-            conditions = ["project_id = ?"]
-            params: list[object] = [pid]
-
-            if "energy_level" in preset:
-                conditions.append("energy_level = ?")
-                params.append(preset["energy_level"])
-
-            if "pitch_contour_type" in preset:
-                conditions.append("pitch_contour_type = ?")
-                params.append(preset["pitch_contour_type"])
-
-            if "has_emphasis" in preset:
-                conditions.append("has_emphasis = ?")
-                params.append(preset["has_emphasis"])
-
-            if "min_prosody_score" in preset:
-                conditions.append("prosody_score >= ?")
-                params.append(preset["min_prosody_score"])
-
-            if "min_speaking_rate" in preset:
-                conditions.append("speaking_rate_wpm >= ?")
-                params.append(preset["min_speaking_rate"])
-
-            if "max_speaking_rate" in preset:
-                conditions.append("speaking_rate_wpm <= ?")
-                params.append(preset["max_speaking_rate"])
-
-            # Must have a clip file
-            conditions.append("clip_path IS NOT NULL")
-
-            order = str(preset.get("order", "prosody_score DESC"))
-            where = " AND ".join(conditions)
-
-            query = f"SELECT clip_path, prosody_score FROM prosody_segments WHERE {where} ORDER BY {order} LIMIT 5"  # noqa: S608
-            rows = conn.execute(query, params).fetchall()
-
-            for row in rows:
-                clip = Path(str(row["clip_path"]))
-                score = float(row["prosody_score"])
-                if clip.exists() and score > best_score:
-                    best_score = score
-                    best_clip = clip
-
-        except sqlite3.OperationalError:
-            continue
-        finally:
-            conn.close()
+    # Strategy 2: check voice_data/<name>/prosody.db (backfilled data)
+    voice_data_db = Path.home() / ".clipcannon" / "voice_data" / voice_name / "prosody.db"
+    if voice_data_db.exists():
+        result = _search_prosody_db(voice_data_db, voice_name, preset)
+        if result and result[1] > best_score:
+            best_clip, best_score = result
 
     if best_clip is not None:
         logger.info(
@@ -170,17 +125,101 @@ def select_prosody_reference(
     return best_clip
 
 
+def _search_prosody_db(
+    db_path: Path,
+    project_id: str,
+    preset: dict[str, object],
+) -> tuple[Path, float] | None:
+    """Search a single prosody DB for the best matching clip.
+
+    Returns:
+        Tuple of (clip_path, score) or None if no match.
+    """
+    if not db_path.exists():
+        return None
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        conditions = ["project_id = ?"]
+        params: list[object] = [project_id]
+
+        if "energy_level" in preset:
+            conditions.append("energy_level = ?")
+            params.append(preset["energy_level"])
+
+        if "pitch_contour_type" in preset:
+            conditions.append("pitch_contour_type = ?")
+            params.append(preset["pitch_contour_type"])
+
+        if "has_emphasis" in preset:
+            conditions.append("has_emphasis = ?")
+            params.append(preset["has_emphasis"])
+
+        if "min_prosody_score" in preset:
+            conditions.append("prosody_score >= ?")
+            params.append(preset["min_prosody_score"])
+
+        if "min_speaking_rate" in preset:
+            conditions.append("speaking_rate_wpm >= ?")
+            params.append(preset["min_speaking_rate"])
+
+        if "max_speaking_rate" in preset:
+            conditions.append("speaking_rate_wpm <= ?")
+            params.append(preset["max_speaking_rate"])
+
+        # Must have a clip file
+        conditions.append("clip_path IS NOT NULL")
+
+        order = str(preset.get("order", "prosody_score DESC"))
+        where = " AND ".join(conditions)
+
+        query = f"SELECT clip_path, prosody_score FROM prosody_segments WHERE {where} ORDER BY {order} LIMIT 5"  # noqa: S608
+        rows = conn.execute(query, params).fetchall()
+
+        best_clip: Path | None = None
+        best_score: float = -1
+
+        for row in rows:
+            clip = Path(str(row["clip_path"]))
+            score = float(row["prosody_score"])
+            if clip.exists() and score > best_score:
+                best_score = score
+                best_clip = clip
+
+        if best_clip is not None:
+            return (best_clip, best_score)
+        return None
+
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
+
+
 def get_prosody_stats(
     project_id: str,
+    voice_name: str | None = None,
 ) -> dict[str, object]:
-    """Get prosody statistics for a project.
+    """Get prosody statistics for a project or voice profile.
+
+    Args:
+        project_id: Project ID to check in analysis.db.
+        voice_name: Voice profile name to check in voice_data prosody.db.
 
     Returns:
         Dict with total segments, score distribution, style breakdown.
     """
+    # Try per-project DB first
     db_path = Path.home() / ".clipcannon" / "projects" / project_id / "analysis.db"
+
+    # Fallback: voice_data prosody.db
+    if not db_path.exists() and voice_name:
+        db_path = Path.home() / ".clipcannon" / "voice_data" / voice_name / "prosody.db"
+        project_id = voice_name  # prosody.db uses voice_name as project_id
+
     if not db_path.exists():
-        return {"error": "Project not found"}
+        return {"error": "No prosody data found"}
 
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row

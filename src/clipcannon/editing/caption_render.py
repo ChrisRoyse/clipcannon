@@ -89,7 +89,7 @@ ASS_STYLES: dict[str, dict[str, str | int]] = {
         "Alignment": 2,
         "MarginL": 10,
         "MarginR": 10,
-        "MarginV": 400,
+        "MarginV": 30,
         "Encoding": 1,
     },
     "subtitle_bar": {
