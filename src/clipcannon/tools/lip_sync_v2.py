@@ -42,7 +42,6 @@ async def _handle_lip_sync_v2(
     """
     project_id = str(arguments.get("project_id", ""))
     audio_path_str = str(arguments.get("audio_path", ""))
-    voice_name = arguments.get("voice_name")
 
     if not project_id:
         return _error("MISSING_PARAMETER", "project_id is required")
