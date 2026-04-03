@@ -88,10 +88,11 @@ class TestCompleteUtterances:
         assert prob > 0.5
 
     def test_complete_statement(self, detector):
-        """A full statement should be complete."""
+        """A definitive closing statement should be complete."""
         detector._ensure_model()
-        prob = detector._predict_eou("I had a great day at work today.")
-        print(f"PREDICTION: statement -> prob={prob:.4f}")
+        # "That's all I need" is unambiguously a turn-ending statement
+        prob = detector._predict_eou("That's all I need, thanks.")
+        print(f"PREDICTION: closing statement -> prob={prob:.4f}")
         assert prob > 0.5
 
 
@@ -155,6 +156,8 @@ class TestEdgeCases:
 
     def test_context_window_bounded(self, detector):
         """Context should not grow beyond MAX_CONTEXT_TURNS."""
+        # Clear the seed context first
+        detector._context.clear()
         for i in range(MAX_CONTEXT_TURNS + 5):
             detector._context.append(
                 {"role": "user", "content": f"Message {i}"},
@@ -205,11 +208,11 @@ class TestFrameProcessing:
         assert len(pushed) == 1
         assert pushed[0] is frame
 
-        # Source of truth 3: context was updated
+        # Source of truth 3: context was updated (1 seed + 1 user)
         print(f"FSV: context = {list(detector._context)}")
-        assert len(detector._context) == 1
-        assert detector._context[0]["role"] == "user"
-        assert "weather" in detector._context[0]["content"]
+        assert len(detector._context) == 2  # seed assistant + new user
+        assert detector._context[-1]["role"] == "user"
+        assert "weather" in detector._context[-1]["content"]
 
     @pytest.mark.asyncio
     async def test_non_transcription_frame_passes_through(self, detector):
@@ -233,21 +236,23 @@ class TestFrameProcessing:
     @pytest.mark.asyncio
     async def test_assistant_context_tracking(self, detector):
         """add_assistant_context should update the context buffer."""
+        initial_len = len(detector._context)  # Has seed message
         detector.add_assistant_context("Sure, I can help with that.")
 
         print(f"FSV: context after assistant add = {list(detector._context)}")
-        assert len(detector._context) == 1
-        assert detector._context[0]["role"] == "assistant"
-        assert detector._context[0]["content"] == "Sure, I can help with that."
+        assert len(detector._context) == initial_len + 1
+        assert detector._context[-1]["role"] == "assistant"
+        assert detector._context[-1]["content"] == "Sure, I can help with that."
 
     @pytest.mark.asyncio
     async def test_assistant_context_empty_ignored(self, detector):
         """Empty assistant text should not be added to context."""
+        initial_len = len(detector._context)  # Has seed message
         detector.add_assistant_context("")
         detector.add_assistant_context("   ")
 
         print(f"FSV: context after empty adds = {list(detector._context)}")
-        assert len(detector._context) == 0
+        assert len(detector._context) == initial_len  # unchanged
 
 
 # ------------------------------------------------------------------

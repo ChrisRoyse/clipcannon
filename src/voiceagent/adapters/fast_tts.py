@@ -54,9 +54,10 @@ class FastTTSAdapter:
     VOICE_DATA_DIR: str = "~/.clipcannon/voice_data"
     DEFAULT_DB: str = "~/.clipcannon/voice_profiles.db"
 
-    # Best reference clips per voice (manually curated for quality)
+    # Best reference clips per voice (manually curated for quality).
+    # Falls through to voice_data/<name>/wavs/ if override path is missing.
     REAL_MIC_OVERRIDES: dict[str, str] = {
-        "boris": "~/.clipcannon/projects/proj_f0101c2d/audio/chris_real_reference.wav",
+        "boris": "~/.clipcannon/voice_data/boris/wavs/clip_ac0b9f40.wav",
         "taylor": "~/.clipcannon/voice_data/taylor/wavs/clip_77702bd4_trimmed.wav",
     }
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import subprocess
 import sys
 from datetime import UTC, datetime
 
@@ -173,14 +174,42 @@ async def run_stdio() -> None:
         await server.run(read_stream, write_stream, init_options)
 
 
+def _start_wake_listener() -> "subprocess.Popen[bytes] | None":
+    """Spawn the voice agent wake listener as a background process.
+
+    Runs ``python -m voiceagent listen`` in the background so the user
+    can say "Hey Jarvis" at any time while ClipCannon is active.
+    Returns the Popen handle (or None if launch fails).
+    """
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "voiceagent", "listen", "--voice", "boris"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            start_new_session=True,  # Detach from parent's terminal signals
+        )
+        logger.info(
+            "Wake listener started (PID %d) -- say 'Hey Jarvis' to activate",
+            proc.pid,
+        )
+        return proc
+    except (OSError, FileNotFoundError) as exc:
+        logger.warning("Failed to start wake listener: %s", exc)
+        return None
+
+
 def main() -> None:
     """Start the ClipCannon MCP server.
 
     Entry point for the ``clipcannon`` console script. Configures
     structured logging and starts the server on stdio transport.
+    Auto-starts the voice agent wake listener in the background.
     """
     _setup_logging()
     logger.info("ClipCannon MCP Server v%s starting...", __version__)
+
+    # Auto-start the wake listener so "Hey Jarvis" works immediately
+    listener_proc = _start_wake_listener()
 
     try:
         asyncio.run(run_stdio())
@@ -189,6 +218,15 @@ def main() -> None:
     except Exception:
         logger.exception("Server crashed")
         sys.exit(1)
+    finally:
+        # Clean up the wake listener when the MCP server exits
+        if listener_proc and listener_proc.poll() is None:
+            logger.info("Stopping wake listener (PID %d)...", listener_proc.pid)
+            listener_proc.terminate()
+            try:
+                listener_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                listener_proc.kill()
 
 
 if __name__ == "__main__":

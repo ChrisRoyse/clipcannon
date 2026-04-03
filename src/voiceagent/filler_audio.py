@@ -104,16 +104,14 @@ class FillerAudioCache:
                         wav = adapter._trim_silence(wav, sr)
 
                         audio_int16 = (wav * 32767).astype(np.int16)
+                        duration_ms = int(len(audio_int16) / sr * 1000)
                         clips[category].append(FillerClip(
                             phrase=phrase,
                             audio_int16=audio_int16.tobytes(),
-                            duration_ms=int(len(audio_int16) / sr * 1000),
+                            duration_ms=duration_ms,
                             category=category,
                         ))
-                        logger.debug(
-                            "Filler '%s': %dms",
-                            phrase, int(len(audio_int16) / sr * 1000),
-                        )
+                        logger.debug("Filler '%s': %dms", phrase, duration_ms)
                     except Exception as exc:
                         logger.warning("Filler generation failed for '%s': %s", phrase, exc)
 

@@ -66,6 +66,12 @@ class SemanticTurnDetector(FrameProcessor):
         self._initialized = False
         self._last_eou_prob: float = 0.0
         self._last_inference_ms: float = 0.0
+        # Seed context so the model always has at least one assistant turn.
+        # Without this, the first user utterance gets no conversational framing
+        # and the model defaults to INCOMPLETE regardless of content.
+        self._context.append(
+            {"role": "assistant", "content": "How can I help you?"},
+        )
 
     def _ensure_model(self) -> None:
         """Lazy-load the ONNX model and tokenizer on first use."""
@@ -163,6 +169,7 @@ class SemanticTurnDetector(FrameProcessor):
         """
         if text and text.strip():
             self._context.append({"role": "assistant", "content": text.strip()})
+
 
     @property
     def last_eou_probability(self) -> float:

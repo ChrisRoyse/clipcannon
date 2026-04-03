@@ -41,6 +41,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -49,9 +50,10 @@ logger = logging.getLogger(__name__)
 # ASR: large-v3-turbo is 2.7x faster than large-v3 with <0.4% WER increase
 ASR_MODEL = "large-v3-turbo"
 ASR_COMPUTE_TYPE = "float16"
-# LLM: 8B is ~50% faster TTFT than 14B; quality delta is negligible for
-# 1-3 sentence voice responses
-LLM_MODEL = "qwen3:8b-nothink"
+# LLM: Use whatever qwen3 nothink variant is available in Ollama.
+# 8B gives ~50% faster TTFT than 14B; 14B gives higher quality.
+# Both are fine for 1-3 sentence voice responses.
+LLM_MODEL = "qwen3:14b-nothink"
 LLM_MAX_TOKENS = 256
 # VAD: 300ms stop = fastest safe endpoint without false triggers on pauses.
 # Smart Turn V3 overrides this with ML-based detection when confident.
@@ -148,7 +150,6 @@ async def run_agent(voice_name: str = "boris") -> None:
         from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
             LocalSmartTurnAnalyzerV3,
         )
-        from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 
         smart_turn = LocalSmartTurnAnalyzerV3(
             params=SmartTurnParams(
@@ -216,17 +217,15 @@ async def run_agent(voice_name: str = "boris") -> None:
     echo_ref = EchoReferenceProcessor(aec_filter=aec_filter)
 
     # --- System prompt (clean, no voice switching logic) ---
-    from datetime import datetime
-
     messages = [
         {
             "role": "system",
             "content": (
-                f"You are a personal AI voice assistant for Chris Royse. "
-                f"You speak naturally and concisely. "
-                f"This is a SPOKEN conversation -- keep responses to "
-                f"1-3 sentences. No markdown, no lists, no formatting. "
-                f"No reasoning or thinking out loud. No emojis. "
+                "You are a personal AI voice assistant for Chris Royse. "
+                "You speak naturally and concisely. "
+                "This is a SPOKEN conversation -- keep responses to "
+                "1-3 sentences. No markdown, no lists, no formatting. "
+                "No reasoning or thinking out loud. No emojis. "
                 f"Current time: {datetime.now().isoformat()}."
             ),
         },
