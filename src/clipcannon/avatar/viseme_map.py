@@ -1,4 +1,4 @@
-"""Phoneme-to-viseme mapping for MouthMemory lip-sync engine.
+"""Phoneme-to-viseme mapping for lip-sync support.
 
 Maps English phonemes (ARPAbet from CMU Pronouncing Dictionary) to
 visual mouth shapes (visemes). Provides word-to-phoneme lookup with

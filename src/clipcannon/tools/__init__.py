@@ -74,12 +74,6 @@ from clipcannon.tools.voice import (
 from clipcannon.tools.voice_defs import (
     VOICE_TOOL_DEFINITIONS,
 )
-from clipcannon.tools.lip_sync_v2 import (
-    dispatch_mouthmemory_tool,
-)
-from clipcannon.tools.lip_sync_v2_defs import (
-    MOUTHMEMORY_TOOL_DEFINITIONS,
-)
 
 # ---------------------------------------------------------------
 # Understanding tool definitions (4 tools)
@@ -253,8 +247,6 @@ for _defs, _dispatch in [
     (VOICE_TOOL_DEFINITIONS, dispatch_voice_tool),
     (AVATAR_TOOL_DEFINITIONS, dispatch_avatar_tool),
     (GENERATE_TOOL_DEFINITIONS, dispatch_generate_tool),
-    # MouthMemory lip-sync v2
-    (MOUTHMEMORY_TOOL_DEFINITIONS, dispatch_mouthmemory_tool),
 ]:
     for _tool_def in _defs:
         TOOL_DISPATCHERS[_tool_def.name] = _dispatch
@@ -276,7 +268,6 @@ ALL_TOOL_DEFINITIONS = (
     + VOICE_TOOL_DEFINITIONS
     + AVATAR_TOOL_DEFINITIONS
     + GENERATE_TOOL_DEFINITIONS
-    + MOUTHMEMORY_TOOL_DEFINITIONS
 )
 
 __all__ = [
@@ -287,7 +278,6 @@ __all__ = [
     "DISCOVERY_TOOL_DEFINITIONS",
     "EDITING_TOOL_DEFINITIONS",
     "GENERATE_TOOL_DEFINITIONS",
-    "MOUTHMEMORY_TOOL_DEFINITIONS",
     "RENDERING_TOOL_DEFINITIONS",
     "TOOL_DISPATCHERS",
     "UNDERSTANDING_TOOL_DEFINITIONS",
@@ -298,7 +288,6 @@ __all__ = [
     "dispatch_discovery_tool",
     "dispatch_editing_tool",
     "dispatch_generate_tool",
-    "dispatch_mouthmemory_tool",
     "dispatch_rendering_tool",
     "dispatch_understanding_tool",
     "dispatch_voice_tool",

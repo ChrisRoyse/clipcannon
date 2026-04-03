@@ -109,10 +109,7 @@ def _get_lip_mask(
     h, w = frame_shape[:2]
     mask = np.zeros((h, w), dtype=np.uint8)
 
-    # Outer lip: points 52-65, inner lip: 66-71
-    lip_points = landmarks_106[52:72].astype(np.int32)
-
-    # Draw filled polygon for outer lip contour
+    # Draw filled polygon for outer lip contour (points 52-65)
     outer_lip = landmarks_106[52:66].astype(np.int32)
     cv2.fillPoly(mask, [outer_lip], 255)
 
