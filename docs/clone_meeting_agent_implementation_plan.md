@@ -2,7 +2,28 @@
 
 ## Overview
 
-Add a new subsystem to ClipCannon that creates AI voice/video clones which appear as selectable virtual webcam devices in Zoom, Google Meet, Microsoft Teams, and other video conferencing apps. Each clone (e.g., "Clone Boris", "Clone Nate") shows up as a separate webcam + microphone pair in the OS device list. When selected, the clone renders a real-time lip-synced avatar, listens to the meeting via system audio capture, transcribes all speech with speaker diarization, and responds only when directly addressed — answering concisely and stopping immediately.
+Add a new subsystem to ClipCannon that creates AI voice/video clones which can participate in Zoom, Google Meet, Microsoft Teams, and other video conferencing apps. The system supports **two operating modes**, with Mode 2 as the **primary recommended path**:
+
+**Mode 2 — Join as Participant (PRIMARY)**: The clone joins the meeting as a SEPARATE participant with a custom display name (e.g., "Nate's AI Assistant", "Meeting Notes Bot", "Jarvis"). It appears in the participant list alongside you. Think of it as an AI note-taker you can interact with — it transcribes everything, and responds if addressed by name. The user names it whatever they want. **No OBS, no virtual webcam drivers, no Windows-side dependencies beyond PulseAudio bridge.** The bot handles its own audio/video I/O directly through the meeting platform SDK or browser.
+
+**Mode 1 — Replace Me (Secondary)**: The clone replaces you. It shows up as a selectable virtual webcam + microphone (e.g., "Clone Nate") in the OS device list. You select it in Zoom/Meet as your camera/mic. Other participants see the clone as YOU. You don't need to be in the meeting at all. Requires v4l2loopback (native Linux) or Unity Capture (Windows, free open-source). **No OBS dependency.**
+
+Both modes share the same core pipeline (audio capture, transcription, address detection, response generation, TTS with SECS >0.95, lip sync). The difference is how they connect to the meeting:
+
+| | Mode 2: Join as Participant (PRIMARY) | Mode 1: Replace Me (Secondary) |
+|---|---|---|
+| **Appears as** | Separate participant with custom name | Your webcam/mic device |
+| **Connection** | Zoom Meeting SDK (headless, free) or Playwright (Google Meet/Teams) | v4l2loopback + PulseAudio (Linux) or Unity Capture (Windows, free) |
+| **You in meeting?** | Yes — clone joins alongside you | No — clone IS you |
+| **Display name** | User-configurable: "AI Notes", "Jarvis", any name | Whatever the meeting app shows for your camera |
+| **Use case** | AI note-taker, interactive assistant, second presence | Stand-in for meetings you can't attend |
+| **Video out** | Raw video frames via Zoom SDK / static image via Playwright | Lip-synced avatar via virtual webcam |
+| **Audio in** | Raw audio from meeting SDK / browser audio capture | PulseAudio system monitor capture |
+| **Audio out** | Raw audio injection via SDK / browser virtual mic | PulseAudio virtual mic |
+| **Windows deps** | None (all runs in WSL2/Docker) | PulseAudio bridge + Unity Capture |
+| **Cost** | Free (Zoom Meeting SDK free tier, Playwright MIT) | Free (v4l2loopback GPL, Unity Capture MIT) |
+
+**Everything is free. No OBS required. No paid SDKs.**
 
 **Test clone**: Nate (first integration target)
 
@@ -81,11 +102,11 @@ sudo modprobe v4l2loopback \
 - `video_nr=20,21` — high numbers to avoid collision with real cameras.
 - `card_label` — the name users see in Zoom/Meet webcam dropdown.
 - Frames written via `pyvirtualcam.Camera(width=1280, height=720, fps=25, device="/dev/video20")`.
-- Output format: RGB24 or YUYV at 720p 25fps (matches MuseTalk output).
+- Output format: RGB24 or YUYV at 720p 30fps (matches MuseTalk output).
 
 **WSL2 limitation**: The default WSL2 kernel does not include v4l2loopback. Two options:
 1. **Native Linux** (recommended for production): Works out of the box.
-2. **WSL2 workaround**: Compile a custom WSL2 kernel with `CONFIG_VIDEO_V4L2=y` and `CONFIG_V4L2_LOOPBACK=m`. Alternatively, run the virtual device host on Windows-side using OBS Virtual Camera and bridge frames from WSL2 via shared memory or socket.
+2. **WSL2 workaround**: Compile a custom WSL2 kernel with `CONFIG_VIDEO_V4L2=y` and `CONFIG_V4L2_LOOPBACK=m`. Or use Unity Capture (free, open-source DirectShow virtual camera for Windows, no test signing needed) with a small bridge script. **Mode 2 (bot join) is recommended on WSL2** — it avoids the virtual webcam problem entirely.
 
 #### 1.2 Virtual Microphone (PulseAudio/PipeWire)
 
@@ -129,6 +150,155 @@ class CloneDevicePair:
     audio_sink: str          # "clone_nate_sink"
     audio_source: str        # "clone_nate_mic"
     pid: int | None          # Process ID of the clone pipeline
+```
+
+---
+
+### 1b. Meeting Bot Join — Mode 2 (`src/voiceagent/meeting/bot_join.py`)
+
+**Purpose**: Join a meeting as a separate participant with a custom display name. The user names the bot whatever they want ("AI Notes", "Jarvis", "Nate's Assistant", etc.).
+
+#### Platform-Specific Join Methods
+
+**Zoom — Meeting SDK Headless Linux Bot (Preferred)**
+
+Zoom provides an official [Meeting SDK for Linux](https://github.com/zoom/meetingsdk-headless-linux-sample) that runs headless in Docker. This is the proper, supported way to build meeting bots.
+
+Capabilities:
+- Join any meeting by meeting ID + password or join URL
+- Custom display name (set at join time)
+- **Receive raw audio** from all participants (PCM 16LE) via `IZoomSDKAudioRawDataHelper`
+- **Send raw audio** (TTS output) via `setExternalAudioSource`
+- **Send raw video** (lip-synced avatar frames) via `IZoomSDKVideoSource` (I420 format)
+- **Receive raw video** for participant faces (not needed for our use case)
+- Runs in Docker, no GUI required
+
+Requirements:
+- Zoom Meeting SDK credentials (Client ID + Client Secret) — free from [Zoom Marketplace](https://marketplace.zoom.us)
+- SDK key/secret for JWT authentication
+- SDK available for Linux x86_64
+
+```python
+class ZoomBotJoin:
+    """Join a Zoom meeting as a headless bot participant.
+
+    Uses the Zoom Meeting SDK for Linux (C++ SDK with Python bindings).
+    The bot joins with a custom display name, receives mixed audio,
+    and can send raw audio/video frames.
+    """
+
+    def __init__(self, client_id: str, client_secret: str):
+        self._client_id = client_id
+        self._client_secret = client_secret
+
+    async def join(
+        self,
+        meeting_url: str,
+        display_name: str = "AI Notes",
+        send_video: bool = True,
+    ) -> ZoomBotSession:
+        """Join meeting. Returns session with audio/video I/O handles."""
+
+    async def leave(self) -> None:
+        """Leave meeting gracefully."""
+```
+
+**Google Meet / Microsoft Teams — Puppeteer Browser Bot**
+
+No official SDK for bots. Use headless Chromium via Puppeteer:
+- Navigate to meeting URL
+- Enter custom display name in the "What's your name?" field
+- Click "Ask to join" / "Join now"
+- Capture audio via WASAPI loopback or virtual audio routing
+- Send audio via virtual microphone (PulseAudio null sink in headless Chromium)
+- Video: static avatar image or screen share of animated face
+
+```python
+class BrowserBotJoin:
+    """Join a Google Meet or Teams meeting via headless Chromium.
+
+    Uses Puppeteer to automate the browser join flow.
+    Display name entered in the meeting lobby.
+    Audio captured from browser audio output.
+    """
+
+    async def join(
+        self,
+        meeting_url: str,
+        display_name: str = "AI Notes",
+        platform: str = "auto",  # auto-detect from URL
+    ) -> BrowserBotSession:
+        """Join meeting. Returns session with audio I/O handles."""
+
+    async def leave(self) -> None:
+        """Leave meeting gracefully (click leave button)."""
+```
+
+#### Unified Bot Interface
+
+Both join methods implement the same interface:
+
+```python
+class MeetingBotSession(Protocol):
+    """Protocol for a connected meeting bot session."""
+
+    @property
+    def display_name(self) -> str: ...
+
+    @property
+    def platform(self) -> str: ...
+
+    async def get_audio_stream(self) -> AsyncIterator[bytes]:
+        """Receive mixed audio from all participants (PCM 16kHz mono)."""
+
+    async def send_audio(self, audio: bytes) -> None:
+        """Send audio to the meeting (TTS output)."""
+
+    async def send_video_frame(self, frame: bytes, width: int, height: int) -> None:
+        """Send a video frame (I420 or RGB). Zoom SDK only."""
+
+    async def leave(self) -> None:
+        """Leave the meeting."""
+```
+
+#### Configuration for Mode 2
+
+```json
+{
+    "bot_join": {
+        "enabled": false,
+        "default_display_name": "AI Notes",
+        "zoom_sdk": {
+            "client_id": "",
+            "client_secret": ""
+        },
+        "browser_bot": {
+            "chromium_path": null,
+            "headless": true,
+            "user_data_dir": "~/.voiceagent/chromium-profile"
+        }
+    }
+}
+```
+
+#### CLI for Mode 2
+
+```bash
+# Join as a separate participant (Mode 2)
+python -m voiceagent meeting join \
+    --url "https://zoom.us/j/123456789?pwd=abc" \
+    --name "Nate's AI Assistant" \
+    --clone nate \
+    --voice nate
+
+# Join Google Meet
+python -m voiceagent meeting join \
+    --url "https://meet.google.com/abc-defg-hij" \
+    --name "Meeting Notes" \
+    --clone nate
+
+# Mode 1 (replace me) is still via:
+python -m voiceagent meeting start --clone nate --voice nate
 ```
 
 ---
@@ -442,54 +612,131 @@ async def enhance(audio: np.ndarray) -> np.ndarray:
 
 ---
 
-### 7. Real-Time Lip Sync — MuseTalk 1.5 (`src/voiceagent/meeting/lip_sync_rt.py`)
+### 7. Clone Realism & Real-Time Avatar (`src/voiceagent/meeting/avatar_rt.py`, `idle_renderer.py`, `webcam_writer.py`)
 
-**Purpose**: Generate lip-synced video frames at 25+ FPS for the virtual webcam.
+**Purpose**: Render a clone that other meeting participants perceive as a real human. This requires going far beyond lip sync — every visual and behavioral cue that humans unconsciously read must be convincingly reproduced.
 
-#### Why MuseTalk 1.5 (Not LatentSync)
+#### 7.1 What Humans Perceive in Video Calls (Realism Requirements)
 
-Per the project's own findings (memory: `feedback_lipsync_quality_v2.md`), LatentSync has architectural VAE blur that makes it unsuitable for real-time use. MuseTalk 1.5 is the confirmed best alternative:
-- **30+ FPS** on V100/A5000 class GPUs (real-time capable).
-- **MIT license** — no commercial restrictions.
-- **256x256 face region** — lightweight, composited onto full frame.
-- **Latent space inpainting** — only the mouth region is regenerated, preserving identity.
-- **Training code open-sourced** (April 2025) — can fine-tune on clone's face.
+Humans unconsciously process dozens of micro-cues during a video call. Missing ANY of these triggers uncanny valley detection. The clone must reproduce ALL of them:
 
-#### Pipeline
+| Channel | What Humans Detect | Clone Must Reproduce | Implementation |
+|---|---|---|---|
+| **Eyes** | Micro-saccades (tiny eye jitter 2-3x/sec), blink timing (every 3-6s, irregular), gaze direction, pupil response | Natural irregular blinks, micro-saccade jitter, gaze toward camera | Pre-recorded blink animation library + random timing. Micro-saccade: 1-2px random eye jitter at 2-3 Hz. Gaze: eyes fixed at camera position (simulates eye contact). |
+| **Mouth** | Lip shape precision, teeth visibility, tongue movement, jaw articulation, saliva gloss | Precise lip sync with visible teeth, jaw movement tracking audio energy | MuseTalk 1.5 at 256x256 face region — lip inpainting preserves skin texture while generating accurate mouth shapes. |
+| **Skin** | Pores, subtle color variation, micro-flush, specular highlights | Preserved original skin texture from driver video, no smoothing | MuseTalk inpaints only the mouth region. Rest of face is original texture from the driver video. NO post-processing blur or smoothing. |
+| **Head** | Constant micro-movement (1-3mm sway), breathing-induced bob, nods, tilts | Continuous subtle motion even when not speaking | **Driver video approach**: Record 10-30 second loops of the real person sitting naturally (breathing, micro-sway). Loop this as the base — gives natural head motion for free. |
+| **Shoulders/body** | Breathing (chest rise/fall), posture shifts, hand gestures | Visible breathing, occasional posture adjustment | Captured in the driver video loop. Ensure driver video includes upper chest/shoulders. |
+| **Timing** | Response onset timing, hesitation patterns, "thinking" pauses | Natural start delay (200-400ms), no robotic snap-to-speech | Handled by MeetingBehavior (pre/post speech pauses). |
+| **Audio** | Voice timbre, speaking rhythm, emphasis, breath sounds | SECS >0.95, full prosody, breath sounds in TTS | Handled by MeetingVoiceOutput. Resemble Enhance preserves breath sounds. |
+| **Webcam quality** | 720p/1080p, typical webcam noise/grain, auto-exposure variation, compression artifacts | Match typical webcam look — NOT too perfect | Add subtle film grain (1-2%) and slight brightness variation to avoid "too clean" look that screams synthetic. |
 
+#### 7.2 Driver Video Strategy (Critical for Realism)
+
+The single most important factor for realism is the **driver video** — a real recording of the person sitting at their desk in their normal meeting setup. This provides:
+- Natural head micro-movement and sway
+- Breathing visible in chest/shoulders
+- Real skin texture at real webcam quality
+- Room lighting and background
+- Occasional posture shifts
+
+**Driver video recording requirements**:
 ```
-TTS audio chunks (streaming)
-    │
-    ▼
-MuseTalk 1.5 inference (GPU)
-    │  Input: reference face image + audio mel spectrogram
-    │  Output: 256x256 face frame with synced lips
-    │
-    ▼
-Face compositing onto base frame (720p)
-    │  Reference driver frame (static or looping video)
-    │  + MuseTalk lip region overlay
-    │
-    ▼
-pyvirtualcam → /dev/videoN ("Clone Nate")
+Duration: 15-30 seconds (will be looped seamlessly)
+Resolution: 1280x720 or 1920x1080 (match target output)
+Frame rate: 30 FPS (MuseTalk requirement)
+Content: Person sitting at desk, looking at camera, NOT speaking
+         (mouth closed, neutral expression, natural breathing)
+Lighting: Normal room/desk lighting (matches what a webcam would capture)
+Framing: Head + shoulders visible (typical webcam framing)
+Format: MP4 h264
 ```
 
-#### Idle State (Not Speaking)
+The driver video loop is the "canvas" — MuseTalk only overwrites the mouth region during speech, everything else is the real recorded video playing in a seamless loop.
 
-When the clone is not actively responding:
-- Display a static or subtly animated idle frame (slight head movement loop from a short driver video, 3-5 seconds looped).
-- No lip movement.
-- Optional: periodic blink animation (pre-rendered, composited).
-- Frame rate can drop to 10 FPS during idle to save GPU.
+**Seamless loop creation**: The driver video is ping-pong looped (forward then reverse) to avoid a visible jump at the loop point. Cross-fade the 500ms boundary for extra smoothness.
 
-#### Speaking State
+#### 7.3 MuseTalk 1.5 — Lip Sync Engine
+
+Per the project's findings (memory: `feedback_lipsync_quality_v2.md`), LatentSync has VAE blur. MuseTalk 1.5 is the right choice:
+
+- **30+ FPS** on V100/A5000/5090 (real-time capable)
+- **256x256 face region** — only the mouth/lower-face is regenerated
+- **Latent space inpainting** — preserves identity and skin texture in untouched regions
+- **MIT license** — no commercial restrictions
+- **Training code open-source** — can fine-tune on clone's face for even better results
+
+**Pipeline (speaking state)**:
+```
+TTS audio chunks (streaming, 24kHz)
+    │
+    ▼
+Mel spectrogram extraction (real-time)
+    │
+    ▼
+MuseTalk 1.5 inference (GPU, ~30ms per frame)
+    │  Input: driver video face crop + audio mel
+    │  Output: 256x256 face with synced lips
+    │
+    ▼
+Composite back onto driver video frame
+    │  (only mouth region replaced, rest is original video)
+    │
+    ▼
+Realism post-processing
+    │  + micro-saccade eye jitter (1-2px random at 2-3Hz)
+    │  + subtle film grain (1-2% gaussian noise)
+    │  + slight brightness jitter (±1% per 5-10 frames)
+    │
+    ▼
+pyvirtualcam / Zoom SDK raw frames → meeting
+```
+
+#### 7.4 Idle State (Not Speaking) — Alive, Not Frozen
+
+When the clone is NOT actively responding, it must still look alive:
+
+| Behavior | Implementation | Frequency |
+|---|---|---|
+| **Driver video loop** | Ping-pong loop of recorded video. Provides natural head sway, breathing, posture micro-shifts. | Continuous (30 FPS) |
+| **Natural blinks** | Pre-rendered blink overlay (3-5 frames per blink). Alpha-composited over the eye region of the driver frame. | Every 3-6 seconds (randomized, gaussian distribution around 4.5s) |
+| **Micro-saccade** | 1-2 pixel random offset applied to both eyes each frame. Simulates the involuntary tiny eye movements all humans make. | Continuous (2-3 jitter events per second) |
+| **Occasional gaze shift** | Eyes shift slightly off-center for 0.5-1s then return to camera. Simulates natural gaze wandering. | Every 15-30 seconds (rare, subtle) |
+| **Breathing emphasis** | Slight periodic brightness oscillation in the chest region (~15 cycles/min = normal breathing rate). | Continuous, amplitude: ±0.5% brightness |
+
+**Idle FPS**: 30 FPS (must match driver video rate for smooth playback). The GPU cost is minimal since we're just playing a pre-recorded video with lightweight overlays — no MuseTalk inference during idle.
+
+#### 7.5 Speaking State — Lip Sync Active
 
 When the clone is responding:
-- MuseTalk processes TTS audio in real-time.
-- Output composited at 25 FPS to virtual webcam.
-- Face region tracked and composited onto the base frame.
+- MuseTalk processes TTS audio mel spectrograms in real-time
+- Face region composited at 30 FPS onto driver video frame
+- Eye blinks continue (don't stop blinking while talking)
+- Head movement continues from driver video (don't freeze)
+- Micro-saccade continues
 
-#### VRAM Budget
+**Transition from idle to speaking**:
+1. Continue playing driver video (no freeze frame)
+2. MuseTalk begins generating mouth frames
+3. Cross-fade from idle mouth to MuseTalk mouth over 2-3 frames (80ms)
+4. Full MuseTalk lip sync active
+
+**Transition from speaking to idle**:
+1. MuseTalk generates final mouth frames
+2. Cross-fade from MuseTalk mouth back to driver video mouth over 3-4 frames (120ms)
+3. Resume idle driver video loop
+
+#### 7.6 Webcam Realism Post-Processing
+
+A perfectly clean render looks synthetic. Real webcams have:
+- **Sensor noise**: Add 1-2% Gaussian noise (temporal, changes each frame)
+- **Compression artifacts**: Apply mild JPEG-like artifact simulation (not needed if pyvirtualcam compresses naturally)
+- **Auto-exposure drift**: ±1% global brightness shift every 5-10 seconds (slow sine wave)
+- **White balance micro-shift**: ±0.5% color temperature drift (very slow, barely perceptible)
+
+These are lightweight numpy operations — negligible GPU cost.
+
+#### 7.7 VRAM Budget
 
 | Component | VRAM |
 |---|---|
@@ -498,10 +745,20 @@ When the clone is responding:
 | faster-qwen3-tts 0.6B (TTS) | ~4 GB |
 | pyannote diarization | ~2 GB |
 | Resemble Enhance | ~1 GB |
-| Overhead | ~3 GB |
+| Overhead (driver video decode, compositing) | ~3 GB |
 | **Total per clone** | **~16 GB** |
 
-**Multi-clone strategy**: On a 32GB GPU (RTX 5090), run 1 clone with all models resident. For 2+ clones, share ASR/LLM/diarization models across clones (they process the same meeting audio), and time-slice MuseTalk + TTS (only one clone speaks at a time).
+**Multi-clone strategy**: On a 32GB GPU (RTX 5090), run 1 clone with all models resident. For 2+ clones, share ASR/LLM/diarization models across clones (they process the same meeting audio), and time-slice MuseTalk + TTS (only one clone speaks at a time). Driver video playback for idle state is CPU-only (no GPU contention).
+
+#### 7.8 File Layout for Avatar
+
+```
+src/voiceagent/meeting/
+    avatar_rt.py            # MuseTalk 1.5 real-time inference wrapper
+    idle_renderer.py        # Driver video loop + blink + micro-saccade + breathing
+    webcam_writer.py        # pyvirtualcam frame writer + realism post-processing
+    realism.py              # Film grain, brightness jitter, micro-saccade, blink overlay
+```
 
 ---
 
@@ -552,325 +809,277 @@ class CloneInstance:
 
 ---
 
-### 9. Meeting Transcript Storage & Retrieval (`src/voiceagent/meeting/transcript_store.py`)
+### 9. Meeting Transcript Storage & Retrieval via OCR Provenance MCP
 
 **Purpose**: Persist every meeting's full transcript, speaker attribution, clone responses, and metadata so users can find and review any meeting at any time — days, weeks, or months later.
+
+**Backend**: The OCR Provenance MCP server (153 tools, always running) handles ALL document storage, semantic search, tagging, annotations, export, and provenance tracking. We do NOT build a custom SQLite store — we use OCR Provenance as the transcript intelligence layer.
 
 #### Design Philosophy (UX-First)
 
 The user should never have to think about "saving" a transcript. It happens automatically. Finding a past meeting should be as easy as searching email — by date, by person, by keyword, by what was discussed. No file management, no export steps, no "where did I put that?"
 
-#### 9.1 Database Schema
+#### 9.1 Architecture: OCR Provenance as Transcript Backend
 
-Stored in `~/.voiceagent/meetings.db` (shared across all clones, separate from `agent.db`).
+Each meeting transcript is saved as a **Markdown document** and ingested into a dedicated OCR Provenance database called `"meetings"`. This gives us for free:
+- **Semantic search** (768-dim nomic embeddings + HNSW + cross-encoder reranking)
+- **Full-text search** (FTS5 with BM25 scoring)
+- **Hybrid search** (RRF fusion of BM25 + semantic)
+- **Provenance tracking** (SHA-256 hash chain for every transformation)
+- **Tagging** (tag meetings by topic, clone, date)
+- **Annotations** (mark important moments, Q&A highlights)
+- **Export** (JSON, Markdown, CSV via built-in tools)
+- **Dashboard** (OCR Provenance dashboard at port 3367 for browsing)
+- **Cross-meeting search** (search all meetings at once)
+- **Document workflow** (review states, approval chains)
 
-```sql
--- A single meeting session (one per Zoom/Meet call)
-CREATE TABLE IF NOT EXISTS meetings (
-    meeting_id    TEXT PRIMARY KEY,           -- UUID
-    title         TEXT NOT NULL DEFAULT '',   -- Auto-generated or user-set
-    started_at    TEXT NOT NULL,              -- ISO-8601
-    ended_at      TEXT,                       -- ISO-8601, set on meeting end
-    duration_ms   INTEGER DEFAULT 0,         -- Computed on end
-    clone_names   TEXT NOT NULL DEFAULT '[]', -- JSON array: ["nate", "boris"]
-    participant_names TEXT NOT NULL DEFAULT '[]', -- JSON array: ["Sarah", "SPEAKER_01"]
-    summary       TEXT DEFAULT '',            -- LLM-generated summary (post-meeting)
-    topic_tags    TEXT DEFAULT '[]',          -- JSON array: ["project update", "Q3 budget"]
-    platform      TEXT DEFAULT 'unknown',     -- "zoom", "google_meet", "teams", "unknown"
-    status        TEXT NOT NULL DEFAULT 'active',  -- active, ended, archived
-    metadata_json TEXT DEFAULT '{}',          -- Extensible metadata
-    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-);
+#### 9.2 Data Model — Meeting as Markdown Document
 
--- Every utterance in the meeting (what was said, by whom, when)
-CREATE TABLE IF NOT EXISTS meeting_segments (
-    segment_id    INTEGER PRIMARY KEY AUTOINCREMENT,
-    meeting_id    TEXT NOT NULL REFERENCES meetings(meeting_id),
-    start_ms      INTEGER NOT NULL,          -- Offset from meeting start
-    end_ms        INTEGER NOT NULL,
-    text          TEXT NOT NULL,
-    speaker_id    TEXT NOT NULL DEFAULT '',   -- "SPEAKER_00", "clone_nate", etc.
-    speaker_name  TEXT DEFAULT '',            -- "Sarah", "Nate (clone)", etc.
-    is_clone      INTEGER DEFAULT 0,         -- 1 if this is clone speech
-    clone_name    TEXT DEFAULT '',            -- Which clone spoke (if is_clone)
-    confidence    REAL DEFAULT 0.0,          -- ASR confidence
-    segment_type  TEXT DEFAULT 'speech',     -- speech, question, response, silence
-    secs_score    REAL DEFAULT 0.0,          -- SECS score if clone speech
-    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-);
+Each meeting is represented as a **single Markdown file** with structured frontmatter. This file is ingested into OCR Provenance, which handles chunking, embedding, indexing, and search automatically.
 
--- Clone interactions: when a clone was addressed and how it responded
-CREATE TABLE IF NOT EXISTS meeting_interactions (
-    interaction_id TEXT PRIMARY KEY,          -- UUID
-    meeting_id     TEXT NOT NULL REFERENCES meetings(meeting_id),
-    clone_name     TEXT NOT NULL,             -- Which clone was addressed
-    question_text  TEXT NOT NULL,             -- What was asked
-    response_text  TEXT NOT NULL,             -- What the clone said
-    questioner     TEXT DEFAULT '',           -- Who asked (speaker name/ID)
-    question_at_ms INTEGER NOT NULL,         -- When the question happened
-    response_at_ms INTEGER NOT NULL,         -- When the clone responded
-    latency_ms     INTEGER DEFAULT 0,        -- Time from question end to response start
-    secs_score     REAL DEFAULT 0.0,         -- Voice quality of the response
-    prosody_style  TEXT DEFAULT '',           -- Prosody style used
-    address_confidence REAL DEFAULT 0.0,     -- How confident the address detection was
-    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
-);
+**Markdown document format per meeting** (written to `~/.voiceagent/meeting_transcripts/`):
 
--- Indexes for fast retrieval
-CREATE INDEX IF NOT EXISTS idx_meetings_date ON meetings(started_at);
-CREATE INDEX IF NOT EXISTS idx_meetings_status ON meetings(status);
-CREATE INDEX IF NOT EXISTS idx_segments_meeting ON meeting_segments(meeting_id, start_ms);
-CREATE INDEX IF NOT EXISTS idx_segments_speaker ON meeting_segments(meeting_id, speaker_name);
-CREATE INDEX IF NOT EXISTS idx_segments_text ON meeting_segments(text);  -- For LIKE search
-CREATE INDEX IF NOT EXISTS idx_interactions_meeting ON meeting_interactions(meeting_id);
-CREATE INDEX IF NOT EXISTS idx_interactions_clone ON meeting_interactions(clone_name, created_at);
+```markdown
+---
+title: "Project Sync with Sarah and Mike"
+date: 2026-04-03T10:30:00
+ended: 2026-04-03T11:17:00
+duration_minutes: 47
+platform: zoom
+clones: [nate]
+participants: [Sarah, Mike, SPEAKER_02]
+tags: [project update, Q3 timeline]
+---
+
+# Summary
+
+- Agreed to push Q3 launch to July 15
+- Sarah will handle vendor negotiations by Friday
+- Mike raised concern about testing capacity
+- Nate confirmed the API integration is on schedule
+
+# Clone Q&A
+
+## Q1 — Sarah asked Nate (10:31:05)
+> Nate, what's the status on the API integration?
+
+**Nate (Clone)** [SECS: 0.97, prosody: calm, latency: 500ms] (10:31:09):
+The API integration is on schedule. Load testing starts Monday.
+
+## Q2 — Mike asked Nate (10:45:22)
+> Can we get the load test results by Thursday?
+
+**Nate (Clone)** [SECS: 0.96, prosody: emphatic, latency: 620ms] (10:45:25):
+Yes, I'll have the results shared by end of day Thursday.
+
+# Full Transcript
+
+**10:30:12 — Sarah**
+Hey everyone, let's get started. First up is the Q3 timeline.
+
+**10:30:28 — Mike**
+Yeah so I've been looking at the testing schedule and I think we might need an extra week.
+
+**10:31:05 — Sarah**
+Nate, what's the status on the API integration?
+
+**10:31:09 — Nate (Clone)** [SECS: 0.97]
+The API integration is on schedule. Load testing starts Monday.
+
+**10:31:18 — Sarah**
+Great, thanks.
 ```
 
-#### 9.2 Auto-Save Behavior
+#### 9.3 OCR Provenance MCP Tool Mapping
 
-Transcripts are saved **continuously during the meeting**, not just at the end. If the process crashes or the user kills it, everything up to that point is preserved.
+The `MeetingTranscriptStore` class wraps OCR Provenance MCP calls:
+
+| Operation | OCR Provenance MCP Tool | Details |
+|---|---|---|
+| **Setup** | `ocr_db_create` | Create `"meetings"` database on first use (one-time) |
+| **Select DB** | `ocr_db_select` | Switch to `"meetings"` database before any operation |
+| **Save transcript** | `ocr_ingest_files` | Ingest the Markdown file with `disable_image_extraction=true` (text-only, no GPU needed) |
+| **Search meetings** | `ocr_search` | Hybrid semantic + FTS5 search with cross-encoder reranking. Natural language queries. |
+| **List meetings** | `ocr_document_list` | Paginated list of all meeting documents |
+| **Get meeting** | `ocr_document_get` + `ocr_chunk_list` | Full document details + all chunks (transcript segments) |
+| **Tag meeting** | `ocr_tag_create` + `ocr_tag_apply` | Tag by topic, clone, platform |
+| **Search by tag** | `ocr_tag_search` | Find meetings by tag |
+| **Export** | `ocr_export` | Export as JSON or Markdown |
+| **Annotate** | `ocr_annotation_create` | Add notes, corrections, highlights to specific chunks |
+| **Archive** | `ocr_db_archive` | Hide from default list (or use tags: `archived=true`) |
+| **Update title** | `ocr_document_update_metadata` | Update `doc_title` field |
+| **Find similar** | `ocr_document_find_similar` | Find meetings discussing similar topics |
+| **Stats** | `ocr_db_stats` | Meeting count, total size, quality metrics |
+| **Provenance** | `ocr_provenance_get` | Full provenance chain for any meeting |
+
+#### 9.4 MeetingTranscriptStore Implementation (`src/voiceagent/meeting/transcript_store.py`)
 
 ```python
 class MeetingTranscriptStore:
-    """Persistent meeting transcript storage with auto-save."""
+    """Meeting transcript storage via OCR Provenance MCP server.
 
-    def __init__(self, db_path: str = "~/.voiceagent/meetings.db"):
-        self._db_path = Path(db_path).expanduser()
-        self._init_db()
-
-    def create_meeting(self, clone_names: list[str]) -> str:
-        """Called when clone joins a meeting. Returns meeting_id."""
-
-    def append_segment(self, meeting_id: str, segment: TranscriptSegment) -> None:
-        """Called in real-time as each segment is transcribed.
-        Writes immediately — no batching, no buffering.
-        If process crashes, all segments up to this point are safe."""
-
-    def record_interaction(
-        self, meeting_id: str, interaction: CloneInteraction,
-    ) -> None:
-        """Called when a clone responds to a question."""
-
-    def end_meeting(self, meeting_id: str) -> MeetingSummary:
-        """Called when clone leaves or meeting ends.
-        Generates summary, sets ended_at, computes duration.
-        Returns a summary the user can immediately see."""
-
-    def search(self, query: str, ...) -> list[MeetingResult]:
-        """Full-text search across all meetings."""
-
-    def get_meeting(self, meeting_id: str) -> FullMeetingRecord:
-        """Get complete meeting with all segments and interactions."""
-
-    def list_meetings(self, ...) -> list[MeetingSummaryRow]:
-        """List meetings with filtering and pagination."""
-```
-
-**Key UX decisions**:
-- Segments written to SQLite on every transcription callback (~every 5 seconds). WAL mode ensures no locking contention.
-- Meeting auto-ends if no audio for 5 minutes (configurable). No action required from user.
-- If the clone process is killed (Ctrl+C, crash, system reboot), the meeting record still exists with all segments written up to that point. `ended_at` is NULL, `status` stays "active". On next startup, stale active meetings are detected and auto-closed.
-
-#### 9.3 Post-Meeting Summary Generation
-
-When a meeting ends, the LLM generates a concise summary from the full transcript:
-
-```python
-async def _generate_meeting_summary(
-    self, meeting_id: str, segments: list[TranscriptSegment],
-) -> str:
-    """Generate a 3-5 bullet summary of the meeting.
-
-    Uses the same Ollama/Qwen3 LLM as the clone responses.
-    Runs in background — meeting end isn't blocked by this.
+    Each meeting is a Markdown document ingested into the 'meetings' database.
+    OCR Provenance handles chunking, embedding, indexing, search, and export.
+    The MCP server must be running at all times.
     """
-    # Prompt: "Summarize this meeting transcript in 3-5 bullet points.
-    #          Focus on decisions made, action items, and key discussion points.
-    #          Do not include small talk or greetings."
+
+    TRANSCRIPT_DIR = "~/.voiceagent/meeting_transcripts"
+    DB_NAME = "meetings"
+
+    def __init__(self):
+        self._transcript_dir = Path(self.TRANSCRIPT_DIR).expanduser()
+        self._transcript_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_db()
+
+    def _call_mcp(self, tool: str, args: dict) -> dict:
+        """Call an OCR Provenance MCP tool via HTTP POST to localhost:3377/mcp.
+        
+        Uses OcrProvenanceClient (mcp_client.py) which sends JSON-RPC over HTTP
+        to the SESSION PROXY (port 3377), NOT directly to the MCP server (3366).
+        The session proxy gives each clone its own isolated container session —
+        independent database selection, operation tracking, and connection state.
+        
+        Auth: Docker bridge trust (172.x IPs). No X-License-Key needed from WSL2.
+        
+        Concurrency: Multiple clones call concurrently via separate sessions.
+        OCR Provenance handles this via WAL mode (concurrent reads) +
+        ref-counted shared SQLite connections + operation locking.
+        No rate limiting — all local. Good GC and connection cleanup only.
+        
+        Memory: Client is lightweight (just HTTP via httpx.AsyncClient with
+        connection pooling). Responses processed and released immediately.
+        Client properly closed on shutdown — no leaked connections.
+        
+        Text passthrough: Markdown files (.md) skip OCR entirely in OCR
+        Provenance — straight to chunking → embedding → indexing. Zero GPU
+        needed for meeting transcript ingestion.
+        
+        Raises MeetingTranscriptStoreError on failure."""
+
+    def _ensure_db(self) -> None:
+        """Create 'meetings' database if it doesn't exist, then select it."""
+        # ocr_db_create(name="meetings", description="Clone meeting transcripts")
+        # ocr_db_select(name="meetings")
+
+    def create_meeting(self, clone_names: list[str], platform: str = "unknown") -> str:
+        """Create meeting. Returns meeting_id. Writes initial Markdown file."""
+
+    def append_segment(self, meeting_id: str, segment: MeetingSegmentData) -> None:
+        """Append a transcript segment to the in-memory buffer.
+        Flushes to Markdown file every N segments or on demand."""
+
+    def record_interaction(self, meeting_id: str, interaction: CloneInteractionData) -> None:
+        """Record a clone Q&A interaction."""
+
+    def end_meeting(self, meeting_id: str, summary: str = "") -> str:
+        """End meeting: finalize Markdown, ingest into OCR Provenance, tag.
+        Returns the OCR Provenance document_id."""
+
+    def flush_to_disk(self, meeting_id: str) -> Path:
+        """Write current transcript state to Markdown file on disk.
+        Called periodically during meeting for crash safety."""
+
+    def ingest_to_provenance(self, transcript_path: Path) -> str:
+        """Ingest finalized Markdown into OCR Provenance. Returns document_id."""
+        # ocr_ingest_files(files=[str(transcript_path)], disable_image_extraction=true)
+
+    def search(self, query: str, limit: int = 20) -> list[dict]:
+        """Semantic + full-text hybrid search across all meetings."""
+        # ocr_search(query=query, limit=limit)  -- natural language
+
+    def get_meeting_document(self, document_id: str) -> dict:
+        """Get full meeting document from OCR Provenance."""
+        # ocr_document_get(id=document_id)
+
+    def list_meetings(self, limit: int = 50, cursor: str | None = None) -> list[dict]:
+        """List all meeting documents."""
+        # ocr_document_list(limit=limit, cursor=cursor)
+
+    def tag_meeting(self, document_id: str, tags: list[str]) -> None:
+        """Apply tags to a meeting document."""
+        # For each tag: ocr_tag_create + ocr_tag_apply
+
+    def export_meeting(self, document_id: str, format: str = "markdown") -> str:
+        """Export meeting via OCR Provenance."""
+        # ocr_export(document_id=document_id, format=format)
 ```
 
-Also auto-generates topic tags from the summary for filtering.
+#### 9.5 Auto-Save Behavior (Crash Safety)
 
-Also auto-generates a title if none was set (e.g., "Project Sync with Sarah and Mike — Apr 3, 2026").
+Transcripts use a **dual-write strategy** for crash safety:
 
-#### 9.4 Dashboard Integration (Meeting History UI)
+1. **During meeting**: Segments accumulate in memory AND are periodically flushed to a Markdown file on disk (`~/.voiceagent/meeting_transcripts/{meeting_id}.md`) every 30 seconds or every 10 segments (whichever comes first).
 
-Extend the existing ClipCannon dashboard (port 3200) with meeting transcript pages.
+2. **On meeting end**: The final Markdown is written to disk, then ingested into OCR Provenance via `ocr_ingest_files`. Tags are applied. Summary is generated.
 
-**New API endpoints** (`src/clipcannon/dashboard/routes/meetings.py`):
+3. **On crash recovery**: On startup, scan `meeting_transcripts/` for `.md` files that don't have a corresponding OCR Provenance document. Ingest them. This means even if the process dies mid-meeting, the transcript up to the last flush is preserved on disk and will be ingested on next startup.
 
-```
-GET  /api/meetings                        — List all meetings (paginated, filterable)
-GET  /api/meetings/{meeting_id}           — Full meeting detail + transcript
-GET  /api/meetings/{meeting_id}/transcript — Transcript segments only (paginated)
-GET  /api/meetings/{meeting_id}/interactions — Clone Q&A interactions only
-GET  /api/meetings/search?q=budget        — Full-text search across all meetings
-POST /api/meetings/{meeting_id}/title     — Update meeting title
-POST /api/meetings/{meeting_id}/archive   — Archive a meeting
-GET  /api/meetings/export/{meeting_id}    — Export as Markdown, JSON, or SRT
-```
+#### 9.6 Search & Discovery (Powered by OCR Provenance)
 
-**List View** (`/meetings`):
-
-The default landing page for meeting history. Designed for quick scanning:
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  Meeting History                          [Search... 🔍] │
-│                                                          │
-│  Filter: [All] [This Week] [This Month]  Clone: [All ▾] │
-│                                                          │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │ 📅 Apr 3, 2026 · 10:30 AM · 47 min               │  │
-│  │ Project Sync with Sarah and Mike                   │  │
-│  │ Clone Nate · 3 questions answered                  │  │
-│  │ Tags: project update, Q3 timeline                  │  │
-│  │ "Discussed the Q3 launch date and agreed to..."    │  │
-│  └────────────────────────────────────────────────────┘  │
-│                                                          │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │ 📅 Apr 2, 2026 · 2:00 PM · 32 min                │  │
-│  │ Weekly Standup                                     │  │
-│  │ Clone Nate, Clone Boris · 5 questions answered     │  │
-│  │ Tags: standup, sprint review                       │  │
-│  │ "Sprint 14 is on track. Three blockers raised..."  │  │
-│  └────────────────────────────────────────────────────┘  │
-│                                                          │
-│  [Load More]                                             │
-└─────────────────────────────────────────────────────────┘
-```
-
-**Detail View** (`/meetings/{id}`):
-
-Full transcript with speaker-color-coded segments, clone interactions highlighted, and easy navigation:
-
-```
-┌──────────────────────────────────────────────────────────┐
-│  ← Back to Meetings                                      │
-│                                                          │
-│  Project Sync with Sarah and Mike          [Edit Title]  │
-│  Apr 3, 2026 · 10:30 - 11:17 AM · 47 min               │
-│  Clone: Nate · Participants: Sarah, Mike, SPEAKER_02     │
-│                                                          │
-│  [Transcript] [Q&A Only] [Summary] [Export ▾]           │
-│                                                          │
-│  ── Summary ──────────────────────────────────────────── │
-│  • Agreed to push Q3 launch to July 15                   │
-│  • Sarah will handle vendor negotiations by Friday       │
-│  • Mike raised concern about testing capacity             │
-│  • Nate confirmed the API integration is on schedule     │
-│                                                          │
-│  ── Transcript ───────────────────────────────────────── │
-│                                                          │
-│  10:30:12  Sarah                                         │
-│  Hey everyone, let's get started. First up is the        │
-│  Q3 timeline.                                            │
-│                                                          │
-│  10:30:28  Mike                                          │
-│  Yeah so I've been looking at the testing schedule        │
-│  and I think we might need an extra week.                │
-│                                                          │
-│  10:31:05  Sarah                                         │
-│  Nate, what's the status on the API integration?         │
-│                                                          │
-│  10:31:09  Nate (Clone) ────────── SECS: 0.97 ───────── │
-│  The API integration is on schedule. We completed the    │
-│  auth module last week and load testing starts Monday.   │
-│  ──────────────────────────────────────────────────────  │
-│                                                          │
-│  10:31:18  Sarah                                         │
-│  Great, thanks.                                          │
-│                                                          │
-│  [Jump to: ▾ Next clone response | End of meeting]       │
-└──────────────────────────────────────────────────────────┘
-```
-
-**UX details**:
-- **Speaker colors**: Each participant gets a consistent color (left border or avatar). Clone responses are visually distinct (highlighted background, SECS score badge).
-- **Jump-to navigation**: Quick jump to "next clone response" or "next question to clone" — users often want to review specifically what their clone said.
-- **Q&A Only view**: Filtered to show only the question-and-response pairs, hiding everything else. Fastest way to audit what the clone actually said.
-- **Search within meeting**: Ctrl+F style search within a single meeting's transcript.
-- **Timestamps as anchors**: Every timestamp is a clickable anchor link, so users can share `meetings/abc123#t=10m31s` to point someone at a specific moment.
-- **Edit title**: Click to rename (auto-generated title is just a starting point).
-
-**Search** (`/meetings/search`):
-
-Global search across all meetings. Searches transcript text, speaker names, topics, and summaries.
-
-```
-Search: "API integration"
-
-Results:
-  Apr 3 — Project Sync — "...the API integration is on schedule..."
-  Mar 28 — Sprint Planning — "...need to prioritize API integration..."
-  Mar 15 — Tech Review — "...API integration design doc reviewed..."
-```
-
-**Export Formats**:
-
-| Format | Use Case |
-|---|---|
-| **Markdown** | Copy into docs, notes, wikis. Includes speaker labels, timestamps, summary. |
-| **JSON** | Programmatic access. Full segment data with all metadata. |
-| **SRT** | Subtitle format. Can be used with video recordings of the meeting. |
-| **Plain text** | Simple copy-paste. Speaker: text format, no metadata. |
-
-Export triggered from the detail view dropdown or via API:
-```bash
-# CLI export
-python -m voiceagent meeting export --id abc123 --format markdown --output meeting.md
-
-# API export
-GET /api/meetings/export/abc123?format=markdown
-```
-
-#### 9.5 CLI Transcript Access
-
-For users who prefer the terminal:
+All search is delegated to OCR Provenance's hybrid search engine:
 
 ```bash
-# List recent meetings
+# From CLI (calls ocr_search under the hood):
+python -m voiceagent meeting search "what did we decide about the API launch date"
+
+# Returns semantically relevant results ranked by:
+# 1. BM25 keyword relevance
+# 2. Nomic 768-dim semantic similarity
+# 3. Cross-encoder reranking (ms-marco-MiniLM)
+# 4. Reciprocal Rank Fusion
+```
+
+**Advantages over custom SQLite LIKE search**:
+- Semantic: "API timeline" finds "integration schedule" even without exact word match
+- Cross-meeting: finds related discussions across different meetings
+- Quality-weighted: higher confidence segments rank higher
+- Natural language: "what did Nate say about testing" works out of the box
+
+#### 9.7 Dashboard (OCR Provenance Dashboard at port 3367)
+
+The OCR Provenance dashboard at `localhost:3367` already provides:
+- Document browsing (meeting list)
+- Full document viewer (meeting transcript)
+- Search interface (hybrid search)
+- Tag management
+- Export functionality
+- Provenance viewer
+
+No custom ClipCannon dashboard routes needed for meetings — the OCR Provenance dashboard handles it. The `"meetings"` database is browsable like any other OCR Provenance database.
+
+For ClipCannon-specific meeting UI (clone Q&A view, SECS score display), a thin wrapper page can be added to the ClipCannon dashboard (port 3200) that reads from OCR Provenance via MCP calls.
+
+#### 9.8 CLI Transcript Access
+
+```bash
+# List recent meetings (reads from OCR Provenance)
 python -m voiceagent meeting history
-# Output:
-#   abc123  Apr 3  10:30-11:17  Project Sync with Sarah and Mike  (Nate, 3 Q&A)
-#   def456  Apr 2  14:00-14:32  Weekly Standup                     (Nate+Boris, 5 Q&A)
 
-# Search across all meetings
-python -m voiceagent meeting search "API integration"
+# Semantic search across all meetings
+python -m voiceagent meeting search "API integration timeline"
 
-# Show a specific meeting's transcript
-python -m voiceagent meeting show abc123
+# Show a specific meeting
+python -m voiceagent meeting show <document_id>
 
-# Show only clone Q&A from a meeting
-python -m voiceagent meeting show abc123 --qa-only
+# Show only clone Q&A sections
+python -m voiceagent meeting show <document_id> --qa-only
 
 # Export
-python -m voiceagent meeting export abc123 --format markdown -o meeting.md
-python -m voiceagent meeting export abc123 --format json -o meeting.json
+python -m voiceagent meeting export <document_id> --format markdown -o meeting.md
+python -m voiceagent meeting export <document_id> --format json -o meeting.json
+
+# Open in OCR Provenance dashboard
+python -m voiceagent meeting open <document_id>
+# -> Opens localhost:3367 in browser, navigated to the meeting document
 ```
 
-#### 9.6 Stale Meeting Recovery
+#### 9.9 Retention & Cleanup
 
-On startup, the manager checks for meetings stuck in `status='active'`:
-
-```python
-def _recover_stale_meetings(self) -> None:
-    """Close any meetings left active from a previous crash.
-
-    Sets ended_at to the last segment's timestamp, generates
-    summary if missing, and sets status to 'ended'.
-    Runs automatically on CloneMeetingManager init.
-    """
-```
-
-This means: even if the user's machine crashes mid-meeting, the next time they start the clone system, all previous transcript data is intact and the meeting is properly closed.
-
-#### 9.7 Retention & Cleanup
-
-- Meetings are never auto-deleted. Storage is cheap and transcripts are small (~1KB per minute of meeting).
-- Users can archive meetings (`POST /api/meetings/{id}/archive`) to hide them from default list view.
-- Archived meetings remain searchable and exportable.
-- A `meeting cleanup --older-than 1y` CLI command is available for users who want to purge old data, but it requires explicit confirmation.
+- Meetings are never auto-deleted. OCR Provenance handles storage efficiently.
+- Users can archive via `ocr_db_archive` or tag with `status:archived`.
+- Full provenance chain preserved for compliance.
+- Backup via `ocr_db_backup` (atomic VACUUM INTO).
+- Transfer to another machine via `ocr_db_transfer` / `ocr_db_receive`.
 
 ---
 
@@ -1062,8 +1271,20 @@ python -m voiceagent meeting stop --clone nate
 # Stop all
 python -m voiceagent meeting stop-all
 
-# Setup virtual devices (one-time, requires sudo)
+# Setup virtual devices (one-time, requires sudo) — Mode 1 only
 python -m voiceagent meeting setup-devices --clones nate,boris
+
+# Mode 2: Join as a separate participant with custom name
+python -m voiceagent meeting join \
+    --url "https://zoom.us/j/123456789?pwd=abc" \
+    --name "Nate's AI Assistant" \
+    --clone nate --voice nate
+
+# Join Google Meet as "Meeting Notes"
+python -m voiceagent meeting join \
+    --url "https://meet.google.com/abc-defg-hij" \
+    --name "Meeting Notes" \
+    --clone nate
 
 # Meeting transcript history
 python -m voiceagent meeting history
@@ -1121,8 +1342,8 @@ python -m voiceagent meeting export abc123 --format markdown -o meeting.md
     },
     "lip_sync": {
         "engine": "musetalk-1.5",
-        "output_fps": 25,
-        "idle_fps": 10,
+        "output_fps": 30,
+        "idle_fps": 30,
         "resolution": [1280, 720],
         "face_resolution": [256, 256]
     },
@@ -1133,13 +1354,15 @@ python -m voiceagent meeting export abc123 --format markdown -o meeting.md
         "system_prompt_override": null
     },
     "transcript": {
-        "db_path": "~/.voiceagent/meetings.db",
-        "auto_save": true,
-        "save_interval_segments": 1,
+        "ocr_provenance_url": "http://localhost:3377/mcp",
+        "database_name": "meetings",
+        "transcript_dir": "~/.voiceagent/meeting_transcripts",
+        "flush_interval_seconds": 30,
+        "flush_interval_segments": 10,
         "auto_end_silence_minutes": 5,
         "auto_summary": true,
         "auto_title": true,
-        "retention_days": null
+        "auto_tag": true
     },
     "behavior": {
         "default_muted": true,
@@ -1149,6 +1372,19 @@ python -m voiceagent meeting export abc123 --format markdown -o meeting.md
         "platform_override": null,
         "idle_blink_interval_s": [3, 6],
         "comfort_noise_dbfs": -60
+    },
+    "bot_join": {
+        "enabled": false,
+        "default_display_name": "AI Notes",
+        "zoom_sdk": {
+            "client_id": "",
+            "client_secret": ""
+        },
+        "browser_bot": {
+            "chromium_path": null,
+            "headless": true,
+            "user_data_dir": "~/.voiceagent/chromium-profile"
+        }
     }
 }
 ```
@@ -1172,19 +1408,19 @@ src/voiceagent/meeting/
     lip_sync_rt.py          # MuseTalk 1.5 real-time lip sync
     webcam_writer.py        # pyvirtualcam frame writer
     config.py               # MeetingConfig dataclass
-    idle_renderer.py        # Idle frame generation (static + blink)
+    avatar_rt.py            # MuseTalk 1.5 real-time inference wrapper
+    idle_renderer.py        # Driver video loop + blink + micro-saccade + breathing overlays
+    webcam_writer.py        # pyvirtualcam frame writer + Zoom SDK raw video output
+    realism.py              # Film grain, brightness jitter, micro-saccade, blink overlay generation
     meeting_behavior.py     # Mute/unmute automation, human presence simulation
     app_controller.py       # xdotool meeting app keyboard control (mute/unmute)
-    transcript_store.py     # SQLite meeting transcript storage + search
-    transcript_export.py    # Export to Markdown, JSON, SRT, plain text
+    bot_join.py             # Mode 2: Join meeting as separate participant (unified interface)
+    zoom_bot.py             # Zoom Meeting SDK headless Linux bot (raw audio/video I/O)
+    browser_bot.py          # Google Meet / Teams Puppeteer browser bot
+    transcript_store.py     # MeetingTranscriptStore — wraps OCR Provenance MCP calls
+    transcript_format.py    # Markdown document builder for meeting transcripts
     meeting_summary.py      # Post-meeting LLM summary + topic extraction
-    db/
-        __init__.py
-        schema.py           # DDL for meetings, meeting_segments, meeting_interactions
-        connection.py       # get_connection for ~/.voiceagent/meetings.db
-
-src/clipcannon/dashboard/routes/
-    meetings.py             # Dashboard API: list, detail, search, export, archive
+    mcp_client.py           # OCR Provenance MCP HTTP client (JSON-RPC POST to localhost:3377, session proxy for multi-agent isolation)
 ```
 
 ---
@@ -1198,8 +1434,11 @@ src/clipcannon/dashboard/routes/
 | `musetalk` | 1.5 | Real-time lip sync (30+ FPS) |
 | `v4l2loopback-dkms` | system | Virtual webcam kernel module (apt install) |
 | `xdotool` | system | Keyboard simulation for mute/unmute in meeting apps (apt install) |
+| `zoom-meeting-sdk` | Zoom SDK | Headless Linux meeting bot for Mode 2 (free from Zoom Marketplace, C++ with Python bindings) |
+| `pyppeteer` or `playwright` | >=latest | Headless Chromium for Google Meet/Teams Mode 2 join (pip install) |
+| `ocr-provenance-mcp` | Docker container | 4 services: MCP Server (3366), License Server (3000), Dashboard (3367), Session Proxy (3377). Transcript storage, semantic search, tagging, export. Markdown text passthrough (no GPU for transcripts). Session proxy at 3377 for multi-clone isolation. |
 
-Already in project: `faster-whisper`, `faster-qwen3-tts`, `torch`, `numpy`, `pipecat`, `pyaudio`, Resemble Enhance, Ollama, ClipCannon voice engine.
+Already in project: `faster-whisper`, `faster-qwen3-tts`, `torch`, `numpy`, `pipecat`, `pyaudio`, `httpx` (for OCR Provenance HTTP calls), Resemble Enhance, Ollama, ClipCannon voice engine.
 
 ---
 
@@ -1215,8 +1454,8 @@ Already in project: `faster-whisper`, `faster-qwen3-tts`, `torch`, `numpy`, `pip
 | **Voice data** (`~/.clipcannon/voice_data/<name>/`) | Reference clips for TTS |
 | **GPU Manager** (`gpu_manager.py`) | Clone pauses other GPU workers when active |
 | **Wake Listener** (`wake_listener.py`) | Coexists — wake listener stays dormant while clone is active |
-| **Dashboard** (`dashboard/`) | New `/api/meetings` routes for transcript list, detail, search, export |
-| **Meeting DB** (`~/.voiceagent/meetings.db`) | Shared transcript store across all clones, separate from agent.db |
+| **OCR Provenance Session Proxy** (`localhost:3377/mcp`) | Transcript storage, semantic search, tagging, export, provenance — via HTTP JSON-RPC through session proxy. Each clone gets its own isolated session. `"meetings"` database. Docker bridge auth trust (172.x, no API key needed from WSL2). No rate limits. Good concurrency via WAL + ref-counted connections. Markdown files skip OCR (text passthrough → chunk → embed → index, zero GPU). |
+| **OCR Provenance Dashboard** (`localhost:3367`) | Meeting transcript browsing, search UI, tag management, document viewer, VLM Chunks — already built. 4th mandatory service. |
 
 ---
 
@@ -1224,9 +1463,10 @@ Already in project: `faster-whisper`, `faster-qwen3-tts`, `torch`, `numpy`, `pip
 
 ### Phase 1: Audio Pipeline + Transcript Storage (Week 1-2)
 
-1. **Meeting transcript database** — Schema, `MeetingTranscriptStore`, auto-save on every segment.
-2. **Meeting audio capture** — PulseAudio monitor source capture in a background thread.
-3. **Streaming transcription** — faster-whisper processing meeting audio in sliding windows, writing segments to DB in real-time.
+1. **OCR Provenance MCP client** — `mcp_client.py` HTTP JSON-RPC client connecting to session proxy (port 3377) for per-clone session isolation. httpx.AsyncClient with connection pooling, proper GC/cleanup. Docker bridge auth trust (no API key). No rate limits.
+2. **Transcript store** — `MeetingTranscriptStore` wrapping OCR Provenance: create `"meetings"` DB, Markdown document builder, periodic flush to disk, ingest on meeting end, crash recovery.
+3. **Meeting audio capture** — PulseAudio monitor source capture in a background thread.
+4. **Streaming transcription** — faster-whisper processing meeting audio in sliding windows, segments accumulated in memory + periodic Markdown flush.
 4. **Address detection** — Name mention detection from transcript.
 5. **Response generation** — Ollama LLM generating direct answers.
 6. **Voice output** — TTS with full prosody + SECS >0.95 gate + Resemble Enhance.
@@ -1235,30 +1475,36 @@ Already in project: `faster-whisper`, `faster-qwen3-tts`, `torch`, `numpy`, `pip
 9. **Stale meeting recovery** — Auto-close meetings from crashes on startup.
 10. **End-to-end audio test**: Someone says "Hey Nate, what time is the deadline?" → Clone unmutes in Zoom → Nate responds through virtual mic with verified voice → Clone re-mutes → full transcript persisted.
 
-### Phase 2: Video Pipeline + Human Behavior (Week 3-4)
+### Phase 2: Video Pipeline + Clone Realism (Week 3-4)
 
-1. **MuseTalk 1.5 integration** — Real-time lip sync from TTS audio.
-2. **Idle renderer** — Static/looping face with blink animation (randomized 3-6s interval).
-3. **Virtual webcam** — pyvirtualcam writing to v4l2loopback.
-4. **Face compositing** — MuseTalk face region onto 720p base frame.
-5. **Natural speaking behavior** — Pre-speech pause, head nod start, clean stop after response.
-6. **Name reaction** — Subtle head-turn animation when clone's name is mentioned (even without a question).
-7. **End-to-end video test**: Clone appears in Zoom as named webcam, unmutes/lip-syncs response/re-mutes naturally.
+1. **Driver video system** — Record and process 15-30s loop videos per clone. Ping-pong seamless looping with 500ms cross-fade boundary.
+2. **MuseTalk 1.5 integration** — Real-time lip sync (256x256 face region inpainting from audio mel spectrogram).
+3. **Idle renderer** — Driver video loop playback + blink overlays (3-6s random gaussian interval) + micro-saccade eye jitter (1-2px at 2-3Hz) + gaze shift (every 15-30s) + breathing emphasis.
+4. **Realism post-processing** — Film grain (1-2% gaussian), brightness jitter (±1% sine wave), white balance micro-shift. Makes output match typical webcam quality, not synthetic perfection.
+5. **Speaking state transitions** — Cross-fade idle mouth → MuseTalk mouth (80ms) and back (120ms). Blinks and head motion continue during speech.
+6. **Webcam writer** — pyvirtualcam (Mode 1) or Zoom SDK raw video frames (Mode 2). 30 FPS continuous, both idle and speaking.
+7. **End-to-end video test**: Clone appears in Zoom with natural breathing, blinking, micro-saccade. When addressed, lips sync to response. Another human in the call should not immediately identify it as AI.
 
-### Phase 3: Transcript UI + Multi-Clone (Week 5-6)
+### Phase 3: Multi-Clone + Mode 2 Bot Join (Week 5-6)
 
-1. **Dashboard meeting routes** — List, detail, search, export API endpoints.
-2. **Meeting list UI** — Date-grouped cards with summary, participants, clone Q&A count.
-3. **Meeting detail UI** — Speaker-colored transcript, clone responses highlighted, jump navigation, Q&A-only filter.
-4. **Search** — Full-text search across all meetings (transcript, speakers, topics).
-5. **Export** — Markdown, JSON, SRT, plain text formats from dashboard and CLI.
-6. **Post-meeting summary** — LLM-generated 3-5 bullet summary, auto-title, topic tags.
-7. **Speaker diarization** — pyannote integration for who-said-what.
-8. **Multi-clone support** — Shared ASR/LLM, per-clone TTS/video.
-9. **Clone Meeting Manager** — Orchestrator for N clones.
-10. **CLI commands** — `meeting start/stop/list/history/search/show/export/setup-devices`.
-11. **Configuration** — `meeting.json` config file.
-12. **Device setup script** — Automated v4l2loopback + PulseAudio provisioning.
+1. **Post-meeting summary** — LLM-generated 3-5 bullet summary, auto-title, topic tags (written into Markdown before ingest).
+2. **OCR Provenance tagging** — Auto-tag meetings by clone, platform, date, topic via `ocr_tag_create` + `ocr_tag_apply`.
+3. **Speaker diarization** — pyannote integration for who-said-what.
+4. **Multi-clone support** — Shared ASR/LLM, per-clone TTS/video. Each clone connects to session proxy (3377) which assigns isolated container sessions.
+5. **Clone Meeting Manager** — Orchestrator for N clones.
+6. **CLI commands** — `meeting start/stop/join/list/history/search/show/export/setup-devices`.
+7. **Configuration** — `meeting.json` config file.
+8. **Device setup script** — Automated v4l2loopback + PulseAudio provisioning.
+
+### Phase 4: Mode 2 — Join as Participant (Week 7-8)
+
+1. **Unified MeetingBotSession protocol** — Common interface for all join methods (audio stream in/out, video send, leave).
+2. **Zoom Meeting SDK integration** — `zoom_bot.py` headless Linux bot with raw audio/video I/O, custom display name, JWT auth.
+3. **Puppeteer browser bot** — `browser_bot.py` for Google Meet and Teams (headless Chromium, name entry, audio capture via virtual routing).
+4. **Bot join orchestrator** — `bot_join.py` auto-detects platform from URL, routes to Zoom SDK or Puppeteer.
+5. **CLI `meeting join`** — `--url`, `--name`, `--clone`, `--voice` flags.
+6. **Audio routing** — Mode 2 bots receive audio from SDK/browser and feed it to the same transcription pipeline as Mode 1.
+7. **End-to-end test**: `python -m voiceagent meeting join --url <zoom_url> --name "AI Notes" --clone nate` → bot appears in Zoom participant list as "AI Notes", transcribes, responds when addressed.
 
 ---
 
@@ -1297,8 +1543,9 @@ All initial development and testing uses the "nate" voice profile.
 | `test_voice_output.py` | SECS >0.95 gate, prosody selection, enhance pipeline |
 | `test_devices.py` | v4l2loopback creation/destruction, PulseAudio sink management |
 | `test_responder.py` | Response conciseness (word count), no-ramble enforcement |
-| `test_transcript_store.py` | Auto-save on every segment, crash recovery, search, stale meeting closure |
-| `test_transcript_export.py` | Markdown/JSON/SRT/text export formatting correctness |
+| `test_mcp_client.py` | HTTP JSON-RPC to OCR Provenance, session ID handling, connection pooling, error propagation |
+| `test_transcript_store.py` | Markdown generation, flush to disk, ingest via OCR Provenance, search delegation, crash recovery |
+| `test_transcript_format.py` | Markdown document format correctness, frontmatter, Q&A sections, speaker labels |
 | `test_meeting_summary.py` | LLM summary generation, auto-title, topic tag extraction |
 | `test_meeting_behavior.py` | Mute/unmute sequence, comfort noise, platform detection |
 | `test_app_controller.py` | xdotool command generation for Zoom/Meet/Teams shortcuts |
@@ -1312,10 +1559,11 @@ All initial development and testing uses the "nate" voice profile.
 | SECS regression | Generate 100 responses, verify ALL have SECS >0.95 |
 | Prosody coverage | Verify prosody_select is called for every response, never falls back to flat |
 | Latency benchmark | Measure end-to-end from address detection to first audio/video frame |
-| Transcript persistence | Kill clone mid-meeting, restart, verify all segments up to crash are in DB |
-| Search accuracy | Insert 10 meetings, search by keyword/speaker/date, verify correct results |
-| Dashboard API | All 8 meeting endpoints return correct data, pagination, filtering |
-| Export roundtrip | Export as Markdown, verify it contains all segments, speakers, timestamps |
+| Transcript persistence | Kill clone mid-meeting, restart, verify Markdown file on disk has all segments up to last flush |
+| OCR Provenance ingest | End a meeting, verify document appears in OCR Provenance via `ocr_document_list` on `"meetings"` DB |
+| Search via OCR Provenance | Ingest 3 meetings, search via `ocr_search` with natural language, verify ranked results |
+| Concurrent sessions | 2 clones write transcripts simultaneously via different MCP session IDs, verify no cross-contamination |
+| Export roundtrip | Export via `ocr_export`, verify Markdown contains all segments, speakers, timestamps |
 | Mute/unmute cycle | Clone starts muted → unmutes on address → speaks → re-mutes. Verify no audio leaks between responses |
 | Comfort noise | Virtual mic sends -60 dBFS noise when muted, meeting app shows mic "alive" but no audible sound |
 | Platform detection | Start Zoom, verify auto-detect returns "zoom". Start Meet in Chrome, verify "google_meet" |
@@ -1334,7 +1582,7 @@ All initial development and testing uses the "nate" voice profile.
 10. **Verify**: During idle, clone shows subtle blink/movement (not a frozen image).
 11. End the meeting. Run `python -m voiceagent meeting history` — verify meeting appears with transcript.
 12. Run `python -m voiceagent meeting show <id>` — verify full transcript with speaker labels.
-13. Check dashboard at `localhost:3200/meetings` — verify meeting card with summary and Q&A count.
+13. Open OCR Provenance dashboard at `localhost:3367`, select `"meetings"` database — verify meeting document with full transcript, searchable, tagged.
 
 ---
 
@@ -1342,7 +1590,7 @@ All initial development and testing uses the "nate" voice profile.
 
 | Risk | Mitigation |
 |---|---|
-| WSL2 lacks v4l2loopback | Document custom kernel build. Recommend native Linux or OBS bridge for WSL2 users. Phase 1 audio-only works without video device. |
+| WSL2 lacks v4l2loopback | Mode 2 (bot join) recommended on WSL2 — avoids virtual webcam entirely. For Mode 1: Unity Capture (free) on Windows or custom WSL2 kernel with V4L2 enabled. |
 | MuseTalk quality insufficient | Fall back to static image + audio only (still useful for phone meetings). Investigate MuseTalk fine-tuning on clone face. |
 | SECS <0.95 on short utterances | Increase best-of-N to 7. Use longer reference clips. Fall back to 1.7B model. |
 | GPU VRAM overflow with 2+ clones | Share ASR + diarization + LLM across clones. Only load clone-specific TTS + MuseTalk. Time-slice if needed. |
@@ -1351,4 +1599,5 @@ All initial development and testing uses the "nate" voice profile.
 | xdotool fails on Wayland | xdotool requires X11. On Wayland, use `ydotool` or `wtype` as alternatives. Document in setup guide. |
 | Meeting app updates shortcuts | Keyboard shortcuts may change between app versions. Store shortcuts in config, not hardcoded. User can override via `behavior.platform_override`. |
 | Mute/unmute timing visible to others | The brief unmute/re-mute is natural — humans do this constantly in meetings. The 200-300ms pauses make it look intentional, not robotic. |
-| Transcript DB grows large | At ~1KB/min, a year of daily 1-hour meetings = ~22MB. Negligible. SQLite handles this fine. Archive option available if user wants to declutter. |
+| OCR Provenance server down | Clone still works for real-time conversation. Transcripts flush to Markdown files on disk. On next startup with server available, stale files are ingested. Fail-fast on search/export if server unreachable. All 4 OCR Provenance services (3366, 3367, 3000, 3377) must be running. |
+| Concurrent clone writes | Each clone connects via session proxy (3377) which gives isolated container sessions. WAL mode, ref-counted connections, operation locking. Docker bridge auth trust — no API key needed from WSL2. No rate limits. |

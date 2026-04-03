@@ -8,9 +8,9 @@
 <constitution version="3.0">
 <metadata>
   <project_name>ClipCannon</project_name>
-  <spec_version>3.0.0</spec_version>
-  <created>2026-03-26</created>
-  <description>AI-native video editing, voice cloning, avatar pipeline, and real-time voice agent — local GPU, 22-stage multimodal analysis, platform-ready output, conversational AI assistant</description>
+  <spec_version>4.0.0</spec_version>
+  <created>2026-04-03</created>
+  <description>AI-native video editing, voice cloning, avatar pipeline, and real-time voice agent — local GPU, 23-stage multimodal analysis, platform-ready output, conversational AI assistant</description>
   <target_hardware>NVIDIA RTX 5090 (32GB GDDR7, CUDA 13.2) — degrades gracefully to RTX 2000+</target_hardware>
 </metadata>
 
@@ -29,7 +29,7 @@
   <web_framework version="0.110+">FastAPI (license server on port 3100, dashboard on port 3200)</web_framework>
   <container>Docker (NVIDIA Container Toolkit, GPU passthrough)</container>
 
-  <!-- ML Models — Understanding Pipeline (22 stages) -->
+  <!-- ML Models — Understanding Pipeline (23 stages) -->
   <required_models>
     <model name="htdemucs" version="v4" vram_nvfp4="2.0GB" license="MIT">Source separation — 4 stems</model>
     <model name="whisperx" version="large-v3" vram_nvfp4="1.5GB" license="BSD-4-Clause">Transcription — mandatory wav2vec2 forced alignment</model>
@@ -109,8 +109,7 @@
     <library version="latest">ollama (Qwen3-14B GGUF local LLM serving)</library>
     <library version="latest">faster-whisper (streaming ASR)</library>
     <library version="latest">pyaudio (local audio capture/playback)</library>
-    <library version="latest">pyroomacoustics (NLMS adaptive echo cancellation)</library>
-    <library version="latest">sentence-transformers (voice command detection embeddings)</library>
+    <library version="latest">sentence-transformers (voice command detection embeddings, semantic turn detection)</library>
     <library version="latest">websockets (WebSocket transport)</library>
     <library version="latest">numpy (audio buffer processing)</library>
   </required_libraries_voice_agent>
@@ -128,7 +127,7 @@ clipcannon/
 │       ├── server.py                  # MCP server entry (mcp library, Server class, stdio transport)
 │       ├── config.py                  # Configuration management (dot-notation, Pydantic validation)
 │       ├── exceptions.py              # ClipCannonError hierarchy (Pipeline, Billing, Provenance, Database, Config, GPU)
-│       ├── tools/                     # MCP tool definitions (51 tools, 26 modules)
+│       ├── tools/                     # MCP tool definitions (54 tools, 29 modules)
 │       │   ├── __init__.py            # Tool registry + understanding tools (ingest, transcript, frame, search)
 │       │   ├── project.py             # 5 project CRUD tools
 │       │   ├── understanding.py       # Understanding tool handlers (ingest, transcript)
@@ -142,20 +141,23 @@ clipcannon/
 │       │   ├── rendering.py           # 8 rendering tools (render, context, analyze, preview, inspect, scene_map, segment)
 │       │   ├── rendering_defs.py      # JSON schema for rendering tools
 │       │   ├── storyboard.py          # Contact sheet generation
-│       │   ├── audio.py               # 4 audio tools (music gen, MIDI, SFX, cleanup)
+│       │   ├── audio.py               # 6 audio tools (music gen, MIDI, SFX, cleanup, auto_music, compose_music)
+│       │   ├── audio_defs.py          # JSON schema for 6 audio MCP tools
+│       │   ├── audio_cleanup.py       # Audio cleanup tool implementation
+│       │   ├── audio_smart.py         # Smart music tool implementations (auto_music, compose_music)
 │       │   ├── discovery.py           # 4 discovery tools (best moments, cut points, narrative flow, safe cuts)
 │       │   ├── discovery_defs.py      # JSON schema for discovery tools
 │       │   ├── voice.py               # 4 voice tools (data prep, profiles, speak, speak_optimized)
 │       │   ├── voice_defs.py          # JSON schema for voice tools
-│       │   ├── avatar.py              # 1 avatar tool (lip_sync)
-│       │   ├── avatar_defs.py         # JSON schema for avatar tool
+│       │   ├── avatar.py              # 2 avatar tools (lip_sync, extract_webcam)
+│       │   ├── avatar_defs.py         # JSON schema for avatar tools
 │       │   ├── generate_video.py      # 1 video generation tool (voice + lip-sync end-to-end)
 │       │   ├── generate_defs.py       # JSON schema for generate_video tool
 │       │   ├── billing_tools.py       # 4 billing tools (balance, history, estimate, spending limit)
 │       │   ├── provenance_tools.py    # Provenance tool definitions (currently empty; accessed via dashboard)
 │       │   ├── disk.py                # 2 disk management tools (status, cleanup)
 │       │   └── config_tools.py        # 3 configuration tools (get, set, list)
-│       ├── pipeline/                  # Processing pipeline stages (22 stages, 29 modules)
+│       ├── pipeline/                  # Processing pipeline stages (23 stages, 30 modules)
 │       │   ├── __init__.py
 │       │   ├── orchestrator.py        # DAG-based pipeline runner
 │       │   ├── dag.py                 # Topological sort (Kahn's algorithm)
@@ -183,6 +185,7 @@ clipcannon/
 │       │   ├── profanity.py           # Profanity detection and content safety
 │       │   ├── highlights.py          # Multi-signal highlight scoring
 │       │   ├── narrative_llm.py       # Qwen3-8B narrative analysis (story beats, open loops, chapters, key moments)
+│       │   ├── prosody_analysis.py    # Prosody feature extraction (F0, energy, speaking rate) per sentence from vocal stem (CPU-only)
 │       │   ├── storyboard.py          # Contact sheet grid generation
 │       │   └── finalize.py            # Final status update
 │       ├── editing/                   # Edit decision engine (12 modules)
@@ -206,24 +209,31 @@ clipcannon/
 │       │   ├── inspector.py           # Render inspection (frames, metadata, quality checks)
 │       │   ├── preview.py             # Low-quality preview generation (clip, layout, segment)
 │       │   └── segment_hash.py        # Segment-level cache hashing
-│       ├── audio/                     # Audio generation engine (7 modules)
+│       ├── audio/                     # Audio generation engine (11 modules)
 │       │   ├── music_gen.py           # ACE-Step v1.5 AI music (GPU)
-│       │   ├── midi_compose.py        # MIDI from 6 presets
+│       │   ├── musicgen.py            # Meta AudioCraft MusicGen (small/medium/large, GPU)
+│       │   ├── midi_compose.py        # MIDI from 12 presets with theory-correct progressions
 │       │   ├── midi_render.py         # FluidSynth MIDI → WAV
-│       │   ├── sfx.py                 # 9 DSP sound effects
+│       │   ├── midi_ai.py             # LLM-driven MIDI planning (keyword matching + Qwen3-8B)
+│       │   ├── music_planner.py       # Video-aware music planning (reads emotion/pacing/beats)
+│       │   ├── sfx.py                 # 13 DSP sound effects
 │       │   ├── mixer.py               # Speech-aware audio mixing with ducking
 │       │   ├── effects.py             # Pedalboard audio effects chain
-│       │   └── cleanup.py             # Noise reduction, normalization, silence trim, EQ
-│       ├── voice/                     # Voice cloning engine (8 modules)
-│       │   ├── data_prep.py           # Silence-boundary splitting, transcript matching, train/val manifests
+│       │   └── cleanup.py             # Noise reduction, de-hum, de-ess, loudness normalization
+│       ├── voice/                     # Voice cloning engine (10 modules)
+│       │   ├── data_prep.py           # Silence-boundary splitting, transcript matching, train/val manifests, prosody manifest export
 │       │   ├── inference.py           # VoiceSynthesizer: Qwen3-TTS with iterative verification
 │       │   ├── multi_voice.py         # Multi-voice synthesis for conversational scenarios (voice swapping mid-conversation)
 │       │   ├── verify.py              # Multi-gate verification: sanity, intelligibility (WER), identity (SECS 2048-dim)
 │       │   ├── optimize.py            # SECS-optimized best-of-N candidate selection
 │       │   ├── profiles.py            # Voice profile SQLite CRUD (~/.clipcannon/voice_profiles.db)
-│       │   └── enhance.py             # Resemble Enhance: denoise + latent flow matching (24kHz → 44.1kHz)
-│       ├── avatar/                    # Avatar / lip-sync engine (2 modules)
-│       │   └── lip_sync.py            # LatentSync 1.6 diffusion pipeline (512x512, DDIM)
+│       │   ├── enhance.py             # Resemble Enhance: denoise + latent flow matching (24kHz → 44.1kHz)
+│       │   ├── prosody_backfill.py    # Backfill prosody analysis for existing voice training clips
+│       │   └── prosody_select.py      # Prosody-aware reference clip selection (energetic, calm, emphatic, varied, fast, slow, rising, question)
+│       ├── avatar/                    # Avatar / lip-sync engine (3 modules)
+│       │   ├── lip_sync.py            # LatentSync 1.6 diffusion pipeline (512x512, DDIM, DeepCache, best-of-N)
+│       │   ├── face_enhance.py        # Mouth-region CodeFormer enhancement (InsightFace 106-point lip-contour masking)
+│       │   └── viseme_map.py          # Phoneme-to-viseme mapping (14-viseme MPEG-4 system, CMU ARPAbet)
 │       ├── billing/                   # Credit system
 │       │   ├── license_client.py      # Async HTTP client for license server
 │       │   ├── credits.py             # Credit rates, packages, spending limits
@@ -233,7 +243,7 @@ clipcannon/
 │       │   ├── chain.py               # Tamper-evident chain computation and verification
 │       │   └── recorder.py            # Provenance record CRUD
 │       ├── db/                        # Database layer
-│       │   ├── schema.py              # DDL for 30 tables + 4 vector tables + indexes, migrations v1→v2→v3
+│       │   ├── schema.py              # DDL for 33 tables + 4 vector tables + indexes, migrations v1→v2→v3→v4
 │       │   ├── connection.py          # Connection factory with WAL pragmas, sqlite-vec loading
 │       │   └── queries.py             # Parameterized query helpers, transaction manager
 │       ├── gpu/                       # GPU management
@@ -252,9 +262,11 @@ clipcannon/
 │       ├── errors.py                  # VoiceAgentError hierarchy (ASR, TTS, LLM, Config, Transport)
 │       ├── gpu_manager.py             # GPU memory management for voice agent models
 │       ├── server.py                  # WebSocket server (FastAPI)
-│       ├── pipecat_agent.py           # Pipecat-based voice pipeline (Ollama LLM + faster-qwen3-tts + AEC)
+│       ├── pipecat_agent.py           # Pipecat-based voice pipeline (Ollama LLM + faster-qwen3-tts + AEC + Smart Turn)
 │       ├── pipecat_tts.py             # Pipecat TTS service wrapping FastTTSAdapter for frame-based pipeline
 │       ├── wake_listener.py           # Always-on wake word listener (Silero VAD + faster-whisper tiny on CPU)
+│       ├── filler_audio.py            # Think-time filler audio generation (feedback sounds during processing)
+│       ├── latency_observer.py        # Real-time latency monitoring and metrics logging
 │       ├── activation/                # Wake word and hotkey activation
 │       │   ├── wake_word.py           # Configurable wake word detection with audio feedback
 │       │   └── hotkey.py              # Push-to-talk hotkey activation
@@ -267,8 +279,9 @@ clipcannon/
 │       │   ├── vad.py                 # Silero VAD integration
 │       │   └── types.py               # ASR result types
 │       ├── audio/                     # Audio processing utilities
-│       │   ├── aec_filter.py          # NLMS adaptive echo cancellation filter (pyroomacoustics)
+│       │   ├── aec_filter.py          # Two-layer AEC: mic gating + spectral suppression (no external libs)
 │       │   ├── echo_ref_processor.py  # Echo reference signal capture for AEC
+│       │   ├── semantic_turn_detector.py # ML-based end-of-turn detection (Smart Turn V3)
 │       │   └── voice_command_detector.py # Voice command detection via sentence embedding similarity
 │       ├── brain/                     # LLM reasoning
 │       │   ├── llm.py                 # Qwen3-14B via Ollama (GGUF, ~120 tok/s local)
@@ -290,7 +303,7 @@ clipcannon/
 │   ├── server.py                      # FastAPI app, SQLite-backed credits, HMAC integrity
 │   ├── d1_sync.py                     # Cloudflare D1 sync stub (local-only)
 │   └── stripe_webhooks.py             # Stripe checkout webhook handler
-├── tests/                             # 42 pytest files (~686 tests), 10 FSV scripts
+├── tests/                             # 44 pytest files (681 tests), 10 FSV scripts
 │   ├── conftest.py                    # Session-scoped shared fixtures
 │   ├── test_pipeline_stages.py        # 12 tests — probe, audio/frame extract, DAG, orchestrator
 │   ├── test_visual_pipeline.py        # 34 tests — storyboard, quality, visual embed, OCR, shot type
@@ -298,25 +311,26 @@ clipcannon/
 │   ├── test_understanding_tools.py    # 11 tests — transcript, search, frame tools
 │   ├── test_provenance_integration.py # 19 tests — hash chain, tamper detection
 │   ├── test_billing.py                # 40 tests — HMAC, credits, license server, D1, Stripe
-│   ├── test_edl.py                    # 19 tests — EDL models, validation, platform constraints
+│   ├── test_edl.py                    # 17 tests — EDL models, validation
 │   ├── test_captions.py               # 14 tests — caption chunking, ASS generation
 │   ├── test_smart_crop.py             # 15 tests — crop regions, face tracking, aspect ratios
 │   ├── test_editing_tools.py          # 19 tests — create/modify/list edits, metadata, iterative editing
 │   ├── test_rendering.py              # 14 tests — encoding profiles, codec fallback
-│   ├── test_audio_generation.py       # 15 tests — 9 SFX types, 6 MIDI presets
+│   ├── test_audio_generation.py       # 15 tests — SFX types, MIDI presets
 │   ├── test_discovery_tools.py        # 28 tests — best moments, cut points, narrative flow, safe cuts
 │   ├── test_change_classifier.py      # 27 tests — change classification for iterative editing
 │   ├── test_feedback.py               # 30 tests — natural language feedback application
 │   ├── test_preview_segment.py        # 3 tests — segment preview rendering
 │   ├── test_segment_cache.py          # 17 tests — segment-level render caching
-│   ├── test_avatar.py                 # 12 tests — lip-sync engine (LatentSync)
+│   ├── test_avatar.py                 # 30 tests — lip-sync engine, webcam extraction, tool definitions, dispatch
 │   ├── test_voice_verify.py           # 16 tests — multi-gate voice verification (WER, SECS, sanity)
 │   ├── test_voice_inference.py        # 5 tests — Qwen3-TTS voice synthesis
 │   ├── test_voice_data_prep.py        # 11 tests — voice data preparation, profile CRUD
+│   ├── test_music_planner.py          # 37 tests — music planner, auto_music/compose_music tools, mood mapping
 │   ├── test_dashboard_phase2.py       # 12 tests — timeline, editing, review endpoints
 │   ├── dashboard/test_dashboard.py    # 18 tests — dashboard endpoints
 │   ├── integration/test_full_pipeline.py # 22 tests — full pipeline with real video
-│   ├── voiceagent/                    # ~201 tests — voice agent subsystem
+│   ├── voiceagent/                    # 201 tests — voice agent subsystem (19 files)
 │   │   ├── conftest.py                # Voice agent test fixtures
 │   │   ├── test_agent.py              # Agent orchestrator tests
 │   │   ├── test_asr_types.py          # ASR result types
@@ -448,7 +462,7 @@ clipcannon/
 
   <pipeline_architecture>
     <rule id="ARCH-10">DAG-based execution — stages declare dependencies, orchestrator resolves execution order via topological sort</rule>
-    <rule id="ARCH-11">Required stages (6) stop pipeline on failure; optional stages (16) degrade gracefully with fallback values</rule>
+    <rule id="ARCH-11">Required stages (6) stop pipeline on failure; optional stages (17) degrade gracefully with fallback values</rule>
     <rule id="ARCH-12">HTDemucs source separation runs BEFORE all audio analysis — clean stems are force multiplier</rule>
     <rule id="ARCH-13">WhisperX with wav2vec2 forced alignment is MANDATORY — base Whisper timestamps drift 200-500ms</rule>
     <rule id="ARCH-14">Every pipeline stage writes a provenance record with SHA-256 hashes of input and output</rule>
@@ -483,8 +497,8 @@ clipcannon/
   <voice_agent_architecture>
     <rule id="ARCH-70">Voice agent (Jarvis) is a SEPARATE application from ClipCannon MCP — independent entry point, config, and model stack</rule>
     <rule id="ARCH-71">Voice agent uses faster-qwen3-tts 0.6B for low-latency TTS (~500ms TTFB); ClipCannon uses full 1.7B for video generation quality</rule>
-    <rule id="ARCH-72">LLM brain runs Qwen3-14B via Ollama (GGUF, ~120 tok/s local), max 150 output tokens for conversational speed</rule>
-    <rule id="ARCH-73">ASR uses faster-whisper-large-v3 with Silero VAD endpointing (600ms silence threshold)</rule>
+    <rule id="ARCH-72">LLM brain runs Qwen3-14B via Ollama (GGUF, ~120 tok/s local), max 256 output tokens for conversational speed</rule>
+    <rule id="ARCH-73">ASR uses faster-whisper-large-v3 with Silero VAD endpointing (300ms silence threshold) + Smart Turn V3 ML-based end-of-turn detection</rule>
     <rule id="ARCH-74">Conversation manager handles turn-taking, interruption detection, and history (max 50 turns)</rule>
     <rule id="ARCH-75">Transport layer supports both local audio (PyAudio) and WebSocket for remote clients</rule>
     <rule id="ARCH-76">Wake word engine supports configurable sensitivity, multi-keyword, and audio feedback</rule>
@@ -492,8 +506,11 @@ clipcannon/
     <rule id="ARCH-78">Voice agent config uses frozen dataclasses (immutable after creation), loaded from ~/.voiceagent/config.json</rule>
     <rule id="ARCH-79">Pipecat frame-based pipeline handles streaming LLM→TTS, turn-taking, barge-in interruption, and AEC</rule>
     <rule id="ARCH-80">Always-on wake listener runs as lightweight process (Silero VAD + faster-whisper tiny on CPU), launches full Pipecat agent on wake phrase detection</rule>
-    <rule id="ARCH-81">AEC uses NLMS adaptive filter (pyroomacoustics) + mic gating to prevent echo feedback during local speaker playback</rule>
+    <rule id="ARCH-81">AEC uses two-layer approach: Layer 1 mic gating (silences mic during bot speech + echo tail), Layer 2 spectral suppression (attenuates frequencies matching echo reference)</rule>
     <rule id="ARCH-82">Voice command detector uses sentence embedding similarity to intercept switch commands before they reach the LLM</rule>
+    <rule id="ARCH-83">Smart Turn V3 ML-based turn detection overrides fixed VAD silence threshold with intelligent prediction for natural conversational flow</rule>
+    <rule id="ARCH-84">Filler audio provides auditory feedback during LLM processing time to maintain conversational presence</rule>
+    <rule id="ARCH-85">Latency observer monitors and logs real-time performance metrics (ASR, LLM TTFT, TTS TTFB) per turn</rule>
   </voice_agent_architecture>
 
   <billing_architecture>
@@ -578,7 +595,7 @@ clipcannon/
 <!-- ============================================================ -->
 <performance_budgets>
   <!-- Pipeline Performance (RTX 5090 targets) -->
-  <metric name="ingestion_1hr_1080p" target="< 5 minutes" gpu="RTX 5090">Full 22-stage pipeline for 1-hour 1080p source</metric>
+  <metric name="ingestion_1hr_1080p" target="< 5 minutes" gpu="RTX 5090">Full 23-stage pipeline for 1-hour 1080p source</metric>
   <metric name="ingestion_1hr_4090" target="< 8 minutes" gpu="RTX 4090">Same on RTX 4090 (INT8)</metric>
   <metric name="render_per_clip" target="< 30 seconds">Single clip render including audio + animations</metric>
   <metric name="music_gen_per_minute" target="< 5 seconds">ACE-Step music generation per minute of output</metric>
@@ -588,9 +605,9 @@ clipcannon/
 
   <!-- Voice Agent Performance -->
   <metric name="voice_agent_ttfb" target="< 500 milliseconds">Time to first audio byte from faster-qwen3-tts 0.6B</metric>
-  <metric name="voice_agent_llm_latency" target="< 2 seconds">Qwen3-14B via Ollama response generation (max 150 tokens, ~120 tok/s)</metric>
+  <metric name="voice_agent_llm_latency" target="< 2 seconds">Qwen3-14B via Ollama response generation (max 256 tokens, ~120 tok/s)</metric>
   <metric name="voice_agent_asr_latency" target="< 300 milliseconds">Streaming ASR transcription latency</metric>
-  <metric name="voice_agent_endpoint_silence" target="600 milliseconds">VAD silence threshold for turn-end detection</metric>
+  <metric name="voice_agent_endpoint_silence" target="300 milliseconds">VAD silence threshold for turn-end detection (Smart Turn V3 overrides when confident)</metric>
 
   <!-- Accuracy -->
   <metric name="transcript_wer" target="< 5%">Word Error Rate on English content</metric>
