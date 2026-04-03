@@ -71,7 +71,7 @@ Mixing:          mix_audio()                 [speech-aware ducking]
 
 `compose_midi_sectioned(plan, output_path) -> MidiResult`: Multi-section composition with intro/verse/chorus/bridge/outro, each with independent dynamics.
 
-`async render_midi_to_wav(midi_path, output_path, soundfont_path=None) -> Path`: FluidSynth synthesis.
+`async render_midi_to_wav(midi_path, output_path, soundfont_path=None, sample_rate=44100) -> Path`: FluidSynth synthesis. Searches 7 default SoundFont locations including system paths and `~/.clipcannon/models/GeneralUser_GS.sf2`. Also called automatically during render when audio assets contain MIDI files (compose_music outputs .mid).
 
 ---
 

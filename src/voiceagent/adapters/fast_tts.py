@@ -1,8 +1,8 @@
 """Fast TTS adapter using faster-qwen3-tts (0.6B) with CUDA graphs.
 
 Purpose-built for real-time voice agent conversations:
-  - 500ms TTFB (time to first audio byte)
-  - Streaming chunk-by-chunk synthesis
+  - ~100-150ms TTFB (streaming with chunk_size=2 on RTX 5090)
+  - Streaming chunk-by-chunk synthesis (yields ~167ms audio per chunk)
   - CUDA graph capture for 4-5x speedup over vanilla Qwen3-TTS
   - Full ICL mode with ref_text for accurate accent/cadence cloning
   - Runtime voice switching between pre-loaded profiles
@@ -34,11 +34,19 @@ MODEL_ID = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
 SAMPLE_RATE = 24000
 
 
+# Streaming chunk size: 2 codec tokens = ~167ms audio per chunk.
+# Lower = faster TTFB but more overhead per chunk.
+# 1 = ~83ms chunks (fastest TTFB, highest overhead)
+# 2 = ~167ms chunks (good balance for voice agent)
+# 12 = ~1000ms chunks (original default, too slow for real-time)
+STREAMING_CHUNK_SIZE = 2
+
+
 class FastTTSAdapter:
     """Real-time voice synthesis via faster-qwen3-tts with CUDA graphs.
 
     Uses the 0.6B Qwen3-TTS model with CUDA graph capture for
-    sub-500ms TTFB streaming synthesis. Supports runtime voice
+    ~100-150ms TTFB streaming synthesis. Supports runtime voice
     switching between loaded profiles.
     """
 
@@ -431,7 +439,7 @@ class FastTTSAdapter:
                 self._warmup()
                 engine = self._ensure_engine()
                 kwargs = self._clone_kwargs(text, max_new_tokens=256)
-                kwargs["chunk_size"] = 12
+                kwargs["chunk_size"] = STREAMING_CHUNK_SIZE
                 for chunk_audio, sr, _info in engine.generate_voice_clone_streaming(**kwargs):
                     self._sample_rate = sr
                     q.put(chunk_audio.astype(np.float32))

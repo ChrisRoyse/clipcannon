@@ -13,7 +13,7 @@ src/
         db/
             __init__.py                     # Re-exports get_connection, execute, fetch_one, fetch_all, batch_insert, create_project_db, init_project_directory
             connection.py                   # SQLite connection factory with WAL mode, pragmas, sqlite-vec extension loading, dict row factory
-            schema.py                       # Full DDL for 29 core tables + 4 vector tables + indexes. Phase 2/3 migrations. PROJECT_SUBDIRS includes edits/ and renders/
+            schema.py                       # Full DDL for 29 core tables + 4 vector tables + indexes. Phase 2/3/4 migrations. PROJECT_SUBDIRS includes edits/ and renders/
             queries.py                      # Parameterized query helpers: fetch_one, fetch_all, execute, execute_returning_id, batch_insert, transaction context manager, table_exists, count_rows
 
         gpu/
@@ -73,20 +73,24 @@ src/
 
         voice/                              # Voice cloning engine (Phase 3)
             __init__.py                     # Package docstring
-            data_prep.py                    # Voice training data preparation: silence-boundary splitting, transcript matching, phonemization, train/val manifests
+            data_prep.py                    # Voice training data preparation: silence-boundary splitting, transcript matching, phonemization, train/val manifests, prosody manifest export
             inference.py                    # VoiceSynthesizer class: Qwen3-TTS integration with iterative verification loop, reference audio/embedding support, SpeakResult
             verify.py                       # Multi-gate voice verification: VoiceVerifier with Qwen3-TTS ECAPA-TDNN 2048-dim speaker encoder, sanity (duration/clipping/SNR/silence), intelligibility (WER via Whisper, punctuation-stripped), identity (SECS)
             optimize.py                     # SECS-optimized synthesis: best-of-N candidate selection, reference clip scoring, OptimizedSpeakResult
             profiles.py                     # Voice profile SQLite CRUD: create/get/list/update/delete profiles in ~/.clipcannon/voice_profiles.db
             enhance.py                      # Resemble Enhance post-processing: denoise + latent flow matching, upsamples 24kHz TTS output to 44.1kHz broadcast quality
             multi_voice.py                  # MultiVoiceSynth: instant voice swapping for multi-speaker conversation generation, loads voice prompts once, concatenates segments with configurable pause
+            prosody_backfill.py             # Backfill prosody analysis for existing voice training clips when original ingest projects are unavailable. Creates prosody.db alongside voice data.
+            prosody_select.py               # Prosody-aware reference clip selection: selects best reference audio based on target style (energetic, calm, emphatic, varied, fast, slow, rising, question, best). Uses prosody_segments table.
 
         avatar/                             # Avatar / lip-sync engine (Phase 3)
             __init__.py                     # Package docstring
-            lip_sync.py                     # LipSyncEngine: LatentSync 1.6 (ByteDance) diffusion pipeline, VAE + UNet3D + DDIM scheduler, preserves original resolution (512x512 internal face processing), DeepCache support, auto video looping, LipSyncResult
+            lip_sync.py                     # LipSyncEngine: LatentSync 1.6 (ByteDance) diffusion pipeline, VAE + UNet3D + DDIM scheduler, preserves original resolution (512x512 internal face processing), DeepCache support, auto video looping, best-of-N candidate generation, LipSyncResult
+            face_enhance.py                 # Mouth-region-only CodeFormer enhancement: sharpens LatentSync VAE texture blur using InsightFace 106-point lip-contour masking at fidelity=0.5
+            viseme_map.py                   # Phoneme-to-viseme mapping: 14-viseme MPEG-4 system, CMU ARPAbet lookup via nltk.corpus.cmudict, word_to_visemes with proportional timing
 
         tools/
-            __init__.py                     # Tool registry. Combines all tool definitions (53 total) and dispatcher functions from 13 modules into ALL_TOOL_DEFINITIONS and TOOL_DISPATCHERS
+            __init__.py                     # Tool registry. Combines all tool definitions (54 total) and dispatcher functions from 13 modules into ALL_TOOL_DEFINITIONS and TOOL_DISPATCHERS
             project.py                      # 5 project tools: create, open, list, status, delete
             provenance_tools.py             # Provenance tools (definitions exported but currently empty list; provenance accessed via dashboard/direct DB)
             disk.py                         # 2 disk tools: status, cleanup
@@ -108,10 +112,10 @@ src/
             discovery.py                    # 4 discovery tools: find_best_moments, find_cut_points, get_narrative_flow, find_safe_cuts. dispatch_discovery_tool
             discovery_defs.py               # JSON schema definitions for 4 discovery MCP tools
             feedback.py                     # Feedback intent parser: translates natural language feedback into structured EDL changes via regex + keyword detection
-            voice.py                        # 4 voice tools: prepare_voice_data, voice_profiles, speak, speak_optimized. dispatch_voice_tool
-            voice_defs.py                   # JSON schema definitions for 4 voice MCP tools
-            avatar.py                       # 2 avatar tools: lip_sync, extract_webcam. dispatch_avatar_tool, _get_webcam_region, _get_source_info
-            avatar_defs.py                  # JSON schema definitions for 2 avatar MCP tools (lip_sync, extract_webcam)
+            voice.py                        # 4 voice tools: prepare_voice_data (with prosody manifest), voice_profiles, speak (with prosody_style + temperature), speak_optimized. dispatch_voice_tool
+            voice_defs.py                   # JSON schema definitions for 4 voice MCP tools (speak adds prosody_style + temperature params)
+            avatar.py                       # 2 avatar tools: lip_sync (with best-of-N), extract_webcam (forces 25fps). dispatch_avatar_tool, _get_webcam_region, _get_source_info
+            avatar_defs.py                  # JSON schema definitions for 2 avatar MCP tools (lip_sync with n_candidates, extract_webcam)
             generate_video.py               # 1 generate tool: generate_video (end-to-end voice + lip-sync). dispatch_generate_tool
             generate_defs.py                # JSON schema definition for generate_video tool
             storyboard.py                   # Contact sheet generation: build_contact_sheet creates grid of all frames with timestamps
@@ -120,7 +124,7 @@ src/
             __init__.py                     # Re-exports PipelineOrchestrator, PipelineResult, PipelineStage, StageResult, and stage run functions
             orchestrator.py                 # DAG-based pipeline runner. Resolves dependencies via topological sort, runs stages with per-stage timeouts, tracks timing, writes stream_status
             dag.py                          # Topological sort (Kahn's algorithm) for dependency resolution. update_stream_status helper
-            registry.py                     # Builds the full pipeline DAG with all 22 stages and their dependencies
+            registry.py                     # Builds the full pipeline DAG with all 23 stages and their dependencies
             probe.py                        # Stage: FFprobe metadata extraction and VFR detection
             vfr_normalize.py                # Stage: Variable frame rate normalization to constant frame rate via FFmpeg
             audio_extract.py                # Stage: Audio track extraction from source video via FFmpeg
@@ -140,6 +144,7 @@ src/
             profanity.py                    # Stage: Profanity detection and content safety rating from transcript
             highlights.py                   # Stage: Multi-signal highlight scoring (emotion, reaction, semantic, visual, quality, speaker, narrative)
             narrative_llm.py                # Stage: Qwen3-8B narrative structure analysis (story beats, open loops, chapters, key moments). Creates narrative_analysis table.
+            prosody_analysis.py             # Stage: Prosody feature extraction (F0 contour, energy, speaking rate, pitch variation) per sentence from vocal stem. Creates prosody_segments table. CPU-only (pyworld/numpy).
             storyboard.py                   # Stage: Storyboard grid generation from extracted frames
             scene_analysis.py               # Stage: Scene boundary detection, face/webcam/content region analysis, canvas region pre-computation for layouts A/B/C/D. Creates scene_map table.
             screen_layout.py                # Screen layout detection: identifies webcam overlay, content area, browser chrome regions
@@ -296,12 +301,13 @@ clipcannon.tools.audio
     -> clipcannon.tools.audio_smart (clipcannon_auto_music, clipcannon_compose_music)
 
 clipcannon.tools.voice
-    -> clipcannon.voice.data_prep (prepare_voice_training_data)
+    -> clipcannon.voice.data_prep (prepare_voice_training_data, export_prosody_manifest)
     -> clipcannon.voice.profiles (create/get/list/update/delete_voice_profile)
     -> clipcannon.voice.inference (VoiceSynthesizer)
     -> clipcannon.voice.optimize (optimized_speak)
     -> clipcannon.voice.verify (VoiceVerifier, build_reference_embedding)
     -> clipcannon.voice.enhance (enhance_speech)  [post-processing in speak/speak_optimized]
+    -> clipcannon.voice.prosody_select (select_prosody_reference)  [prosody-aware ref selection in speak]
 
 clipcannon.tools.avatar
     -> clipcannon.avatar.lip_sync (get_engine, LipSyncEngine)
@@ -338,7 +344,8 @@ clipcannon.pipeline.registry
     -> clipcannon.pipeline.orchestrator (PipelineOrchestrator, PipelineStage)
     -> clipcannon.pipeline.scene_analysis (run_scene_analysis)
     -> clipcannon.pipeline.narrative_llm (run_narrative_llm)
-    -> clipcannon.pipeline.* (all 22 stage run functions)
+    -> clipcannon.pipeline.prosody_analysis (run_prosody_analysis)
+    -> clipcannon.pipeline.* (all 23 stage run functions)
 
 clipcannon.dashboard.app
     -> clipcannon.__init__ (__version__)
@@ -391,7 +398,7 @@ Defined in `pyproject.toml` under `[project.scripts]`:
 clipcannon = "clipcannon.server:main"
 ```
 
-Calls `server.main()` which sets up structured JSON logging to stderr, creates the MCP Server with all 53 tools registered, and runs it on stdio transport via `asyncio.run(run_stdio())`.
+Calls `server.main()` which sets up structured JSON logging to stderr, creates the MCP Server with all 54 tools registered, and runs it on stdio transport via `asyncio.run(run_stdio())`.
 
 ### Narrative LLM stage dependencies
 

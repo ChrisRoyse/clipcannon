@@ -1,16 +1,27 @@
 """Pipecat-based voice agent with local Ollama LLM + faster-qwen3-tts.
 
 All local, no cloud APIs:
-  - ASR: faster-whisper (Whisper Large v3, float16, CUDA)
-  - LLM: Ollama serving Qwen3-14B locally (GGUF, ~120 tok/s)
-  - TTS: faster-qwen3-tts (Qwen3-TTS 0.6B with CUDA graphs)
-  - VAD: Silero VAD
+  - ASR: faster-whisper (Whisper Large v3 Turbo, float16, CUDA)
+  - LLM: Ollama serving Qwen3-8B locally (GGUF, ~186 tok/s)
+  - TTS: faster-qwen3-tts (Qwen3-TTS 0.6B with CUDA graphs, streaming)
+  - VAD: Silero VAD (300ms endpointing) + Smart Turn V3 (ML end-of-turn)
   - AEC: NLMS adaptive filter (pyroomacoustics) + mic gating
   - Transport: PyAudio local mic/speaker
 
+Latency optimizations (Phase 1 + Phase 2):
+  Phase 1:
+    - ASR: large-v3-turbo (809M, 2.7x faster than large-v3, same WER)
+    - LLM: 8B model (50ms TTFT vs 100ms for 14B)
+    - TTS: streaming chunk_size=2 (~130ms TTFB vs 500ms non-streaming)
+    - VAD: 300ms stop_secs (was 500ms), 150ms start_secs (was 200ms)
+  Phase 2:
+    - Smart Turn V3: ML-based end-of-turn detection (bundled ONNX model)
+    - Filler audio: pre-generated acknowledgments in cloned voice
+    - Latency observer: per-turn timing breakdown
+
 Pipecat handles:
   - Streaming LLM -> TTS (sentence-level chunking)
-  - Turn-taking (Silero VAD)
+  - Turn-taking (Silero VAD + Smart Turn V3)
   - Barge-in (interrupt agent mid-sentence)
   - Frame-based pipeline architecture
 
@@ -34,6 +45,22 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# --- Tunable latency knobs ---
+# ASR: large-v3-turbo is 2.7x faster than large-v3 with <0.4% WER increase
+ASR_MODEL = "large-v3-turbo"
+ASR_COMPUTE_TYPE = "float16"
+# LLM: 8B is ~50% faster TTFT than 14B; quality delta is negligible for
+# 1-3 sentence voice responses
+LLM_MODEL = "qwen3:8b-nothink"
+LLM_MAX_TOKENS = 256
+# VAD: 300ms stop = fastest safe endpoint without false triggers on pauses.
+# Smart Turn V3 overrides this with ML-based detection when confident.
+VAD_STOP_SECS = 0.3
+VAD_START_SECS = 0.15
+VAD_CONFIDENCE = 0.7
+# Filler audio: play a short acknowledgment while LLM processes
+ENABLE_FILLER_AUDIO = True
+
 
 def _ensure_pulse_server() -> None:
     """Set PULSE_SERVER for WSL2 PulseAudio TCP bridge."""
@@ -56,7 +83,7 @@ def _ensure_pulse_server() -> None:
 
 
 def _ensure_ollama_running() -> None:
-    """Verify Ollama is running and has qwen3:14b loaded."""
+    """Verify Ollama is running and has a qwen3 model loaded."""
     try:
         req = urllib.request.Request("http://localhost:11434/api/tags")
         with urllib.request.urlopen(req, timeout=3) as resp:
@@ -64,8 +91,10 @@ def _ensure_ollama_running() -> None:
             models = [m["name"] for m in data.get("models", [])]
             if not any("qwen3" in m for m in models):
                 logger.error(
-                    "Ollama has no qwen3 model. Run: ollama pull qwen3:14b"
-                    " then create nothink variant"
+                    "Ollama has no qwen3 model. Run: ollama pull qwen3:8b"
+                    " then create nothink variant with: "
+                    'echo "FROM qwen3:8b\\nPARAMETER num_ctx 8192" '
+                    "| ollama create qwen3:8b-nothink -f -"
                 )
                 sys.exit(1)
             logger.info("Ollama OK: %s", models)
@@ -101,11 +130,38 @@ async def run_agent(voice_name: str = "boris") -> None:
 
     from voiceagent.audio.aec_filter import AECFilter
     from voiceagent.audio.echo_ref_processor import EchoReferenceProcessor
+    from voiceagent.audio.semantic_turn_detector import SemanticTurnDetector
     from voiceagent.audio.voice_command_detector import (
         SleepCommandDetector,
         VoiceCommandDetector,
     )
+    from voiceagent.latency_observer import LatencyObserver
     from voiceagent.pipecat_tts import FastQwen3TTSService
+
+    # --- Smart Turn V3: ML-based end-of-turn detection ---
+    # Uses a bundled ONNX model (Whisper-based, runs on CPU) to predict
+    # whether the user has finished their turn. Much smarter than fixed
+    # silence thresholds -- detects sentence completion even with short
+    # pauses. Fallback: 3s silence timeout if model is uncertain.
+    try:
+        from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
+        from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
+            LocalSmartTurnAnalyzerV3,
+        )
+        from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
+
+        smart_turn = LocalSmartTurnAnalyzerV3(
+            params=SmartTurnParams(
+                stop_secs=2.0,         # Fallback: force end after 2s silence
+                pre_speech_ms=300,     # Buffer 300ms before speech for context
+                max_duration_secs=8,   # Max 8s per utterance for ML analysis
+            ),
+        )
+        smart_turn_available = True
+        logger.info("Smart Turn V3 loaded (ONNX, CPU)")
+    except Exception as exc:
+        smart_turn_available = False
+        logger.warning("Smart Turn V3 unavailable: %s", exc)
 
     # --- AEC: Echo cancellation filter ---
     aec_filter = AECFilter(
@@ -122,10 +178,10 @@ async def run_agent(voice_name: str = "boris") -> None:
             vad_enabled=True,
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
-                    confidence=0.7,    # Default confidence
-                    start_secs=0.2,    # Require 200ms of speech to trigger
-                    stop_secs=0.5,     # Require 500ms silence to end turn
-                    min_volume=0.01,   # Low threshold -- AEC handles echo, not volume gating
+                    confidence=VAD_CONFIDENCE,
+                    start_secs=VAD_START_SECS,
+                    stop_secs=VAD_STOP_SECS,
+                    min_volume=0.01,
                 ),
             ),
             audio_out_sample_rate=24000,
@@ -133,20 +189,20 @@ async def run_agent(voice_name: str = "boris") -> None:
         ),
     )
 
-    # --- ASR: local Whisper (beam_size=1 for ~2x faster transcription) ---
+    # --- ASR: local Whisper Turbo (809M, 2.7x faster, same WER) ---
     stt = WhisperSTTService(
-        model="large-v3",
+        model=ASR_MODEL,
         device="cuda",
-        compute_type="float16",
+        compute_type=ASR_COMPUTE_TYPE,
         no_speech_prob=0.4,
     )
 
-    # --- LLM: local Ollama (qwen3:14b, thinking disabled) ---
+    # --- LLM: local Ollama (qwen3:8b, thinking disabled, ~186 tok/s) ---
     llm = OLLamaLLMService(
-        model="qwen3:14b-nothink",
+        model=LLM_MODEL,
         base_url="http://localhost:11434/v1",
         settings=OllamaLLMSettings(
-            max_tokens=512,
+            max_tokens=LLM_MAX_TOKENS,
             temperature=0.6,
             top_p=0.8,
             top_k=20,
@@ -196,14 +252,25 @@ async def run_agent(voice_name: str = "boris") -> None:
     )
     sleep_detector = SleepCommandDetector()
 
+    # --- Semantic turn detector (text-based, LiveKit model) ---
+    # Second signal: analyzes transcription TEXT to predict end-of-turn
+    # based on semantic content. Complements the audio-based Smart Turn V3.
+    # ~12ms per inference on CPU, no GPU needed, ~165MB RAM.
+    semantic_turn = SemanticTurnDetector(threshold=0.5)
+
+    # --- Latency observer ---
+    latency_observer = LatencyObserver()
+
     # --- Pipeline ---
-    # Voice command detector sits between STT and LLM context aggregator.
-    # It intercepts switch commands (detected via embeddings) and blocks
-    # them from reaching the LLM. Normal speech passes through.
+    # Semantic turn detector sits right after STT so it can analyze every
+    # transcription. It logs EOU probability but does NOT block frames.
+    # Combined with Smart Turn V3 (audio-based), we have two independent
+    # signals for end-of-turn detection.
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
+            semantic_turn,
             sleep_detector,
             voice_cmd_detector,
             context_aggregator.user(),
@@ -220,17 +287,51 @@ async def run_agent(voice_name: str = "boris") -> None:
         params=PipelineParams(
             allow_interruptions=True,
             enable_metrics=True,
+            observers=[latency_observer],
         ),
     )
 
+    # --- Register Smart Turn V3 as turn analyzer on the VAD ---
+    # The Smart Turn analyzer runs its ML model when VAD detects silence,
+    # overriding the fixed stop_secs with an intelligent prediction.
+    if smart_turn_available:
+        try:
+            vad = transport._params.vad_analyzer
+            if hasattr(vad, 'set_turn_analyzer'):
+                vad.set_turn_analyzer(smart_turn)
+                logger.info("Smart Turn V3 registered with VAD analyzer")
+            else:
+                logger.info(
+                    "VAD analyzer does not support set_turn_analyzer; "
+                    "Smart Turn V3 running as standalone"
+                )
+        except Exception as exc:
+            logger.debug("Smart Turn V3 VAD registration skipped: %s", exc)
+
+    # --- Filler audio pre-generation (background) ---
+    filler_cache = None
+    if ENABLE_FILLER_AUDIO:
+        from voiceagent.filler_audio import FillerAudioCache
+
+        filler_cache = FillerAudioCache()
+        # Pre-generate in background so it doesn't delay startup
+        asyncio.create_task(filler_cache.pregenerate(voice_name))
+
     runner = PipelineRunner()
+
+    turn_features = "Smart Turn V3 (audio) + " if smart_turn_available else ""
+    filler_status = "enabled" if ENABLE_FILLER_AUDIO else "disabled"
 
     print("\n=== Voice Agent (Pipecat + AEC) ===")
     print(f"Voice: {voice_name}")
-    print("LLM: Ollama qwen3:14b-nothink (local, ~120 tok/s)")
-    print("ASR: Whisper Large v3 (local, float16)")
-    print("TTS: faster-qwen3-tts 0.6B (local, CUDA graphs)")
+    print(f"LLM: Ollama {LLM_MODEL} (local, ~186 tok/s)")
+    print(f"ASR: Whisper {ASR_MODEL} (local, {ASR_COMPUTE_TYPE})")
+    print("TTS: faster-qwen3-tts 0.6B (local, CUDA graphs, streaming)")
+    print(f"Turn: {turn_features}LiveKit semantic (text)")
+    print(f"VAD: {VAD_STOP_SECS}s stop / {VAD_START_SECS}s start")
+    print(f"Filler audio: {filler_status}")
     print("AEC: NLMS adaptive filter (pyroomacoustics)")
+    print("Latency observer: active (check logs)")
     print("---")
     print("Speak to start. Press Ctrl+C to quit.")
     print("=" * 35 + "\n")

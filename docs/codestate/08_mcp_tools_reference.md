@@ -201,7 +201,7 @@ Find audio-safe cut points across entire video. Params: `project_id`.
 
 ### clipcannon_prepare_voice_data
 
-Extract vocal stems, split at silence, match transcript, produce train/val manifests. Params: `project_ids[]`, `speaker_label`, `output_dir`, `min_clip_duration_ms` (default 1000), `max_clip_duration_ms` (default 12000).
+Extract vocal stems, split at silence, match transcript, produce train/val manifests. Also exports a prosody manifest if prosody data exists. Params: `project_ids[]`, `speaker_label`, `output_dir`, `min_clip_duration_ms` (default 1000), `max_clip_duration_ms` (default 12000). Response includes `prosody_manifest` path when available.
 
 ### clipcannon_voice_profiles
 
@@ -209,7 +209,7 @@ Manage voice profiles. Params: `action` (list/get/create/delete/update), `name`,
 
 ### clipcannon_speak
 
-TTS in cloned voice with iterative verification. Auto-enhances via Resemble Enhance (denoise + 44.1kHz upsample). Params: `project_id`, `text`, `voice_name`, `speed` (0.5-2.0), `max_attempts` (default 5), `enhance` (boolean, default true -- post-process to remove vocoder artifacts).
+TTS in cloned voice with iterative verification. Supports prosody-aware reference selection and configurable sampling temperature. Auto-enhances via Resemble Enhance (denoise + 44.1kHz upsample). Params: `project_id`, `text`, `voice_name`, `speed` (0.5-2.0), `max_attempts` (default 5), `enhance` (boolean, default true), `prosody_style` (enum: energetic/calm/emphatic/varied/fast/slow/rising/question/best -- auto-selects reference clip matching target style), `temperature` (0.3-0.9, default 0.7 -- higher = more expressive, lower = more conservative).
 
 ### clipcannon_speak_optimized
 
@@ -221,11 +221,11 @@ SECS-optimized TTS with best-of-N selection. Auto-enhances via Resemble Enhance.
 
 ### clipcannon_lip_sync
 
-Lip-sync talking-head video via LatentSync 1.6. Output preserves original video resolution. DeepCache enabled by default for ~1.5-2x speedup. Params: `project_id`, `audio_path`, `driver_video_path`, `inference_steps` (default 20), `guidance_scale` (default 1.5), `seed`.
+Lip-sync talking-head video via LatentSync 1.6. Output preserves original video resolution. DeepCache enabled by default for ~1.5-2x speedup. Supports best-of-N candidate generation. Params: `project_id`, `audio_path`, `driver_video_path`, `inference_steps` (default 30), `guidance_scale` (default 2.0), `seed` (ignored when n_candidates > 1), `n_candidates` (default 1, set 3-5 for quality mode).
 
 ### clipcannon_extract_webcam
 
-Extract webcam/face region from an ingested video as a standalone driver video. Uses scene_map face detection data from ingest. Params: `project_id`, `start_ms` (optional), `end_ms` (optional), `padding_pct` (default 0.15).
+Extract webcam/face region from an ingested video as a standalone driver video at 25fps (LatentSync requirement -- feeding 60fps causes audio-visual sync drift). Uses scene_map face detection data from ingest. Params: `project_id`, `start_ms` (optional), `end_ms` (optional), `padding_pct` (default 0.15).
 
 ---
 

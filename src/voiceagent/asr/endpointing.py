@@ -5,7 +5,7 @@ logger = logging.getLogger(__name__)
 
 
 class EndpointDetector:
-    def __init__(self, silence_ms: int = 600, chunk_ms: int = 200) -> None:
+    def __init__(self, silence_ms: int = 350, chunk_ms: int = 200) -> None:
         self.silence_threshold_ms = silence_ms
         self.chunk_ms = chunk_ms
         self._silence_ms: int = 0

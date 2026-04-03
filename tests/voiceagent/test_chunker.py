@@ -34,9 +34,10 @@ def test_single_word_sentence_skipped(chunker):
     assert result is None
 
 
-def test_two_word_sentence_skipped(chunker):
+def test_two_word_sentence_extracted(chunker):
+    """Two-word sentences are now extracted (MIN_WORDS=2 for lower latency)."""
     result = chunker.extract_sentence("Hi there! ")
-    assert result is None
+    assert result == "Hi there!"
 
 
 def test_three_word_sentence_extracted(chunker):

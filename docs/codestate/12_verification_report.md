@@ -16,7 +16,7 @@ Extended scripts (`manual_fsv_full.py`, `manual_fsv_iterative.py`, `manual_fsv_p
 
 ## Pytest Results
 
-663 tests across 44 files (462 ClipCannon + 201 voice agent). See [11_test_suite.md](11_test_suite.md) for breakdown.
+681 tests across 44 files (480 ClipCannon + 201 voice agent). See [11_test_suite.md](11_test_suite.md) for breakdown.
 
 ## Lint
 
@@ -27,12 +27,12 @@ Ruff: Python 3.12, line length 100, rules E/F/W/I/N/UP/ANN/B/SIM/TCH. Source roo
 | Metric | Count |
 |---|---|
 | Source packages | `src/clipcannon/`, `src/license_server/`, `src/voiceagent/` |
-| Pipeline stages | 22 |
+| Pipeline stages | 23 |
 | MCP tools | 54 |
-| Database tables (ClipCannon) | 23 core + 1 narrative + 4 vector + 6 editing/rendering + 1 voice = 35 |
+| Database tables (ClipCannon) | 23 core + 1 narrative + 1 prosody + 1 mouth_frames (vestigial) + 4 vector + 6 editing/rendering + 1 voice = 37 |
 | Database tables (Voice Agent) | 3 (conversations, turns, metrics) |
 | Encoding profiles | 7 |
 | Target platforms | 7 |
 | Pytest files | 44 (25 ClipCannon + 19 voice agent) |
 | FSV scripts | 10 |
-| Schema version (ClipCannon) | 3 |
+| Schema version (ClipCannon) | 4 |

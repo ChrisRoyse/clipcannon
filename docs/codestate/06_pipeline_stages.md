@@ -1,6 +1,6 @@
 # Pipeline Stages -- Current Code State
 
-This document describes the ClipCannon pipeline as implemented in `src/clipcannon/pipeline/`. The pipeline contains 22 stages total (6 required, 16 optional). Every statement below is derived from the source code at the time of writing.
+This document describes the ClipCannon pipeline as implemented in `src/clipcannon/pipeline/`. The pipeline contains 23 stages total (6 required, 17 optional). Every statement below is derived from the source code at the time of writing.
 
 ## DAG Orchestrator Design
 
@@ -85,7 +85,7 @@ Failure of any required stage aborts the pipeline. All subsequent stages are ski
 5. `transcribe`
 6. `finalize`
 
-### Optional stages (16 stages)
+### Optional stages (17 stages)
 
 Failure is logged but does not stop the pipeline. Downstream stages that depend only on optional stages can still attempt to run.
 
@@ -102,9 +102,10 @@ Failure is logged but does not stop the pipeline. Downstream stages that depend 
 11. `emotion_embed`
 12. `reactions`
 13. `acoustic`
-14. `profanity`
-15. `chronemic`
-16. `highlights`
+14. `prosody_analysis`
+15. `profanity`
+16. `chronemic`
+17. `highlights`
 
 ## Complete Dependency Graph
 
@@ -130,6 +131,7 @@ Level 4: shot_type                 -> frame_extract, visual_embed
          emotion_embed             -> audio_extract
          reactions                 -> audio_extract
          profanity                 -> transcribe
+         prosody_analysis          -> source_separation, transcribe
 Level 5: chronemic                 -> transcribe, speaker_embed
 Level 6: highlights                -> emotion_embed, reactions, semantic_embed,
                                       visual_embed, quality, speaker_embed,
@@ -138,12 +140,12 @@ Level 7: finalize                  -> transcribe, visual_embed, ocr, quality,
                                       shot_type, storyboard, semantic_embed,
                                       narrative_llm, speaker_embed, emotion_embed,
                                       reactions, acoustic, profanity, chronemic,
-                                      highlights
+                                      highlights, prosody_analysis
 ```
 
 Note: The actual level numbers at runtime depend on the topological sort output. The comment levels in the registry are approximate; the sort algorithm determines the true execution order based on the dependency edges above.
 
-## Stage Details (All 22 Stages)
+## Stage Details (All 23 Stages)
 
 ---
 
@@ -671,7 +673,44 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 18. profanity
+### 18. prosody_analysis
+
+| Property        | Value                                               |
+|-----------------|-----------------------------------------------------|
+| **Name**        | `prosody_analysis`                                  |
+| **Operation ID**| `prosody_analysis`                                  |
+| **Required**    | No                                                  |
+| **Depends on**  | `source_separation`, `transcribe`                   |
+| **Module**      | `pipeline/prosody_analysis.py`                      |
+| **Internal stage name** | `prosody`                                    |
+| **Timeout**     | 300s                                                |
+
+**Inputs**: Vocal stem from `<project_dir>/stems/vocals.wav`, transcript segments from `transcript_segments` and `transcript_words` tables.
+
+**Operations**:
+1. Creates `prosody_segments` table (on demand, not part of schema migrations).
+2. Aligns transcript sentences to the vocal stem using word-level timestamps.
+3. Extracts per-sentence audio clips (min 800ms, max 15000ms).
+4. For each clip, computes prosodic features using pyworld/numpy (CPU-only):
+   - **F0 contour**: mean, std, min, max, range (via pyworld HARVEST)
+   - **Energy**: mean RMS, peak, std
+   - **Speaking rate**: words per minute
+   - **Pitch contour type**: classified as flat, rising, falling, or varied
+   - **Emphasis detection**: identifies stressed segments
+   - **Breath detection**: identifies audible breaths
+   - **Composite prosody score**: expressiveness metric
+5. Saves extracted clips to `<project_dir>/stems/prosody/` directory.
+6. Inserts records into `prosody_segments` table with all features.
+
+**Outputs / DB writes**: `prosody_segments` (INSERT). Creates vocal clip WAV files in `<project_dir>/stems/prosody/`.
+
+**ML model**: None. Uses pyworld (F0 extraction) and numpy (energy, rate computation). CPU-only.
+
+**Fallback if optional stage fails**: Returns `StageResult(success=False)`. Voice synthesis falls back to default reference clips.
+
+---
+
+### 19. profanity
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|
@@ -701,7 +740,7 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 19. chronemic
+### 20. chronemic
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|
@@ -734,7 +773,7 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 20. highlights
+### 21. highlights
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|
@@ -775,7 +814,7 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 21. scene_analysis
+### 22. scene_analysis
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|
@@ -812,14 +851,14 @@ Note: The actual level numbers at runtime depend on the topological sort output.
 
 ---
 
-### 22. finalize
+### 23. finalize
 
 | Property        | Value                                               |
 |-----------------|-----------------------------------------------------|
 | **Name**        | `finalize`                                          |
 | **Operation ID**| `finalize`                                          |
 | **Required**    | Yes                                                 |
-| **Depends on**  | `transcribe`, `visual_embed`, `ocr`, `quality`, `shot_type`, `storyboard`, `semantic_embed`, `narrative_llm`, `speaker_embed`, `emotion_embed`, `reactions`, `acoustic`, `profanity`, `chronemic`, `highlights` |
+| **Depends on**  | `transcribe`, `visual_embed`, `ocr`, `quality`, `shot_type`, `storyboard`, `semantic_embed`, `narrative_llm`, `speaker_embed`, `emotion_embed`, `reactions`, `acoustic`, `profanity`, `chronemic`, `highlights`, `prosody_analysis` |
 | **Module**      | `pipeline/finalize.py`                              |
 | **Internal stage name** | `finalize`                                   |
 

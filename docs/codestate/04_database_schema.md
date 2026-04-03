@@ -65,16 +65,17 @@ The current schema version constants are:
 - **`SCHEMA_VERSION = 1`** (Phase 1 core tables)
 - **`SCHEMA_VERSION_2 = 2`** (Phase 2 editing/rendering tables)
 - **`SCHEMA_VERSION_3 = 3`** (Phase 3 voice profiles)
+- **`SCHEMA_VERSION_4 = 4`** (Phase 4 mouth_frames -- vestigial, MouthMemory abandoned)
 
 `create_project_db` writes version 1 via `INSERT OR REPLACE` after core
-tables are created, then calls `migrate_to_v2()` and `migrate_to_v3()`.
+tables are created, then calls `migrate_to_v2()`, `migrate_to_v3()`, and `migrate_to_v4()`.
 
 ---
 
 ## 3. Core Tables
 
-There are 31 core tables (including `schema_version`, `provenance`,
-`scene_map`, `narrative_analysis`, Phase 2, and Phase 3 tables), organized below by domain.
+There are 33 core tables (including `schema_version`, `provenance`,
+`scene_map`, `narrative_analysis`, `prosody_segments`, `mouth_frames`, Phase 2, and Phase 3 tables), organized below by domain.
 
 ### 3.1 Project Metadata
 
@@ -227,7 +228,72 @@ Created on demand by the `narrative_llm` pipeline stage. Stores Qwen3-8B narrati
 
 Index: `idx_narrative_project` on `narrative_analysis(project_id)`.
 
-### 3.10 Phase 2: Editing Tables
+### 3.10 Prosody Analysis Table
+
+#### `prosody_segments`
+
+Created on demand by the `prosody_analysis` pipeline stage. Stores per-sentence prosodic features for voice cloning reference selection.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `segment_id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Auto-incrementing ID |
+| `project_id` | TEXT | NOT NULL, FK -> project | Owning project |
+| `start_ms` | INTEGER | NOT NULL | Segment start time in ms |
+| `end_ms` | INTEGER | NOT NULL | Segment end time in ms |
+| `clip_path` | TEXT | | Path to extracted vocal clip |
+| `transcript_text` | TEXT | NOT NULL DEFAULT '' | Transcript text for segment |
+| `word_count` | INTEGER | DEFAULT 0 | Number of words |
+| `f0_mean` | REAL | DEFAULT 0 | Mean fundamental frequency (Hz) |
+| `f0_std` | REAL | DEFAULT 0 | F0 standard deviation |
+| `f0_min` | REAL | DEFAULT 0 | Minimum F0 |
+| `f0_max` | REAL | DEFAULT 0 | Maximum F0 |
+| `f0_range` | REAL | DEFAULT 0 | F0 range (max - min) |
+| `energy_mean` | REAL | DEFAULT 0 | Mean RMS energy |
+| `energy_peak` | REAL | DEFAULT 0 | Peak energy |
+| `energy_std` | REAL | DEFAULT 0 | Energy standard deviation |
+| `speaking_rate_wpm` | REAL | DEFAULT 0 | Speaking rate in words per minute |
+| `pitch_contour_type` | TEXT | DEFAULT 'flat' | Contour classification: flat, rising, falling, varied |
+| `energy_level` | TEXT | DEFAULT 'medium' | Energy classification: low, medium, high |
+| `has_emphasis` | INTEGER | DEFAULT 0 | Whether emphasis was detected |
+| `has_breath` | INTEGER | DEFAULT 0 | Whether audible breath was detected |
+| `prosody_score` | REAL | DEFAULT 0 | Composite expressiveness score |
+| `emotion_label` | TEXT | DEFAULT 'neutral' | Detected emotion label |
+| `metadata_json` | TEXT | DEFAULT '{}' | Additional metadata as JSON |
+
+### 3.11 Phase 4: Mouth Frames Table (Vestigial)
+
+#### `mouth_frames`
+
+Schema v4 table from the abandoned MouthMemory approach. Created by `migrate_to_v4()` but not actively written to. The lip-sync pipeline uses LatentSync exclusively.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `frame_id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Auto-incrementing ID |
+| `project_id` | TEXT | NOT NULL, FK -> project | Owning project |
+| `timestamp_ms` | INTEGER | NOT NULL | Frame timestamp in ms |
+| `face_crop_path` | TEXT | | Path to face crop image |
+| `mouth_crop_path` | TEXT | | Path to mouth crop image |
+| `landmarks_json` | TEXT | | Face landmarks as JSON |
+| `head_yaw` | REAL | DEFAULT 0 | Head yaw angle |
+| `head_pitch` | REAL | DEFAULT 0 | Head pitch angle |
+| `head_roll` | REAL | DEFAULT 0 | Head roll angle |
+| `viseme` | TEXT | DEFAULT 'SIL' | Current viseme label |
+| `phoneme` | TEXT | DEFAULT 'SIL' | Current phoneme |
+| `word` | TEXT | DEFAULT '' | Current word |
+| `word_position` | TEXT | DEFAULT '' | Position within word |
+| `prev_viseme` | TEXT | DEFAULT 'SIL' | Previous viseme |
+| `next_viseme` | TEXT | DEFAULT 'SIL' | Next viseme |
+| `mouth_openness` | REAL | DEFAULT 0 | Mouth openness metric |
+| `mouth_width` | REAL | DEFAULT 0.5 | Mouth width metric |
+| `energy` | REAL | DEFAULT 0 | Audio energy |
+| `f0` | REAL | DEFAULT 0 | Fundamental frequency |
+| `emotion_label` | TEXT | DEFAULT 'neutral' | Emotion label |
+| `speaker_id` | INTEGER | | Speaker ID |
+| `quality_score` | REAL | DEFAULT 0.5 | Quality score |
+
+Indexes: `idx_mouth_viseme` (project_id, viseme, quality_score DESC), `idx_mouth_time` (project_id, timestamp_ms), `idx_mouth_speaker` (project_id, speaker_id, viseme).
+
+### 3.12 Phase 2: Editing Tables
 
 #### `edits`
 
@@ -297,7 +363,7 @@ Index: `idx_narrative_project` on `narrative_analysis(project_id)`.
 | `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |
 | `last_used_at` | TEXT | NOT NULL DEFAULT datetime('now') | Last access timestamp |
 
-### 3.11 Phase 2: Render Tables
+### 3.13 Phase 2: Render Tables
 
 #### `renders`
 
@@ -321,7 +387,7 @@ Index: `idx_narrative_project` on `narrative_analysis(project_id)`.
 | `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |
 | `completed_at` | TEXT | | Render completion timestamp |
 
-### 3.12 Phase 2: Audio Assets Table
+### 3.14 Phase 2: Audio Assets Table
 
 #### `audio_assets`
 
@@ -340,7 +406,7 @@ Index: `idx_narrative_project` on `narrative_analysis(project_id)`.
 | `volume_db` | REAL | DEFAULT 0 | Volume adjustment in dB |
 | `created_at` | TEXT | NOT NULL DEFAULT datetime('now') | Creation timestamp |
 
-### 3.13 Phase 3: Voice Profiles Table
+### 3.15 Phase 3: Voice Profiles Table
 
 #### `voice_profiles`
 
@@ -394,6 +460,9 @@ Phase 1 indexes (9) plus Phase 2/3 additions:
 | `idx_segment_cache_project` | `segment_cache` | `project_id` | Phase 2: Cache lookup |
 | `idx_voice_profiles_name` | `voice_profiles` | `name` | Phase 3: Profile lookup by name |
 | `idx_narrative_project` | `narrative_analysis` | `project_id` | Narrative analysis lookup by project |
+| `idx_mouth_viseme` | `mouth_frames` | `project_id, viseme, quality_score DESC` | Phase 4: Viseme lookup (vestigial) |
+| `idx_mouth_time` | `mouth_frames` | `project_id, timestamp_ms` | Phase 4: Time lookup (vestigial) |
+| `idx_mouth_speaker` | `mouth_frames` | `project_id, speaker_id, viseme` | Phase 4: Speaker viseme lookup (vestigial) |
 
 ---
 
@@ -461,7 +530,20 @@ Handles upgrading Phase 2 databases to Phase 3 schema:
 6. Updates `schema_version` to 3.
 7. Commits and closes.
 
-New projects created via `create_project_db` include all Phase 2 and Phase 3 tables from the start.
+### `migrate_to_v4(db_path)`
+
+Handles upgrading Phase 3 databases to Phase 4 schema:
+
+1. Opens a connection with `enable_vec=False`.
+2. Checks current schema version.
+3. If version is already >= 4, returns immediately (idempotent).
+4. Ensures v3 is applied first.
+5. Creates `mouth_frames` table (vestigial -- MouthMemory approach was abandoned).
+6. Creates indexes for mouth_frames.
+7. Updates `schema_version` to 4.
+8. Commits and closes.
+
+New projects created via `create_project_db` include all Phase 2, Phase 3, and Phase 4 tables from the start. The `prosody_segments` table is created on demand by the `prosody_analysis` pipeline stage (not part of the schema migration chain).
 
 ---
 

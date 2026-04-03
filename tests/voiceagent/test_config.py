@@ -19,9 +19,9 @@ def test_default_config_all_fields():
     assert c.llm.gpu_memory_utilization == 0.45
     assert c.llm.max_model_len == 32768
     assert c.llm.max_tokens == 150
-    assert c.asr.model_name == "Systran/faster-whisper-large-v3"
+    assert c.asr.model_name == "Systran/faster-whisper-large-v3-turbo"
     assert c.asr.vad_threshold == 0.5
-    assert c.asr.endpoint_silence_ms == 600
+    assert c.asr.endpoint_silence_ms == 350
     assert c.asr.chunk_ms == 200
     assert c.asr.sample_rate == 16000
     assert c.tts.voice_name == "boris"
@@ -60,7 +60,7 @@ def test_load_config_valid_json(tmp_path):
     c = load_config(config_file)
     assert c.asr.vad_threshold == 0.7
     assert c.asr.endpoint_silence_ms == 800
-    assert c.asr.model_name == "Systran/faster-whisper-large-v3"
+    assert c.asr.model_name == "Systran/faster-whisper-large-v3-turbo"
     assert c.tts.voice_name == "nova"
     assert c.transport.port == 9000
     assert c.llm == LLMConfig()

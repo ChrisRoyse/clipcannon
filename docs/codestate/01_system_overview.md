@@ -1,13 +1,13 @@
 # ClipCannon System Overview
 
-**Version**: 0.1.0 (Phase 1 + Phase 2 + Phase 3 + Voice Agent)
+**Version**: 0.1.0 (Phase 1 + Phase 2 + Phase 3 + Prosody + Voice Agent)
 **Python**: >=3.12
 **License**: BSL 1.1 (converts to Apache 2.0 on 2030-03-31)
 **Build System**: Hatchling
 
 ## What ClipCannon Is
 
-ClipCannon is an AI-powered video understanding, editing, rendering, and voice/avatar pipeline exposed as an MCP (Model Context Protocol) server. An AI assistant connects to ClipCannon over MCP, sends tool calls to analyze video files, create edits, render platform-optimized clips, generate audio, clone voices, and produce lip-synced talking-head videos. The pipeline ingests a source video, runs it through a 22-stage analysis DAG (transcription, scene detection, scene analysis, narrative analysis, emotion analysis, beat tracking, and more), and stores all results in a per-project SQLite database. The assistant then queries that database through additional MCP tools to retrieve transcripts, analytics, frames, storyboards, scene maps, editing context, narrative analysis, and discovery data -- and uses the editing, rendering, audio, voice, and avatar tools to produce platform-ready video clips.
+ClipCannon is an AI-powered video understanding, editing, rendering, and voice/avatar pipeline exposed as an MCP (Model Context Protocol) server. An AI assistant connects to ClipCannon over MCP, sends tool calls to analyze video files, create edits, render platform-optimized clips, generate audio, clone voices, and produce lip-synced talking-head videos. The pipeline ingests a source video, runs it through a 23-stage analysis DAG (transcription, scene detection, scene analysis, narrative analysis, prosody analysis, emotion analysis, beat tracking, and more), and stores all results in a per-project SQLite database. The assistant then queries that database through additional MCP tools to retrieve transcripts, analytics, frames, storyboards, scene maps, editing context, narrative analysis, and discovery data -- and uses the editing, rendering, audio, voice, and avatar tools to produce platform-ready video clips.
 
 A separate **Voice Agent** system (`src/voiceagent/`) provides a real-time conversational AI assistant ("Jarvis") with wake-word activation, streaming ASR, local LLM reasoning, and voice-cloned TTS. It runs independently of the MCP server and is not packaged in the ClipCannon wheel.
 
@@ -63,7 +63,7 @@ ML dependencies are in the `[ml]` optional extra and are not required for the MC
 
 | Tool | Description |
 |------|-------------|
-| `clipcannon_ingest` | Run the full 22-stage analysis pipeline on a created project. Registers all stages, executes the DAG, returns results. |
+| `clipcannon_ingest` | Run the full 23-stage analysis pipeline on a created project. Registers all stages, executes the DAG, returns results. |
 | `clipcannon_get_transcript` | Get transcript with word-level timestamps. Paginated in 15-minute windows. Supports `text` and `words` detail levels. |
 | `clipcannon_get_frame` | Get the nearest frame to a timestamp with moment context (transcript, speaker, emotion, topic, shot type, quality, pacing, OCR, profanity). Returns inline base64 image. Supports `render_id` for inspecting rendered output. |
 | `clipcannon_search_content` | Search video content by semantic similarity (sqlite-vec + Nomic embeddings) or text match (SQL LIKE fallback). |
@@ -138,15 +138,15 @@ ML dependencies are in the `[ml]` optional extra and are not required for the MC
 |------|-------------|
 | `clipcannon_prepare_voice_data` | Extract vocal stems from ingested projects, split at silence boundaries, match with transcript, produce training manifests. |
 | `clipcannon_voice_profiles` | Manage voice profiles: list, get, create, delete, update. Stores speaker embeddings and verification thresholds. |
-| `clipcannon_speak` | Synthesize speech in a cloned voice via Qwen3-TTS with iterative multi-gate verification (sanity, intelligibility, identity). Auto-enhances via Resemble Enhance (denoise + 44.1kHz upsample). |
+| `clipcannon_speak` | Synthesize speech in a cloned voice via Qwen3-TTS with iterative multi-gate verification (sanity, intelligibility, identity). Supports prosody-aware reference selection (`prosody_style`) and configurable sampling `temperature`. Auto-enhances via Resemble Enhance (denoise + 44.1kHz upsample). |
 | `clipcannon_speak_optimized` | SECS-optimized synthesis: generate N candidates, score by speaker encoder cosine similarity, return best match. Auto-enhances via Resemble Enhance. |
 
 ### Avatar (2 tools)
 
 | Tool | Description |
 |------|-------------|
-| `clipcannon_lip_sync` | Generate lip-synced talking-head video using LatentSync 1.6 (ByteDance) diffusion pipeline. Takes audio + driver video, produces synced output preserving original resolution. Supports guidance_scale tuning and DeepCache acceleration. |
-| `clipcannon_extract_webcam` | Extract the webcam/face region from an ingested video as a standalone driver video for lip-sync. Uses scene_map face detection data, applies configurable padding, outputs FFmpeg-cropped video. |
+| `clipcannon_lip_sync` | Generate lip-synced talking-head video using LatentSync 1.6 (ByteDance) diffusion pipeline. Takes audio + driver video, produces synced output preserving original resolution. Supports best-of-N candidate selection (`n_candidates`), guidance_scale tuning, and DeepCache acceleration. Defaults: 30 inference steps, 2.0 guidance scale. |
+| `clipcannon_extract_webcam` | Extract the webcam/face region from an ingested video as a standalone driver video for lip-sync. Uses scene_map face detection data, applies configurable padding, outputs FFmpeg-cropped video at 25fps (LatentSync requirement). |
 
 ### Video Generation (1 tool)
 
@@ -163,13 +163,13 @@ ML dependencies are in the `[ml]` optional extra and are not required for the MC
 | `clipcannon_credits_estimate` | Estimate the credit cost for an operation: analyze (10), render (2), metadata (1), publish (1). |
 | `clipcannon_spending_limit` | Set the monthly spending limit in credits. Operations exceeding this limit are blocked. |
 
-## Pipeline Stages (22 Stages)
+## Pipeline Stages (23 Stages)
 
-The analysis pipeline is a DAG of 22 stages. 16 analysis streams are tracked in the `stream_status` table:
+The analysis pipeline is a DAG of 23 stages. 16 analysis streams are tracked in the `stream_status` table:
 
 `source_separation`, `visual`, `ocr`, `quality`, `shot_type`, `transcription`, `semantic`, `emotion`, `speaker`, `reactions`, `acoustic`, `beats`, `chronemic`, `storyboards`, `profanity`, `highlights`
 
-Additional orchestration and analysis stages exist in the registry (`probe`, `vfr_normalize`, `audio_extract`, `frame_extract`, `scene_analysis`, `narrative_llm`, `finalize`) that are part of the execution DAG. The `scene_analysis` stage runs after `frame_extract` and `transcribe`, analyzing every frame for scene boundaries, face positions, webcam overlay regions, and content areas, storing results in the `scene_map` table. The `narrative_llm` stage runs Qwen3-8B after `transcribe` to analyze narrative structure (story beats, open loops, chapters), storing results in the `narrative_analysis` table.
+Additional orchestration and analysis stages exist in the registry (`probe`, `vfr_normalize`, `audio_extract`, `frame_extract`, `scene_analysis`, `narrative_llm`, `prosody_analysis`, `finalize`) that are part of the execution DAG. The `scene_analysis` stage runs after `frame_extract` and `transcribe`, analyzing every frame for scene boundaries, face positions, webcam overlay regions, and content areas, storing results in the `scene_map` table. The `narrative_llm` stage runs Qwen3-8B after `transcribe` to analyze narrative structure (story beats, open loops, chapters), storing results in the `narrative_analysis` table. The `prosody_analysis` stage runs after `source_separation` and `transcribe`, extracting F0 contour, energy, speaking rate, and pitch variation per sentence from the vocal stem, storing tagged clips in the `prosody_segments` table for prosody-aware voice cloning reference selection.
 
 ## Project Directory Structure
 
@@ -196,7 +196,7 @@ Each project lives under `~/.clipcannon/projects/{project_id}/`:
 
 ## Database Schema
 
-Each project's `analysis.db` uses schema version 3 and contains:
+Each project's `analysis.db` uses schema version 4 and contains:
 
 **Phase 1 tables (22)**: `schema_version`, `project`, `transcript_segments`, `transcript_words`, `scenes`, `speakers`, `emotion_curve`, `topics`, `highlights`, `reactions`, `silence_gaps`, `acoustic`, `music_sections`, `beats`, `beat_sections`, `on_screen_text`, `text_change_events`, `profanity_events`, `content_safety`, `pacing`, `storyboard_grids`, `stream_status`, `provenance`
 
@@ -206,11 +206,15 @@ Each project's `analysis.db` uses schema version 3 and contains:
 
 **Narrative analysis table (1)**: `narrative_analysis` -- stores Qwen3-8B narrative structure analysis (story beats, open loops, chapters, key moments, summary) per project
 
+**Prosody analysis table (1)**: `prosody_segments` -- stores per-sentence prosodic features (F0 contour, energy, speaking rate, pitch variation, expressiveness score) for voice cloning reference selection. Created on demand by the `prosody_analysis` pipeline stage.
+
+**Phase 4 table (1)**: `mouth_frames` -- schema v4 vestigial table from abandoned MouthMemory approach. Created by migration but not actively written to. The lip-sync pipeline uses LatentSync exclusively.
+
 **Vector tables** (sqlite-vec `vec0`): `vec_frames` (float[1152]), `vec_semantic` (float[768]), `vec_emotion` (float[1024]), `vec_speakers` (float[512])
 
 **Phase 3 table (1)**: `voice_profiles` -- stores voice profile metadata, 2048-dim Qwen3-TTS ECAPA-TDNN speaker embeddings, verification thresholds. Located in `~/.clipcannon/voice_profiles.db` (separate from project databases).
 
-Schema version: 3 (migrated from v1 -> v2 -> v3 via `migrate_to_v2()` and `migrate_to_v3()`). The `narrative_analysis` and `scene_map` tables are created on demand by their respective pipeline stages. Connection pragmas: WAL journal mode, NORMAL synchronous, 64MB cache, foreign keys ON, temp store in memory.
+Schema version: 4 (migrated from v1 -> v2 -> v3 -> v4 via `migrate_to_v2()`, `migrate_to_v3()`, and `migrate_to_v4()`). The `narrative_analysis`, `scene_map`, and `prosody_segments` tables are created on demand by their respective pipeline stages. Connection pragmas: WAL journal mode, NORMAL synchronous, 64MB cache, foreign keys ON, temp store in memory.
 
 ## Exception Hierarchy
 
@@ -272,7 +276,7 @@ Declarative Edit Decision List (EDL) architecture supporting segment-based editi
 
 ### Rendering Engine (`src/clipcannon/rendering/`)
 
-Async FFmpeg-based rendering pipeline with 7 platform-optimized encoding profiles (all h264_nvenc with software libx264 fallback), GPU acceleration (NVENC), transition effects (xfade), caption burn-in (ASS subtitles), per-segment canvas compositing with animated zoom, thumbnail generation, segment-level caching with content hashing, batch rendering with concurrency control, render inspection, segment preview, and contact sheet storyboard generation.
+Async FFmpeg-based rendering pipeline with 7 platform-optimized encoding profiles (all h264_nvenc with software libx264 fallback), GPU acceleration (NVENC), transition effects (xfade), caption burn-in (ASS subtitles), per-segment canvas compositing with animated zoom, thumbnail generation, segment-level caching with content hashing, batch rendering with concurrency control, render inspection, segment preview, contact sheet storyboard generation, and automatic MIDI-to-WAV rendering (compose_music outputs .mid files which are rendered via FluidSynth at render time). The FFmpeg command builder routes to the canvas compositing path when overlays or color grading are present (not just when canvas regions are defined).
 
 ### Audio Engine (`src/clipcannon/audio/`)
 
@@ -284,11 +288,15 @@ Cross-stream intelligence tools for finding optimal editing moments. Purpose-awa
 
 ### Voice Engine (`src/clipcannon/voice/`)
 
-Voice cloning pipeline with data preparation (silence-boundary splitting, transcript matching, phonemization, train/val manifests), voice profile management (SQLite CRUD with 2048-dim Qwen3-TTS ECAPA-TDNN speaker embeddings), Qwen3-TTS 1.7B voice synthesis with iterative multi-gate verification (sanity -> intelligibility -> identity), SECS-optimized best-of-N candidate selection, Resemble Enhance post-processing (denoise + latent flow matching to upsample 24kHz TTS output to 44.1kHz broadcast quality), and multi-voice conversation generation (`MultiVoiceSynth`) for instant voice swapping between loaded profiles.
+Voice cloning pipeline with data preparation (silence-boundary splitting, transcript matching, phonemization, train/val manifests, prosody manifest export), voice profile management (SQLite CRUD with 2048-dim Qwen3-TTS ECAPA-TDNN speaker embeddings), Qwen3-TTS 1.7B voice synthesis with iterative multi-gate verification (sanity -> intelligibility -> identity), SECS-optimized best-of-N candidate selection, prosody-aware reference selection (auto-selects reference clips matching target style: energetic, calm, emphatic, varied, fast, slow, rising, question), Resemble Enhance post-processing (denoise + latent flow matching to upsample 24kHz TTS output to 44.1kHz broadcast quality), and multi-voice conversation generation (`MultiVoiceSynth`) for instant voice swapping between loaded profiles. Prosody backfill (`prosody_backfill.py`) can retroactively analyze existing voice training clips when original ingest projects are unavailable.
 
 ### Avatar Engine (`src/clipcannon/avatar/`)
 
-Lip-sync video generation using LatentSync 1.6 (ByteDance) diffusion pipeline. Takes audio + driver video input, preserves original video resolution (face crops processed at 512x512 internally, then restored via inverse affine transform with soft mask blending). Supports DeepCache for ~1.5-2x speedup, configurable inference steps and guidance scale, automatic video looping (ping-pong) for audio longer than video. Includes webcam extraction tool to produce driver videos from ingested screen recordings. Integrated with voice synthesis for end-to-end video generation from text scripts with optional auto-webcam-extraction.
+Lip-sync video generation using LatentSync 1.6 (ByteDance) diffusion pipeline. Takes audio + driver video input, preserves original video resolution (face crops processed at 512x512 internally, then restored via inverse affine transform with soft mask blending). Supports best-of-N candidate generation (multiple seeds, pick best), DeepCache for ~1.5-2x speedup, configurable inference steps (default 30) and guidance scale (default 2.0), automatic video looping (ping-pong) for audio longer than video. Includes mouth-region CodeFormer enhancement (`face_enhance.py`) for sharpening LatentSync VAE texture blur without moving lip contours (InsightFace 106-point landmarks for tight lip-contour masking). Phoneme-to-viseme mapping (`viseme_map.py`) provides a 14-viseme system based on MPEG-4 Facial Animation Parameters with CMU ARPAbet lookup. Webcam extraction forces 25fps output (LatentSync requirement). Integrated with voice synthesis for end-to-end video generation from text scripts with optional auto-webcam-extraction.
+
+### Prosody Analysis (`src/clipcannon/pipeline/prosody_analysis.py`)
+
+Pipeline stage that extracts prosodic features from the vocal stem per sentence. Runs after source separation and transcription (CPU-only, uses pyworld/numpy). Each sentence-aligned clip is tagged with F0 contour (mean, std, min, max, range), energy level (mean, peak, std), speaking rate (WPM), pitch contour type (flat, rising, falling, varied), emphasis detection, breath detection, and a composite expressiveness score. Results stored in the `prosody_segments` table for automatic reference clip selection during voice synthesis.
 
 ### Scene Analysis (`src/clipcannon/pipeline/scene_analysis.py`)
 

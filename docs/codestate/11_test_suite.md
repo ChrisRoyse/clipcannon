@@ -34,9 +34,9 @@ Test video: `testdata/2026-03-20 14-43-20.mp4` (209.9s, 2560x1440, 60fps h264).
 
 ---
 
-## Unit Tests (663 total across 44 files)
+## Unit Tests (681 total across 44 files)
 
-### ClipCannon Tests (462 tests, 25 files)
+### ClipCannon Tests (480 tests, 25 files)
 
 | File | Tests | Domain |
 |---|---|---|
@@ -114,7 +114,7 @@ Standalone forensic testing (`python tests/fsv_*.py`). Each script: imports ever
 ## Running
 
 ```bash
-pytest                              # Full suite (663 tests)
+pytest                              # Full suite (681 tests)
 pytest tests/voiceagent/            # Voice agent only (201 tests)
 pytest tests/integration/           # Integration only
 python tests/fsv_core_infrastructure.py  # Individual FSV script

@@ -31,9 +31,9 @@ class LLMConfig:
 
 @dataclass(frozen=True)
 class ASRConfig:
-    model_name: str = "Systran/faster-whisper-large-v3"
+    model_name: str = "Systran/faster-whisper-large-v3-turbo"
     vad_threshold: float = 0.5
-    endpoint_silence_ms: int = 600
+    endpoint_silence_ms: int = 350
     chunk_ms: int = 200
     sample_rate: int = 16000
 

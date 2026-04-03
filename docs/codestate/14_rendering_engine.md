@@ -9,6 +9,7 @@ EDL -> Source validation (SHA-256, generation loss check)
     -> Profile resolution (7 profiles)
     -> Caption write (ASS)
     -> Crop computation (face tracking, split-screen, PIP, canvas)
+    -> Audio asset resolution (auto MIDI-to-WAV rendering via FluidSynth)
     -> FFmpeg execution (async subprocess)
         - Segment trim + concat, transitions (xfade), speed
         - Per-segment canvas compositing (regions, z-index, fit_mode)
@@ -45,11 +46,12 @@ EDL -> Source validation (SHA-256, generation loss check)
 
 | Priority | Condition | Builder |
 |---|---|---|
-| 1 | `canvas.enabled` | `_build_canvas_cmd` |
-| 2 | `crop.layout == "split_screen"` | `_build_split_screen_cmd` |
-| 3 | `crop.layout == "pip"` | `_build_pip_cmd` |
-| 4 | Single segment | `_build_single_segment_cmd` |
-| 4 | Multiple segments | `_build_multi_segment_cmd` |
+| 1 | `canvas.enabled` with regions, OR overlays present, OR global color grading present | `_build_per_segment_canvas_cmd` |
+| 2 | Per-segment canvas overrides | `_build_per_segment_canvas_cmd` |
+| 3 | `crop.layout == "split_screen"` | `_build_split_screen_cmd` |
+| 4 | `crop.layout == "pip"` | `_build_pip_cmd` |
+| 5 | Single segment (no overlays, no color grading) | `_build_single_segment_cmd` |
+| 5 | Multiple segments (no overlays, no color grading) | `_build_multi_segment_cmd` |
 
 **Per-segment canvas**: Each segment can have independent regions with source crop, output placement, z-index, fit_mode (cover/contain/stretch), opacity, border, animated zoom.
 
