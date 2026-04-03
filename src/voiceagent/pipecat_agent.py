@@ -50,10 +50,11 @@ logger = logging.getLogger(__name__)
 # ASR: large-v3-turbo is 2.7x faster than large-v3 with <0.4% WER increase
 ASR_MODEL = "large-v3-turbo"
 ASR_COMPUTE_TYPE = "float16"
-# LLM: Use whatever qwen3 nothink variant is available in Ollama.
-# 8B gives ~50% faster TTFT than 14B; 14B gives higher quality.
-# Both are fine for 1-3 sentence voice responses.
-LLM_MODEL = "qwen3:14b-nothink"
+# LLM: 8B is strongly preferred for voice agent — saves ~4GB VRAM
+# which is critical for keeping TTS CUDA graphs and Whisper in fast
+# memory. 14B causes VRAM thrashing (32GB total, 31.5GB used).
+# Quality difference for 1-3 sentence responses is negligible.
+LLM_MODEL = "qwen3:8b-nothink"
 LLM_MAX_TOKENS = 256
 # VAD: 300ms stop = fastest safe endpoint without false triggers on pauses.
 # Smart Turn V3 overrides this with ML-based detection when confident.
@@ -82,6 +83,30 @@ def _ensure_pulse_server() -> None:
                     )
             except (OSError, subprocess.TimeoutExpired) as e:
                 logger.debug("WSL2 PulseAudio detection failed: %s", e)
+
+
+def _ensure_mic_volume() -> None:
+    """Boost PulseAudio mic volume if too low for VAD.
+
+    WSL2 PulseAudio bridge often delivers quiet audio. Silero VAD
+    needs sufficient signal level to detect speech reliably.
+    """
+    try:
+        result = subprocess.run(
+            ["pactl", "get-source-volume", "@DEFAULT_SOURCE@"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if "%" in result.stdout:
+            pct_str = result.stdout.split("%")[0].rsplit("/", 1)[-1].strip()
+            current_pct = int(pct_str)
+            if current_pct < 150:
+                subprocess.run(
+                    ["pactl", "set-source-volume", "@DEFAULT_SOURCE@", "300%"],
+                    timeout=5,
+                )
+                logger.info("Mic volume boosted %d%% -> 300%%", current_pct)
+    except (OSError, subprocess.TimeoutExpired, ValueError) as e:
+        logger.debug("Mic volume check skipped: %s", e)
 
 
 def _ensure_ollama_running() -> None:
@@ -113,6 +138,7 @@ async def run_agent(voice_name: str = "boris") -> None:
     """Run the Pipecat voice agent with local models."""
 
     _ensure_pulse_server()
+    _ensure_mic_volume()
     _ensure_ollama_running()
 
     from pipecat.audio.vad.silero import SileroVADAnalyzer

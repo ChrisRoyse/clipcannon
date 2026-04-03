@@ -179,18 +179,27 @@ def _start_wake_listener() -> "subprocess.Popen[bytes] | None":
 
     Runs ``python -m voiceagent listen`` in the background so the user
     can say "Hey Jarvis" at any time while ClipCannon is active.
+    Logs go to ~/.clipcannon/wake_listener.log so they don't block
+    the MCP stdio transport or fill up a pipe buffer.
     Returns the Popen handle (or None if launch fails).
     """
+    from pathlib import Path
+
+    log_dir = Path.home() / ".clipcannon"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "wake_listener.log"
+
     try:
+        fh = open(log_file, "a")  # noqa: SIM115
         proc = subprocess.Popen(
             [sys.executable, "-m", "voiceagent", "listen", "--voice", "boris"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stdout=fh,
+            stderr=fh,
             start_new_session=True,  # Detach from parent's terminal signals
         )
         logger.info(
-            "Wake listener started (PID %d) -- say 'Hey Jarvis' to activate",
-            proc.pid,
+            "Wake listener started (PID %d, log=%s) -- say 'Hey Jarvis' to activate",
+            proc.pid, log_file,
         )
         return proc
     except (OSError, FileNotFoundError) as exc:

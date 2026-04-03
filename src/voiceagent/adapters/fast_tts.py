@@ -34,12 +34,13 @@ MODEL_ID = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
 SAMPLE_RATE = 24000
 
 
-# Streaming chunk size: 2 codec tokens = ~167ms audio per chunk.
-# Lower = faster TTFB but more overhead per chunk.
-# 1 = ~83ms chunks (fastest TTFB, highest overhead)
-# 2 = ~167ms chunks (good balance for voice agent)
-# 12 = ~1000ms chunks (original default, too slow for real-time)
-STREAMING_CHUNK_SIZE = 2
+# Streaming chunk size in codec tokens. Each token = ~83ms audio.
+# 2 = ~167ms (fast TTFB but metallic artifacts at chunk boundaries)
+# 4 = ~333ms (smooth audio quality, still fast TTFB)
+# 12 = ~1000ms (original default, too slow for real-time)
+# chunk_size=4 is the sweet spot: natural voice quality without
+# audible chunk-boundary artifacts while maintaining <400ms TTFB.
+STREAMING_CHUNK_SIZE = 4
 
 
 class FastTTSAdapter:

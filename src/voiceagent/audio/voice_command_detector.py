@@ -75,14 +75,16 @@ class VoiceCommandDetector(FrameProcessor):
         self._initialized = False
 
     def _ensure_model(self) -> None:
-        """Lazy-load the sentence embedding model (CPU, fast)."""
+        """Lazy-load the sentence embedding model on GPU."""
         if self._model is not None:
             return
         from sentence_transformers import SentenceTransformer
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         self._model = SentenceTransformer(
-            "all-MiniLM-L6-v2", device="cpu",
+            "all-MiniLM-L6-v2", device=device,
         )
-        logger.info("Voice command detector: model loaded")
+        logger.info("Voice command detector: model loaded (%s)", device)
 
         # Pre-compute embeddings for all command patterns x voices
         patterns = []
@@ -220,7 +222,9 @@ class SleepCommandDetector(FrameProcessor):
         if self._model is not None:
             return
         from sentence_transformers import SentenceTransformer
-        self._model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
         self._embeddings = self._model.encode(
             self.SLEEP_PATTERNS, normalize_embeddings=True,
         )

@@ -61,6 +61,37 @@ def _ensure_pulse_server() -> None:
                 logger.debug("WSL2 PulseAudio detection failed: %s", e)
 
 
+def _ensure_mic_volume() -> None:
+    """Ensure PulseAudio mic volume is loud enough for VAD.
+
+    WSL2 PulseAudio bridge often delivers very quiet audio (-25dBFS).
+    Silero VAD needs at least -15dBFS to reliably detect speech.
+    Boosts source volume to 300% if the current level is below 150%.
+    """
+    try:
+        result = subprocess.run(
+            ["pactl", "get-source-volume", "@DEFAULT_SOURCE@"],
+            capture_output=True, text=True, timeout=5,
+        )
+        # Parse "Volume: front-left: 65536 / 100% / 0.00 dB"
+        if "%" in result.stdout:
+            pct_str = result.stdout.split("%")[0].rsplit("/", 1)[-1].strip()
+            current_pct = int(pct_str)
+            if current_pct < 150:
+                subprocess.run(
+                    ["pactl", "set-source-volume", "@DEFAULT_SOURCE@", "300%"],
+                    timeout=5,
+                )
+                logger.info(
+                    "Mic volume boosted from %d%% to 300%% for VAD reliability",
+                    current_pct,
+                )
+            else:
+                logger.info("Mic volume OK (%d%%)", current_pct)
+    except (OSError, subprocess.TimeoutExpired, ValueError) as e:
+        logger.debug("Mic volume check skipped: %s", e)
+
+
 class WakeWordListener:
     """Lightweight always-on wake word detector."""
 
@@ -95,23 +126,28 @@ class WakeWordListener:
         return model
 
     def _load_whisper(self) -> object:
-        """Load tiny Whisper model (CPU, fast)."""
+        """Load tiny Whisper model (GPU for speed)."""
         if self._whisper is not None:
             return self._whisper
         from faster_whisper import WhisperModel
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        compute = "float16" if device == "cuda" else "int8"
         self._whisper = WhisperModel(
-            "tiny", device="cpu", compute_type="int8",
+            "tiny", device=device, compute_type=compute,
         )
-        logger.info("Wake listener: Whisper tiny loaded (CPU)")
+        logger.info("Wake listener: Whisper tiny loaded (%s, %s)", device, compute)
         return self._whisper
 
     def _load_embedder(self) -> None:
-        """Load sentence embeddings and pre-compute wake phrase vectors."""
+        """Load sentence embeddings on GPU and pre-compute wake phrase vectors."""
         if self._embedder is not None:
             return
         from sentence_transformers import SentenceTransformer
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         self._embedder = SentenceTransformer(
-            "all-MiniLM-L6-v2", device="cpu",
+            "all-MiniLM-L6-v2", device=device,
         )
         self._wake_embeddings = self._embedder.encode(
             WAKE_PHRASES, normalize_embeddings=True,
@@ -166,6 +202,12 @@ class WakeWordListener:
     def _collect_speech(self) -> np.ndarray | None:
         """Use VAD to collect a speech segment from the mic.
 
+        Two-tier detection:
+          1. Silero VAD (ML-based, high accuracy when mic signal is clean)
+          2. Energy-based fallback (detects loud transients above the
+             rolling noise floor -- works even when VAD fails due to
+             noisy/misconfigured mic input)
+
         Returns float32 audio array if speech detected, None if silence.
         """
         import torch
@@ -182,26 +224,58 @@ class WakeWordListener:
         max_silence = int(500 / chunk_ms)  # 500ms silence = end
         max_speech_chunks = int(5000 / chunk_ms)  # 5s max
 
-        for _ in range(int(10000 / chunk_ms)):  # 10s timeout
+        # Energy-based fallback: rolling noise floor estimation
+        noise_floor_rms: float = 0.0
+        energy_trigger_ratio = 2.5  # Speech must be 2.5x louder than noise
+
+        for i in range(int(10000 / chunk_ms)):  # 10s timeout
             try:
                 data = self._stream.read(CHUNK_SAMPLES, exception_on_overflow=False)
             except OSError:
                 continue
 
-            # Convert to float for VAD (Silero v5 needs flat 512-sample tensor)
             audio_int16 = np.frombuffer(data, dtype=np.int16)
-            audio_float = torch.from_numpy(
-                audio_int16.astype(np.float32) / 32768.0,
-            )
+            audio_f32 = audio_int16.astype(np.float32) / 32768.0
 
-            # Run VAD
+            # Apply fixed gain boost for VAD reliability.
+            # WSL2 PulseAudio + GoXLR Chat Mic delivers ~-19dBFS peak,
+            # but Silero VAD expects ~-6dBFS. A fixed 8x gain brings
+            # speech peaks to ~0.9 without distorting the SNR (noise
+            # stays proportionally quieter than speech).
+            audio_f32 = np.clip(audio_f32 * 8.0, -1.0, 1.0)
+
+            audio_float = torch.from_numpy(audio_f32)
+
+            # Silero VAD
             confidence = vad(audio_float, SAMPLE_RATE).item()
 
-            if confidence > 0.5:
+            # Energy-based fallback
+            rms = float(np.sqrt(np.mean(audio_int16.astype(np.float64) ** 2)))
+            if i < 10:
+                # First 10 chunks (~320ms): calibrate noise floor
+                noise_floor_rms = max(noise_floor_rms, rms)
+            else:
+                # Slowly adapt noise floor (EMA with alpha=0.01)
+                if not is_speaking:
+                    noise_floor_rms = 0.99 * noise_floor_rms + 0.01 * rms
+
+            # Speech detected by either VAD or energy spike
+            energy_speech = (
+                noise_floor_rms > 0
+                and rms > noise_floor_rms * energy_trigger_ratio
+                and rms > 500  # absolute minimum to avoid triggering on silence
+            )
+            is_speech = confidence > 0.5 or energy_speech
+
+            if is_speech:
                 if not is_speaking:
                     is_speaking = True
-                    # Include pre-speech padding
                     speech_chunks.extend(pre_buffer)
+                    if energy_speech and confidence <= 0.5:
+                        logger.debug(
+                            "Energy fallback triggered: rms=%.0f, floor=%.0f",
+                            rms, noise_floor_rms,
+                        )
                 speech_chunks.append(data)
                 silence_count = 0
             else:
@@ -219,7 +293,6 @@ class WakeWordListener:
         if not speech_chunks:
             return None
 
-        # Concatenate and convert to float32
         audio_bytes = b"".join(speech_chunks)
         audio = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
         audio /= 32768.0
@@ -325,6 +398,7 @@ class WakeWordListener:
     def run(self) -> None:
         """Main loop: listen for wake word, launch agent, repeat."""
         _ensure_pulse_server()
+        _ensure_mic_volume()
         self._running = True
 
         print("\n=== Voice Agent Wake Listener ===")
