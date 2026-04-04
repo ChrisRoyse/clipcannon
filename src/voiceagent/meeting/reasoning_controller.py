@@ -84,8 +84,45 @@ _ADDRESS_WORDS = {"santa", "jarvis", "claus", "mr. claus", "father christmas"}
 # ---------------------------------------------------------------------------
 # Reasoning Controller
 # ---------------------------------------------------------------------------
+class AvatarCommand:
+    """Command from the reasoning controller to the avatar pipeline.
+
+    Every reasoning cycle produces one of these, which drives ALL
+    avatar subsystems: face rendering, voice, lip sync, body pose.
+    """
+
+    def __init__(
+        self,
+        intent: ActionIntent,
+        blendshapes: dict[str, float] | None = None,
+        voice_params: dict[str, float] | None = None,
+        gaze_target: tuple[float, float] = (0.0, 0.0),
+        head_pose: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        speak_text: str | None = None,
+        prosody_style: str = "default",
+    ) -> None:
+        self.intent = intent
+        self.blendshapes = blendshapes or {}
+        self.voice_params = voice_params or {}
+        self.gaze_target = gaze_target
+        self.head_pose = head_pose
+        self.speak_text = speak_text
+        self.prosody_style = prosody_style
+        self.timestamp = time.time()
+
+
 class ReasoningController:
-    """Always-on meeting intelligence that decides avatar behavior.
+    """Central nervous system for the meeting avatar.
+
+    Controls EVERYTHING: face rendering, voice synthesis, lip sync,
+    eye behavior, body pose, prosody selection, when to speak, how
+    to react. Every subsystem is driven by this controller.
+
+    The controller runs a continuous observe → reason → command loop:
+    1. Observe: transcript + prosody + emotion from meeting audio
+    2. Reason: classify situation, decide action intent
+    3. Command: produce AvatarCommand with blendshapes, voice params,
+       gaze, head pose, speak/react decisions
 
     Args:
         character_name: The name the avatar responds to.
@@ -93,6 +130,8 @@ class ReasoningController:
             a response and speaks it. Called when intent is RESPOND.
         expression_callback: Callable(intent, awareness) that updates
             the avatar's visual expression. Called on every Tier 2 cycle.
+        avatar_callback: Callable(AvatarCommand) that sends commands
+            to the Gaussian renderer + voice pipeline.
     """
 
     def __init__(
@@ -100,9 +139,11 @@ class ReasoningController:
         character_name: str = "Santa",
         respond_callback=None,
         expression_callback=None,
+        avatar_callback=None,
     ) -> None:
         self._name = character_name.lower()
         self._respond = respond_callback
+        self._avatar_cb = avatar_callback
         self._update_expression = expression_callback
         self._awareness = SituationalAwareness()
         self._running = False
@@ -228,6 +269,141 @@ class ReasoningController:
         return ActionIntent.IDLE
 
     # ------------------------------------------------------------------
+    # Avatar command generation
+    # ------------------------------------------------------------------
+    def produce_command(self, intent: ActionIntent) -> AvatarCommand:
+        """Translate an action intent into a full avatar command.
+
+        Maps the high-level intent to specific blendshape values,
+        gaze direction, head pose, and prosody selection. This is
+        what drives the Gaussian renderer every frame.
+        """
+        a = self._awareness
+
+        # Intent → blendshape mapping (facial expression)
+        blendshapes = self._intent_to_blendshapes(intent, a)
+
+        # Intent → gaze (where to look)
+        gaze = self._intent_to_gaze(intent, a)
+
+        # Intent → head pose
+        head = self._intent_to_head_pose(intent, a)
+
+        # Intent → prosody style for TTS
+        prosody = self._intent_to_prosody(intent, a)
+
+        cmd = AvatarCommand(
+            intent=intent,
+            blendshapes=blendshapes,
+            gaze_target=gaze,
+            head_pose=head,
+            prosody_style=prosody,
+        )
+
+        # Send to avatar pipeline
+        if self._avatar_cb:
+            try:
+                self._avatar_cb(cmd)
+            except Exception:
+                pass
+
+        return cmd
+
+    def _intent_to_blendshapes(self, intent: ActionIntent, a: SituationalAwareness) -> dict[str, float]:
+        """Map intent + awareness to ARKit blendshape values."""
+        bs: dict[str, float] = {}
+
+        if intent == ActionIntent.IDLE:
+            # Neutral face, slightly relaxed
+            bs["jawOpen"] = 0.0
+            bs["mouthSmileLeft"] = 0.05
+            bs["mouthSmileRight"] = 0.05
+
+        elif intent == ActionIntent.LISTEN_ATTENTIVE:
+            # Slightly raised brows, engaged
+            bs["browInnerUp"] = 0.15
+            bs["eyeWideLeft"] = 0.1
+            bs["eyeWideRight"] = 0.1
+
+        elif intent == ActionIntent.LISTEN_AMUSED:
+            # Smile, raised cheeks, slight squint
+            bs["mouthSmileLeft"] = 0.6
+            bs["mouthSmileRight"] = 0.6
+            bs["eyeSquintLeft"] = 0.3
+            bs["eyeSquintRight"] = 0.3
+            bs["browInnerUp"] = 0.1
+
+        elif intent == ActionIntent.LISTEN_EMPATHETIC:
+            # Concerned brows, soft mouth, slight frown
+            bs["browDownLeft"] = 0.3
+            bs["browDownRight"] = 0.3
+            bs["browInnerUp"] = 0.4
+            bs["mouthFrownLeft"] = 0.2
+            bs["mouthFrownRight"] = 0.2
+
+        elif intent == ActionIntent.THINK:
+            # Eyes slightly up-left, brows furrowed, mouth closed
+            bs["browDownLeft"] = 0.2
+            bs["browInnerUp"] = 0.3
+            bs["mouthPressLeft"] = 0.2
+            bs["mouthPressRight"] = 0.2
+
+        elif intent in (ActionIntent.RESPOND, ActionIntent.INTERJECT):
+            # Mouth opens for speech (lip sync overrides this)
+            bs["jawOpen"] = 0.2
+            bs["mouthSmileLeft"] = 0.1
+            bs["mouthSmileRight"] = 0.1
+            bs["browInnerUp"] = 0.1
+
+        elif intent == ActionIntent.REACT_LAUGH:
+            # Big smile, open mouth, squinted eyes
+            bs["jawOpen"] = 0.4
+            bs["mouthSmileLeft"] = 0.8
+            bs["mouthSmileRight"] = 0.8
+            bs["eyeSquintLeft"] = 0.5
+            bs["eyeSquintRight"] = 0.5
+
+        elif intent == ActionIntent.REACT_NOD:
+            # Slight smile, raised brows
+            bs["mouthSmileLeft"] = 0.3
+            bs["mouthSmileRight"] = 0.3
+            bs["browInnerUp"] = 0.2
+
+        return bs
+
+    def _intent_to_gaze(self, intent: ActionIntent, a: SituationalAwareness) -> tuple[float, float]:
+        """Map intent to gaze direction (degrees from center)."""
+        if intent == ActionIntent.THINK:
+            return (-3.0, 2.0)  # Look up-left while thinking
+        if intent in (ActionIntent.RESPOND, ActionIntent.LISTEN_ATTENTIVE):
+            return (0.0, 0.0)  # Look at camera (the speaker)
+        if intent == ActionIntent.IDLE:
+            return (0.0, -1.0)  # Slightly downward when idle
+        return (0.0, 0.0)
+
+    def _intent_to_head_pose(self, intent: ActionIntent, a: SituationalAwareness) -> tuple[float, float, float]:
+        """Map intent to head pose (pitch, yaw, roll in degrees)."""
+        if intent == ActionIntent.REACT_NOD:
+            return (-5.0, 0.0, 0.0)  # Slight nod down
+        if intent == ActionIntent.THINK:
+            return (3.0, -5.0, 0.0)  # Head tilts up-left
+        if intent == ActionIntent.LISTEN_EMPATHETIC:
+            return (0.0, 0.0, -3.0)  # Slight head tilt (empathetic)
+        return (0.0, 0.0, 0.0)
+
+    def _intent_to_prosody(self, intent: ActionIntent, a: SituationalAwareness) -> str:
+        """Map intent to prosody style for TTS reference selection."""
+        if a.detected_emotion == "amused":
+            return "ref_energetic"
+        if a.detected_emotion == "sad":
+            return "ref_warm"
+        if intent == ActionIntent.RESPOND and a.speak_urgency > 0.8:
+            return "ref_emphatic"
+        if intent == ActionIntent.INTERJECT:
+            return "ref_calm"
+        return "ref_default"
+
+    # ------------------------------------------------------------------
     # Tier 3: Response execution
     # ------------------------------------------------------------------
     async def execute_response(self, text: str) -> str | None:
@@ -256,15 +432,29 @@ class ReasoningController:
     # Main loop (runs as async task)
     # ------------------------------------------------------------------
     async def run(self, stop_event: asyncio.Event) -> None:
-        """Continuous reasoning loop. Run as a background task."""
+        """Continuous reasoning + command loop. Run as a background task.
+
+        Every cycle:
+        1. Reason about current situation → ActionIntent
+        2. Produce AvatarCommand (blendshapes, gaze, pose, prosody)
+        3. Send command to avatar pipeline (renderer, voice, lip sync)
+
+        The avatar is ALWAYS being controlled — even during silence,
+        the controller sends idle/breathing commands. There is never
+        a moment where the avatar isn't being driven by intelligence.
+        """
         self._running = True
-        logger.info("Reasoning controller started (interval=%.1fs)", self._reasoning_interval)
+        logger.info("Reasoning controller started — driving ALL avatar subsystems")
 
         while not stop_event.is_set() and self._running:
             try:
+                # Tier 2: Decide what to do
                 intent = self.reason()
 
-                # Update avatar expression based on intent
+                # Produce full avatar command from intent
+                cmd = self.produce_command(intent)
+
+                # Legacy expression callback
                 if self._update_expression:
                     try:
                         self._update_expression(intent, self._awareness)
