@@ -188,6 +188,146 @@ def rgb_to_yuv420(image: cp.ndarray) -> cp.ndarray:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Fused BGR uint8 -> NV12 uint8 kernel (single-pass, one thread per 2x2)
+# ---------------------------------------------------------------------------
+
+_BGR_TO_NV12_KERNEL = cp.RawKernel(
+    r"""
+extern "C" __global__
+void bgr_to_nv12(
+    const unsigned char* __restrict__ bgr,
+    unsigned char* __restrict__ nv12,
+    int height, int width
+) {
+    // Each thread processes a 2x2 pixel block
+    int bx = (blockDim.x * blockIdx.x + threadIdx.x);
+    int by = (blockDim.y * blockIdx.y + threadIdx.y);
+
+    int half_w = width / 2;
+    int half_h = height / 2;
+    if (bx >= half_w || by >= half_h) return;
+
+    int x = bx * 2;
+    int y = by * 2;
+
+    // Read 4 BGR pixels (row-major, channels=3)
+    int stride = width * 3;
+    int nv12_stride = width;
+
+    float r00, g00, b00, r01, g01, b01;
+    float r10, g10, b10, r11, g11, b11;
+
+    int idx00 = y * stride + x * 3;
+    b00 = (float)bgr[idx00];
+    g00 = (float)bgr[idx00 + 1];
+    r00 = (float)bgr[idx00 + 2];
+
+    int idx01 = y * stride + (x + 1) * 3;
+    b01 = (float)bgr[idx01];
+    g01 = (float)bgr[idx01 + 1];
+    r01 = (float)bgr[idx01 + 2];
+
+    int idx10 = (y + 1) * stride + x * 3;
+    b10 = (float)bgr[idx10];
+    g10 = (float)bgr[idx10 + 1];
+    r10 = (float)bgr[idx10 + 2];
+
+    int idx11 = (y + 1) * stride + (x + 1) * 3;
+    b11 = (float)bgr[idx11];
+    g11 = (float)bgr[idx11 + 1];
+    r11 = (float)bgr[idx11 + 2];
+
+    // BT.601 RGB->YUV
+    float y00 =  0.299f * r00 + 0.587f * g00 + 0.114f * b00;
+    float y01 =  0.299f * r01 + 0.587f * g01 + 0.114f * b01;
+    float y10 =  0.299f * r10 + 0.587f * g10 + 0.114f * b10;
+    float y11 =  0.299f * r11 + 0.587f * g11 + 0.114f * b11;
+
+    // Write Y plane
+    nv12[y * nv12_stride + x]           = (unsigned char)min(max(y00, 0.0f), 255.0f);
+    nv12[y * nv12_stride + x + 1]       = (unsigned char)min(max(y01, 0.0f), 255.0f);
+    nv12[(y + 1) * nv12_stride + x]     = (unsigned char)min(max(y10, 0.0f), 255.0f);
+    nv12[(y + 1) * nv12_stride + x + 1] = (unsigned char)min(max(y11, 0.0f), 255.0f);
+
+    // Average RGB across the 2x2 block for chroma
+    float r_avg = (r00 + r01 + r10 + r11) * 0.25f;
+    float g_avg = (g00 + g01 + g10 + g11) * 0.25f;
+    float b_avg = (b00 + b01 + b10 + b11) * 0.25f;
+
+    float u = -0.14713f * r_avg - 0.28886f * g_avg + 0.436f * b_avg + 128.0f;
+    float v =  0.615f   * r_avg - 0.51499f * g_avg - 0.10001f * b_avg + 128.0f;
+
+    // Write UV plane (interleaved NV12: U on even cols, V on odd cols)
+    int uv_row = height + by;
+    nv12[uv_row * nv12_stride + x]     = (unsigned char)min(max(u, 0.0f), 255.0f);
+    nv12[uv_row * nv12_stride + x + 1] = (unsigned char)min(max(v, 0.0f), 255.0f);
+}
+""",
+    "bgr_to_nv12",
+)
+
+
+def bgr_to_nv12_gpu(bgr: cp.ndarray) -> cp.ndarray:
+    """Convert BGR uint8 (H, W, 3) on GPU to NV12 uint8 (H*3//2, W).
+
+    Uses a fused CUDA kernel: one thread per 2x2 pixel block computes
+    4 luma values and 1 chroma pair. No intermediate float32 buffers.
+
+    Args:
+        bgr: CuPy uint8 array, shape (H, W, 3), BGR channel order.
+
+    Returns:
+        NV12 CuPy uint8 array, shape (H*3//2, W). Y plane in rows
+        0..H-1, interleaved UV in rows H..H*3//2-1.
+
+    Raises:
+        CompositorError: If dimensions are not even or input is invalid.
+    """
+    if not isinstance(bgr, cp.ndarray):
+        raise CompositorError(
+            "bgr must be a CuPy ndarray",
+            context={"type": type(bgr).__name__},
+        )
+    if bgr.ndim != 3 or bgr.shape[2] != 3:
+        raise CompositorError(
+            "bgr must have shape (H, W, 3)",
+            context={"shape": str(bgr.shape)},
+        )
+    if bgr.dtype != cp.uint8:
+        raise CompositorError(
+            "bgr must be uint8",
+            context={"dtype": str(bgr.dtype)},
+        )
+
+    h, w, _ = bgr.shape
+    if h % 2 != 0 or w % 2 != 0:
+        raise CompositorError(
+            "BGR->NV12 requires even dimensions",
+            context={"height": h, "width": w},
+        )
+    if h == 0 or w == 0:
+        raise CompositorError(
+            "BGR frame has zero size",
+            context={"height": h, "width": w},
+        )
+
+    nv12 = cp.empty((h * 3 // 2, w), dtype=cp.uint8)
+
+    half_w = w // 2
+    half_h = h // 2
+    block = (16, 16)
+    grid = (
+        (half_w + block[0] - 1) // block[0],
+        (half_h + block[1] - 1) // block[1],
+    )
+
+    bgr_contig = cp.ascontiguousarray(bgr)
+    _BGR_TO_NV12_KERNEL(grid, block, (bgr_contig, nv12, h, w))
+
+    return nv12
+
+
 def yuv420_to_rgb(image: cp.ndarray) -> cp.ndarray:
     """Convert YUV420 planar to RGB float32 on GPU.
 
