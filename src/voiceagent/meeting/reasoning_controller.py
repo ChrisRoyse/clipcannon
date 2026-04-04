@@ -427,6 +427,9 @@ class ReasoningController:
         finally:
             self._responding = False
             self._awareness.current_intent = ActionIntent.LISTEN_ATTENTIVE
+            # Reset addressing flag so we don't keep triggering RESPOND
+            self._awareness.speaker_is_addressing_me = False
+            self._awareness.speak_urgency = 0.0
 
     # ------------------------------------------------------------------
     # Main loop (runs as async task)

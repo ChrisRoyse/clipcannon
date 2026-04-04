@@ -37,6 +37,7 @@ import sys
 import time
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 logging.basicConfig(
@@ -51,7 +52,7 @@ logger = logging.getLogger("santa_bot")
 MEET_URL = sys.argv[1] if len(sys.argv) > 1 else ""
 SESSION_DIR = str(Path("~/.voiceagent/browser-session").expanduser())
 VOICE_NAME = "santa"
-LLM_MODEL = "qwen3:8b-nothink"  # 8B for fast responses (~2-3s vs ~7-10s for 14B)
+LLM_MODEL = "gemma4:e4b"  # Gemma 4 E4B: 4.5B active, 128K context, multimodal
 WHISPER_MODEL = "large-v3-turbo"
 OCR_PROVENANCE_URL = "http://localhost:3377/mcp"
 OCR_DB_NAME = "meetings"
@@ -481,27 +482,86 @@ async def launch_browser():
             "--disable-blink-features=AutomationControlled",
             "--use-fake-ui-for-media-stream",
             "--use-fake-device-for-media-stream",
-            f"--use-file-for-fake-video-capture={IDLE_Y4M}",
             "--use-file-for-fake-audio-capture=/home/cabdru/.voiceagent/silence.wav",
+            # Video: getUserMedia intercepted by init script → MediaStreamTrackGenerator
+            # The fake device creates a video source but our init script replaces it
         ],
         viewport={"width": 1280, "height": 720},
         locale="en-US",
         permissions=["camera", "microphone"],
     )
-    page = context.pages[0] if context.pages else await context.new_page()
-    # Capture RTCPeerConnections BEFORE page loads
-    await page.add_init_script("""
-        Object.defineProperty(navigator, "webdriver", {get: () => false});
-        window.__santaPCs = [];
-        const _OrigPC = window.RTCPeerConnection;
-        window.RTCPeerConnection = function(...args) {
-            const pc = new _OrigPC(...args);
-            window.__santaPCs.push(pc);
-            return pc;
+    # Init script: MediaStreamTrackGenerator video + AudioContext audio
+    # Intercepts getUserMedia BEFORE Google Meet loads — Meet gets our synthetic tracks
+    # MUST be minimal — large scripts crash the page
+    await context.add_init_script("""
+        Object.defineProperty(navigator,"webdriver",{get:()=>false});
+        const _origGUM=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+        window.__santaJpegB64=null;
+        window.__santaImg=new Image();
+        navigator.mediaDevices.getUserMedia=async function(c){
+            if(c&&c.video){
+                try{
+                    const gen=new MediaStreamTrackGenerator({kind:'video'});
+                    const w=gen.writable.getWriter();
+                    const oc=new OffscreenCanvas(1280,720);
+                    const ox=oc.getContext('2d');
+                    let i=0,lastJpeg=null;
+                    (async()=>{
+                        while(true){
+                            i++;
+                            if(window.__santaJpegB64&&window.__santaJpegB64!==lastJpeg){
+                                lastJpeg=window.__santaJpegB64;
+                                try{
+                                    const resp=await fetch('data:image/jpeg;base64,'+lastJpeg);
+                                    const blob=await resp.blob();
+                                    const bmp=await createImageBitmap(blob);
+                                    ox.drawImage(bmp,0,0,1280,720);
+                                    bmp.close();
+                                }catch(e){}
+                            }else if(!lastJpeg){
+                                ox.fillStyle='#1a1a2e';ox.fillRect(0,0,1280,720);
+                                ox.fillStyle='#eee';ox.font='36px Arial';
+                                ox.fillText('Connecting...',500,380);
+                            }
+                            const bmp=oc.transferToImageBitmap();
+                            const vf=new VideoFrame(bmp,{timestamp:performance.now()*1000});
+                            try{await w.write(vf);}catch(e){break;}
+                            vf.close();
+                            await new Promise(r=>setTimeout(r,66));
+                        }
+                    })();
+                    const s=new MediaStream([gen]);
+                    if(c.audio){
+                        const actx=new AudioContext({sampleRate:48000});
+                        const dest=actx.createMediaStreamDestination();
+                        s.addTrack(dest.stream.getAudioTracks()[0]);
+                        window.__santaAudioCtx=actx;
+                        window.__santaAudioDest=dest;
+                    }
+                    return s;
+                }catch(e){return _origGUM(c);}
+            }
+            return _origGUM(c);
         };
-        window.RTCPeerConnection.prototype = _OrigPC.prototype;
-        Object.keys(_OrigPC).forEach(k => { try { window.RTCPeerConnection[k] = _OrigPC[k]; } catch(e){} });
+        window.__santaPlayAudio=function(b64,sr){
+            const ctx=window.__santaAudioCtx,dest=window.__santaAudioDest;
+            if(!ctx||!dest)return Promise.resolve(false);
+            return ctx.resume().then(()=>new Promise((res,rej)=>{
+                try{
+                    const bin=atob(b64),bytes=new Uint8Array(bin.length);
+                    for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+                    const f32=new Float32Array(bytes.buffer);
+                    const buf=ctx.createBuffer(1,f32.length,sr);
+                    buf.copyToChannel(f32,0);
+                    const src=ctx.createBufferSource();src.buffer=buf;
+                    const g=ctx.createGain();g.gain.value=3.0;
+                    src.connect(g);g.connect(dest);
+                    src.onended=()=>res(true);src.start();
+                }catch(e){rej(e.message);}
+            }));
+        };
     """)
+    page = context.pages[0] if context.pages else await context.new_page()
     await page.goto(MEET_URL, wait_until="domcontentloaded", timeout=30000)
     await asyncio.sleep(3)
     logger.info("Page loaded, PC capture installed")
@@ -544,11 +604,11 @@ async def launch_browser():
                     except Exception:
                         continue
 
-                # Wait for WebRTC to establish audio track
-                await asyncio.sleep(4)
-
-                # Now replace the audio track with our controllable one
-                await setup_audio_injection(page)
+                # No replaceTrack needed — getUserMedia was intercepted by init script
+                # Video comes from WebSocket → MediaStreamTrackGenerator
+                # Audio comes from AudioContext created in the init script
+                await asyncio.sleep(2)
+                logger.info("MediaStreamTrackGenerator + WebSocket bridge active")
                 return pw, context, page
         except Exception:
             continue
@@ -598,25 +658,77 @@ async def audio_loop(page, stop):
         logger.info("TOTAL RESPONSE: %.1fs (target <2s)", t_total)
         return resp
 
-    # --- Expression handler called by reasoning controller ---
+    # --- Avatar rendering driven by controller commands ---
+    _last_avatar_cmd = None
+
+    def handle_avatar_command(cmd) -> None:
+        """Receive command from reasoning controller — queue for rendering."""
+        nonlocal _last_avatar_cmd
+        _last_avatar_cmd = cmd
+
     def handle_expression(intent: ActionIntent, awareness) -> None:
-        """Update avatar expression based on reasoning intent."""
-        # Log state changes
         if intent in (ActionIntent.RESPOND, ActionIntent.INTERJECT,
                        ActionIntent.LISTEN_AMUSED, ActionIntent.LISTEN_EMPATHETIC):
-            logger.info("Avatar: %s [emo=%s, urgency=%.1f]",
-                        intent.value, awareness.detected_emotion,
-                        awareness.speak_urgency)
+            logger.info("Avatar: %s [emo=%s]", intent.value, awareness.detected_emotion)
+
+    async def video_render_loop():
+        """Render avatar → push JPEG to Chrome via page.evaluate.
+
+        Chrome's init script uses MediaStreamTrackGenerator + OffscreenCanvas.
+        We set window.__santaJpegB64 with a JPEG base64 string (~30KB).
+        The generator loop decodes it and produces VideoFrames at 15fps.
+        Much smaller than raw RGBA (30KB vs 4.9MB per frame).
+        """
+        import base64, math
+
+        FPS = 10  # 10fps JPEG updates, generator interpolates at 15fps
+        frame_count = 0
+
+        while not stop.is_set() and (_face_warper is None or not _face_warper.ready):
+            await asyncio.sleep(1)
+
+        logger.info("Video render loop: %dfps JPEG → page.evaluate → MediaStreamTrackGenerator", FPS)
+
+        while not stop.is_set():
+            frame_count += 1
+            cmd = _last_avatar_cmd
+            if cmd is not None:
+                mouth_open = cmd.blendshapes.get("jawOpen", 0.0)
+                head_tilt = cmd.head_pose[2] if cmd.head_pose else 0.0
+            else:
+                t = frame_count / FPS
+                mouth_open = 0.0
+                head_tilt = math.sin(t * 0.5) * 0.3
+
+            frame_bgr = _face_warper.warp_mouth(mouth_open, head_tilt)
+
+            # Encode as JPEG (~30KB vs 4.9MB for raw RGBA)
+            _, jpg_buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 60])
+            jpg_b64 = base64.b64encode(jpg_buf).decode('ascii')
+
+            try:
+                await page.evaluate("b64 => { window.__santaJpegB64 = b64; }", jpg_b64)
+            except Exception:
+                pass
+
+            if frame_count % (FPS * 10) == 1:
+                logger.info("Video frame #%d (%dKB JPEG, mouth=%.2f)",
+                            frame_count, len(jpg_b64) // 1024, mouth_open)
+
+            await asyncio.sleep(1.0 / FPS)
 
     # --- Create the reasoning controller ---
     controller = ReasoningController(
         character_name="Santa",
         respond_callback=handle_respond,
         expression_callback=handle_expression,
+        avatar_callback=handle_avatar_command,
     )
 
-    # Start the reasoning loop as a background task
+    # Start reasoning controller + video render as async tasks
     reasoning_task = asyncio.create_task(controller.run(stop))
+    video_task = asyncio.create_task(video_render_loop())
+    logger.info("Reasoning controller + video render started")
 
     # Start audio capture
     parec = await asyncio.create_subprocess_exec(
@@ -695,6 +807,7 @@ async def audio_loop(page, stop):
     # Cleanup
     controller.stop()
     reasoning_task.cancel()
+    video_task.cancel()
     parec.kill()
     await ingest_transcript(_transcript_segments, meeting_id)
 
@@ -765,7 +878,9 @@ async def process(buf, history, page, meeting_id):
 async def transcribe(audio):
     """Transcribe audio using the singleton Whisper model."""
     model = get_whisper()
-    segs, _ = model.transcribe(audio, language="en", vad_filter=True)
+    # Disable Whisper's internal VAD — it filters out PulseAudio TCP's quiet audio.
+    # We normalize audio before calling transcribe(), so VAD isn't needed.
+    segs, _ = model.transcribe(audio, language="en", vad_filter=False)
     return " ".join(s.text.strip() for s in segs).strip()
 
 
@@ -827,7 +942,7 @@ async def respond(text, history):
                     "model": LLM_MODEL,
                     "messages": msgs,
                     "stream": False,
-                    "think": False,
+                    # Gemma 4 doesn't use think parameter
                     "options": {
                         "num_predict": 80,  # 1-2 sentences = ~40-60 tokens
                         "temperature": 0.7,
@@ -845,83 +960,9 @@ async def respond(text, history):
         return ""
 
 
-async def setup_audio_injection(page):
-    """Inject WebAudio bridge into the page for audio delivery.
-
-    Chrome's --use-fake-device-for-media-stream bypasses PulseAudio,
-    so we inject audio directly into the WebRTC stream via JavaScript.
-    This replaces the fake mic's silent/synthetic audio with real TTS.
-    """
-    # Create AudioContext and connect to BOTH the WebRTC stream AND ensure
-    # the context stays alive by resuming before every playback
-    replaced = await page.evaluate("""() => {
-        // Create audio pipeline
-        window.__santaCtx = new AudioContext({sampleRate: 24000});
-        window.__santaDest = window.__santaCtx.createMediaStreamDestination();
-        window.__santaPlaying = false;
-        const santaTrack = window.__santaDest.stream.getAudioTracks()[0];
-
-        // Replace audio track on captured RTCPeerConnections
-        let replaced = 0;
-        const pcs = window.__santaPCs || [];
-        for (const pc of pcs) {
-            try {
-                for (const sender of pc.getSenders()) {
-                    if (sender.track && sender.track.kind === 'audio') {
-                        sender.replaceTrack(santaTrack);
-                        replaced++;
-                    }
-                }
-            } catch(e) {}
-        }
-
-        // Keep context alive: resume every 5 seconds
-        setInterval(() => {
-            if (window.__santaCtx.state === 'suspended') {
-                window.__santaCtx.resume();
-            }
-        }, 5000);
-        // Resume immediately
-        window.__santaCtx.resume();
-
-        // Play audio — resume context first, create fresh nodes each time
-        window.__santaPlayAudio = function(b64Data, sampleRate) {
-            return window.__santaCtx.resume().then(() => {
-                return new Promise((resolve, reject) => {
-                    try {
-                        const binary = atob(b64Data);
-                        const bytes = new Uint8Array(binary.length);
-                        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
-                        const float32 = new Float32Array(bytes.buffer);
-                        const buffer = window.__santaCtx.createBuffer(1, float32.length, sampleRate);
-                        buffer.copyToChannel(float32, 0);
-
-                        const source = window.__santaCtx.createBufferSource();
-                        source.buffer = buffer;
-                        const gain = window.__santaCtx.createGain();
-                        gain.gain.value = 3.0;
-                        source.connect(gain);
-                        gain.connect(window.__santaDest);
-
-                        source.onended = () => {
-                            window.__santaPlaying = false;
-                            resolve(true);
-                        };
-                        window.__santaPlaying = true;
-                        source.start();
-                    } catch(e) {
-                        reject(e.message);
-                    }
-                });
-            });
-        };
-        return { pcs: pcs.length, replaced: replaced, ctxState: window.__santaCtx.state };
-    }""")
-    logger.info("Audio bridge: %d PCs, %d tracks replaced, ctx=%s",
-                replaced.get("pcs", 0), replaced.get("replaced", 0),
-                replaced.get("ctxState", "unknown"))
-    logger.info("Audio injection bridge installed")
+# Audio/video injection is handled entirely by the init script
+# (MediaStreamTrackGenerator for video, AudioContext for audio)
+# No post-join track replacement needed
 
 
 async def speak(page, text):
@@ -996,30 +1037,8 @@ async def speak(page, text):
 
         logger.info("Sending %dKB audio (%.1fs) to browser...", b64_len // 1024, audio_duration)
         try:
-            # Re-ensure audio track is connected before every speak
-            await page.evaluate("""() => {
-                if (!window.__santaCtx || !window.__santaDest) return 'no_ctx';
-                // Resume context if suspended
-                if (window.__santaCtx.state !== 'running') {
-                    window.__santaCtx.resume();
-                }
-                // Re-replace track on all PCs in case connection was renegotiated
-                const track = window.__santaDest.stream.getAudioTracks()[0];
-                if (!track) return 'no_track';
-                let n = 0;
-                for (const pc of (window.__santaPCs || [])) {
-                    try {
-                        for (const s of pc.getSenders()) {
-                            if (s.track && s.track.kind === 'audio' && s.track.id !== track.id) {
-                                s.replaceTrack(track);
-                                n++;
-                            }
-                        }
-                    } catch(e) {}
-                }
-                return 'ctx=' + window.__santaCtx.state + ',replaced=' + n;
-            }""")
-
+            # Resume AudioContext and play audio
+            await page.evaluate("() => window.__santaAudioCtx && window.__santaAudioCtx.resume()")
             result = await page.evaluate(
                 "([b64, sr]) => window.__santaPlayAudio(b64, sr)",
                 [b64, sr],
