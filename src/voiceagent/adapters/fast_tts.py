@@ -409,6 +409,10 @@ class FastTTSAdapter:
                 break
 
         last_speech = min(last_speech, len(audio))
+        # Safety: never trim to less than 0.5s — return original if trim is too aggressive
+        min_samples = int(sr * 0.5)
+        if last_speech < min_samples:
+            return audio
         if last_speech < len(audio):
             audio = audio[:last_speech]
             # Gentle 50ms fade-out

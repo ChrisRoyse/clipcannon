@@ -532,7 +532,9 @@ async def launch_browser():
                 # UNMUTE mic — this makes Google Meet add an audio sender
                 # to the RTCPeerConnection so we can replace its track
                 for sel in ['[aria-label*="Turn on microphone"]',
-                            '[aria-label*="Unmute"]']:
+                            '[aria-label*="Unmute"]',
+                            '[aria-label*="microphone"][data-is-muted="true"]',
+                            'button[aria-label*="micro"]']:
                     try:
                         btn = page.locator(sel).first
                         if await btn.is_visible(timeout=2000):
@@ -555,30 +557,68 @@ async def launch_browser():
 
 
 # ---------------------------------------------------------------------------
-# Audio capture + processing loop
+# Audio capture + Reasoning Controller loop
 # ---------------------------------------------------------------------------
-_ADDRESS_WORDS = {"santa", "jarvis", "claus", "mr. claus", "father christmas"}
-
-
-def _is_addressed(text: str) -> bool:
-    """Check if Santa is being spoken to (not just background chatter)."""
-    low = text.lower()
-    # Direct name mention
-    if any(w in low for w in _ADDRESS_WORDS):
-        return True
-    # Direct question (ends with ?)
-    if text.strip().endswith("?"):
-        return True
-    return False
-
-
 async def audio_loop(page, stop):
-    """Continuous listening loop — always transcribes, only responds when addressed."""
-    # Models already warm from launch_browser()
+    """Continuous listening loop driven by the Reasoning Controller.
+
+    The controller observes all speech, reasons about what to do,
+    and controls prosody selection, lip sync, and response timing.
+    """
+    from voiceagent.meeting.reasoning_controller import (
+        ActionIntent,
+        ReasoningController,
+    )
+
     log_gpu_state("models-ready")
     logger.info("ALL MODELS IN VRAM — ready to converse")
 
-    # Start continuous audio capture
+    history: list[dict] = []
+    meeting_id = f"mtg_{int(time.time())}"
+
+    # --- Response handler called by reasoning controller ---
+    async def handle_respond(user_text: str) -> str | None:
+        """Generate response, speak it, return the text."""
+        t_start = time.time()
+        resp = await respond(user_text, history)
+        if not resp or len(resp) < 10:
+            logger.warning("Skipped short/empty response: '%s'", resp)
+            return None
+
+        t_llm = time.time()
+        logger.info("SANTA: '%s' (LLM: %dms)", resp, (t_llm - t_start) * 1000)
+
+        history.append({"role": "user", "content": user_text})
+        history.append({"role": "assistant", "content": resp})
+        if len(history) > 6:
+            del history[:len(history) - 6]
+
+        await speak(page, resp)
+        t_total = time.time() - t_start
+        logger.info("TOTAL RESPONSE: %.1fs (target <2s)", t_total)
+        return resp
+
+    # --- Expression handler called by reasoning controller ---
+    def handle_expression(intent: ActionIntent, awareness) -> None:
+        """Update avatar expression based on reasoning intent."""
+        # Log state changes
+        if intent in (ActionIntent.RESPOND, ActionIntent.INTERJECT,
+                       ActionIntent.LISTEN_AMUSED, ActionIntent.LISTEN_EMPATHETIC):
+            logger.info("Avatar: %s [emo=%s, urgency=%.1f]",
+                        intent.value, awareness.detected_emotion,
+                        awareness.speak_urgency)
+
+    # --- Create the reasoning controller ---
+    controller = ReasoningController(
+        character_name="Santa",
+        respond_callback=handle_respond,
+        expression_callback=handle_expression,
+    )
+
+    # Start the reasoning loop as a background task
+    reasoning_task = asyncio.create_task(controller.run(stop))
+
+    # Start audio capture
     parec = await asyncio.create_subprocess_exec(
         "parec", f"--device={CAPTURE_DEVICE}",
         "--format=s16le", f"--rate={SAMPLE_RATE}", "--channels=1",
@@ -587,18 +627,10 @@ async def audio_loop(page, stop):
     )
     logger.info("Capturing from %s (PID %d)", CAPTURE_DEVICE, parec.pid)
 
-    history: list[dict] = []
     buf = bytearray()
-    responding = False
-    meeting_id = f"mtg_{int(time.time())}"
-    last_speech_t = 0.0  # When we last detected actual speech content
     window_start = time.time()
-
-    # Strategy: Accumulate audio in rolling 3-second windows.
-    # Every 3s, transcribe. If Whisper finds speech, check if addressed.
-    # This bypasses the broken energy-threshold approach entirely.
-    WINDOW_S = 2.0  # Transcribe every 2 seconds for faster response
-    MAX_BUF_BYTES = SAMPLE_RATE * 2 * 8  # 8s max buffer
+    WINDOW_S = 2.0  # Transcribe every 2 seconds
+    MAX_BUF_BYTES = SAMPLE_RATE * 2 * 8
 
     while not stop.is_set():
         try:
@@ -607,39 +639,39 @@ async def audio_loop(page, stop):
             )
         except asyncio.TimeoutError:
             chunk = None
+            # Track silence for the controller
+            controller.tick_silence(200)
         except Exception:
             break
 
-        if responding:
-            # While responding, drain audio but don't accumulate
-            if chunk:
-                pass  # discard
+        # While responding, drain audio but don't accumulate
+        if controller.is_responding:
             continue
 
         if chunk:
             buf.extend(chunk)
-            # Cap buffer
             if len(buf) > MAX_BUF_BYTES:
                 buf = buf[-MAX_BUF_BYTES:]
 
-        # Check if window elapsed — time to transcribe
+        # Transcribe on window boundary
         elapsed = time.time() - window_start
         if elapsed >= WINDOW_S and len(buf) > MIN_SPEECH_BYTES:
             window_start = time.time()
 
-            # Normalize the quiet PulseAudio audio before Whisper
+            # Normalize quiet PulseAudio audio
             audio = np.frombuffer(bytes(buf), dtype=np.int16).astype(np.float32) / 32768.0
             peak = np.max(np.abs(audio))
             if peak > 0:
                 audio = audio * min(0.9 / peak, 50.0)
 
-            # Quick transcription (19ms on RTX 5090)
             text = await transcribe(audio)
             del audio
 
             if text and len(text) > 2:
                 logger.info("HEARD: '%s'", text)
-                last_speech_t = time.time()
+
+                # Feed to reasoning controller (Tier 1 observation)
+                controller.observe(text)
 
                 # Store transcript
                 _transcript_segments.append({
@@ -649,36 +681,20 @@ async def audio_loop(page, stop):
                 if len(_transcript_segments) > _MAX_TRANSCRIPT_SEGMENTS:
                     del _transcript_segments[:len(_transcript_segments) - _MAX_TRANSCRIPT_SEGMENTS]
 
-                # Only respond if addressed
-                if _is_addressed(text):
-                    responding = True
-                    t_start = time.time()
-                    try:
-                        resp = await respond(text, history)
-                        if resp and len(resp) > 10:
-                            t_llm = time.time()
-                            logger.info("SANTA: '%s' (LLM: %dms)",
-                                        resp, (t_llm - t_start) * 1000)
-                            history.append({"role": "user", "content": text})
-                            history.append({"role": "assistant", "content": resp})
-                            if len(history) > 6:
-                                del history[:len(history) - 6]
-                            await speak(page, resp)
-                            t_total = time.time() - t_start
-                            logger.info("TOTAL RESPONSE: %.1fs (target <2s)", t_total)
-                        elif resp:
-                            logger.warning("Skipped short response: '%s'", resp)
-                    except Exception as e:
-                        logger.error("Response failed: %s", e)
-                    finally:
-                        responding = False
-                        window_start = time.time()  # Reset timer so next listen starts immediately
-                else:
-                    logger.debug("Not addressed — listening")
+                # Let the controller decide what to do (Tier 2)
+                intent = controller.reason()
 
-            # Clear buffer after processing
+                if intent in (ActionIntent.RESPOND, ActionIntent.INTERJECT):
+                    # Tier 3: Generate and speak response
+                    recent_text = controller._get_recent_text(15)
+                    await controller.execute_response(recent_text)
+                    window_start = time.time()  # Reset so next listen starts fast
+
             buf.clear()
 
+    # Cleanup
+    controller.stop()
+    reasoning_task.cancel()
     parec.kill()
     await ingest_transcript(_transcript_segments, meeting_id)
 
@@ -918,18 +934,13 @@ async def speak(page, text):
     try:
         logger.info("speak() starting for: '%s'", text[:60])
 
-        # Select prosody-matched reference clip based on response content
-        # Uses pre-transcribed ref_text to avoid Whisper call at speak time
-        ref_path = select_prosody_ref(text)
+        # Select prosody-matched reference clip for emotional voice variation
         cached_transcripts = globals().get("_ref_transcripts", {})
+        ref_path = select_prosody_ref(text)
         if ref_path and Path(ref_path).exists():
             ref_text = cached_transcripts.get(ref_path)
             tts.set_ref_audio(ref_path, ref_text=ref_text)
             logger.info("Prosody ref: %s", Path(ref_path).name)
-        elif _default_ref and Path(_default_ref).exists():
-            ref_text = cached_transcripts.get(_default_ref)
-            tts.set_ref_audio(_default_ref, ref_text=ref_text)
-            logger.info("Prosody ref: default")
 
         # Strip all tags — synthesize clean text only
         clean = re.sub(r'\[.*?\]', '', text).strip()
