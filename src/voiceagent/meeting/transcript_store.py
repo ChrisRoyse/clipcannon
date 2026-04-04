@@ -80,7 +80,7 @@ class MeetingTranscriptStore:
             return
         try:
             await self._client.call_tool(
-                "ocr_db_select", {"name": self._config.database_name},
+                "ocr_db_select", {"database_name": self._config.database_name},
             )
             self._db_ensured = True
             return
@@ -94,7 +94,7 @@ class MeetingTranscriptStore:
             },
         )
         await self._client.call_tool(
-            "ocr_db_select", {"name": self._config.database_name},
+            "ocr_db_select", {"database_name": self._config.database_name},
         )
         self._db_ensured = True
 

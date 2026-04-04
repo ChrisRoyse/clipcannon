@@ -7,14 +7,14 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg?style=flat-square)](https://www.python.org/downloads/)
 [![License: BSL 1.1](https://img.shields.io/badge/license-BSL_1.1-orange.svg?style=flat-square)](LICENSE)
 [![MCP Protocol](https://img.shields.io/badge/MCP-compatible-purple.svg?style=flat-square)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/tests-626_passing-brightgreen.svg?style=flat-square)](#testing)
-[![Tools](https://img.shields.io/badge/MCP_tools-51-orange.svg?style=flat-square)](#mcp-tools)
+[![Tests](https://img.shields.io/badge/tests-994_passing-brightgreen.svg?style=flat-square)](#testing)
+[![Tools](https://img.shields.io/badge/MCP_tools-55-orange.svg?style=flat-square)](#mcp-tools)
 
 ---
 
-ClipCannon ingests a video, runs it through a **22-stage AI analysis pipeline**, and gives your AI assistant (Claude, etc.) the tools to edit, render, and publish platform-optimized clips -- with voice cloning, lip-sync avatars, and AI-generated audio. No cloud APIs. Everything runs on your machine.
+ClipCannon ingests a video, runs it through a **22-stage AI analysis pipeline**, and gives your AI assistant (Claude, etc.) the tools to edit, render, and publish platform-optimized clips -- with voice cloning, lip-sync avatars, real-time meeting bots, and AI-generated audio. No cloud APIs. Everything runs on your machine.
 
-[Getting Started](#getting-started) &#8226; [How It Works](#how-it-works) &#8226; [Features](#features) &#8226; [MCP Tools](#mcp-tools) &#8226; [Architecture](#architecture) &#8226; [White Paper](docs/clipcannon_whitepaper.md)
+[Quick Start](#quick-start-5-minutes) &#8226; [Full Setup Guide](#full-setup-guide) &#8226; [Using ClipCannon](#using-clipcannon-with-claude) &#8226; [Features](#features) &#8226; [MCP Tools](#mcp-tools) &#8226; [Architecture](#architecture)
 
 <br>
 
@@ -28,68 +28,116 @@ ClipCannon ingests a video, runs it through a **22-stage AI analysis pipeline**,
 
 ## What is ClipCannon?
 
-ClipCannon is an MCP server that turns any AI assistant into a professional video editor. You give it a video file; it analyzes every frame, every word, every emotion, every speaker, every scene -- then exposes **51 tools** that let an AI assistant create edits, render platform-ready clips, generate music, clone voices, and produce lip-synced talking-head videos.
+ClipCannon is an MCP server that turns any AI assistant into a professional video editor + voice clone + meeting avatar. You give it a video file; it analyzes every frame, every word, every emotion, every speaker, every scene -- then exposes **55 tools** that let an AI assistant create edits, render platform-ready clips, generate music, clone voices, and even join Google Meet as a talking AI avatar.
 
 **The core idea**: instead of scrubbing through hours of footage manually, let an AI understand the content through neural embeddings and structured analysis, then have a conversation about what to create.
 
 www.clipcannon.com
 
-```
-You: "Find the most emotionally intense moments and create a 60-second TikTok highlight reel"
-Claude: [uses clipcannon tools to find moments, create edit, render 1080x1920 clip with captions]
-```
-
 ---
 
-## Features
+## Quick Start (5 Minutes)
 
-- **22-Stage Analysis Pipeline** -- Transcription, scene detection, emotion analysis, speaker diarization, narrative structure, beat tracking, OCR, quality scoring, and more. All running as a parallelized DAG.
-- **5 Embedding Spaces** -- Visual (SigLIP 1152-dim), semantic (Nomic 768-dim), emotion (Wav2Vec2 1024-dim), speaker (WavLM 512-dim), and voice identity (ECAPA-TDNN 2048-dim) embeddings stored in sqlite-vec for KNN search.
-- **Smart Editing** -- Declarative EDL architecture with adaptive captions, face-tracking crop, split-screen, PIP, canvas compositing, motion effects, overlays, and iterative version control.
-- **7 Platform Profiles** -- One-click rendering for TikTok, Instagram Reels, YouTube Shorts, YouTube Standard, YouTube 4K, Facebook, and LinkedIn with NVENC GPU acceleration.
-- **AI Audio** -- Text-to-music via ACE-Step diffusion, 6 MIDI presets with FluidSynth, 9 DSP sound effects, speech-aware mixing with automatic ducking.
-- **Voice Cloning** -- Qwen3-TTS 1.7B with multi-gate verification (sanity, intelligibility, identity via SECS), best-of-N optimization, and Resemble Enhance post-processing to 44.1kHz broadcast quality.
-- **Lip-Sync Avatars** -- LatentSync 1.6 (ByteDance) diffusion pipeline for talking-head video generation from text scripts.
-- **Voice Agent ("Jarvis")** -- Real-time conversational AI with wake-word activation, streaming ASR, local LLM (Qwen3-14B), and voice-cloned TTS. All local, zero cloud.
-- **Tamper-Evident Provenance** -- SHA-256 hash chain linking every pipeline operation. Every output is traceable to its source.
-- **Credit Billing** -- HMAC-signed balance with Stripe integration, spending limits, and transaction history.
-- **100% Local** -- No data leaves your machine. All models run on your GPU. All storage is SQLite on disk.
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- **Python** >= 3.12
-- **FFmpeg** (with NVENC support recommended)
-- **NVIDIA GPU** with CUDA support (8+ GB VRAM minimum, 24+ GB recommended)
-- An MCP-compatible AI assistant (Claude Desktop, Claude Code, etc.)
-
-### Install
+If you're using **Claude Code**, the fastest way to get started:
 
 ```bash
-# Clone the repository
+# 1. Clone the repo
 git clone https://github.com/ChrisRoyse/clipcannon.git
 cd clipcannon
 
-# Install core package
+# 2. Tell Claude Code to set everything up
+claude
+```
+
+Then paste this prompt into Claude Code:
+
+```
+Here is my Hugging Face token: hf_xxxxx
+Here is my PulseAudio password (if on WSL2): xxxxx
+
+Please:
+1. Install ClipCannon with all ML dependencies (pip install -e ".[ml,phase2]")
+2. Set my HF token as an environment variable
+3. Install Ollama and pull qwen3:8b-nothink
+4. Add ClipCannon as an MCP server
+5. Verify the GPU is detected and all models can load
+6. Run the test suite to confirm everything works
+```
+
+Claude will handle the entire installation process, download models, and verify your setup.
+
+---
+
+## Full Setup Guide
+
+### Prerequisites
+
+| Requirement | Minimum | Recommended |
+|------------|---------|-------------|
+| **Python** | 3.12 | 3.13+ |
+| **GPU** | NVIDIA 8GB VRAM (RTX 3060) | 24-32GB VRAM (RTX 4090/5090) |
+| **CUDA** | 12.1+ | 13.0+ |
+| **FFmpeg** | 6.0+ | With NVENC support |
+| **RAM** | 16GB | 64GB+ |
+| **Disk** | 20GB (models) | 50GB+ (models + projects) |
+| **OS** | Linux / WSL2 | Ubuntu 22.04+ or WSL2 on Windows 11 |
+
+### Step-by-Step Installation
+
+#### 1. Clone and Install
+
+```bash
+git clone https://github.com/ChrisRoyse/clipcannon.git
+cd clipcannon
+
+# Core package (tools + editing + rendering)
 pip install -e .
 
-# Install ML dependencies (for GPU analysis pipeline)
+# ML models (analysis pipeline, embeddings, voice)
 pip install -e ".[ml]"
 
-# Install Phase 2 audio/video dependencies
+# Phase 2 extras (AI audio, advanced voice, avatar)
 pip install -e ".[phase2]"
 
-# Install dev dependencies
+# Development tools (testing, linting)
 pip install -e ".[dev]"
 ```
 
-### Connect to Claude
+#### 2. Install Ollama (Local LLM)
 
-Add ClipCannon as an MCP server in your Claude Desktop config (`claude_desktop_config.json`):
+ClipCannon uses Ollama for local LLM inference (narrative analysis, meeting bot intelligence):
 
+```bash
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull the recommended models
+ollama pull qwen3:8b-nothink    # Fast responses for real-time conversation
+ollama pull qwen3:14b-nothink   # Better quality for analysis tasks
+```
+
+#### 3. Set Environment Variables
+
+```bash
+# Hugging Face token (needed to download gated models like Whisper, Wav2Vec2)
+export HUGGINGFACE_TOKEN=hf_your_token_here
+
+# Optional: Set GPU device
+export CUDA_VISIBLE_DEVICES=0
+```
+
+Add these to your `~/.bashrc` or `~/.zshrc` to persist across sessions.
+
+#### 4. Connect to Claude
+
+**Claude Code (CLI):**
+```bash
+claude mcp add clipcannon -- clipcannon
+```
+
+**Claude Desktop:**
+
+Add to your `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
@@ -101,104 +149,239 @@ Add ClipCannon as an MCP server in your Claude Desktop config (`claude_desktop_c
 }
 ```
 
-Or in Claude Code:
+#### 5. Verify Installation
+
+Tell Claude:
+```
+Run clipcannon_config_list and tell me if the GPU is detected correctly.
+Then run clipcannon_project_list to verify the MCP connection works.
+```
+
+### WSL2 Setup (Windows Users)
+
+If you're running on Windows via WSL2, additional setup is needed for audio:
+
+```
+I'm on WSL2. Please set up PulseAudio TCP bridge for audio capture.
+I need:
+1. PulseAudio installed on Windows with TCP module enabled on port 4713
+2. WSL2 PULSE_SERVER pointing to the Windows host
+3. Output and clone_audio sinks configured
+4. Firewall rule for port 4713
+```
+
+### Docker Setup
 
 ```bash
-claude mcp add clipcannon -- clipcannon
-```
-
-### Quick Start
-
-Once connected, tell your AI assistant:
-
-```
-"Create a project from /path/to/my/video.mp4 and analyze it"
-```
-
-The assistant will call `clipcannon_project_create` followed by `clipcannon_ingest`, running all 22 analysis stages. After analysis completes (~2-10 minutes depending on video length and GPU):
-
-```
-"Find the best highlights and create a 60-second TikTok clip with captions"
-```
-
-The assistant uses discovery tools to find moments, creates an edit with captions, previews it, and renders a platform-optimized 1080x1920 clip.
-
-### Docker
-
-```bash
-# Build and run with GPU support
 cd config
 docker compose up -d
 
-# Dashboard available at http://localhost:3200
-# License server at http://localhost:3100
+# Dashboard: http://localhost:3200
+# License server: http://localhost:3100
 ```
 
 ---
 
-## How It Works
+## Using ClipCannon with Claude
 
-### 1. Ingest: 22-Stage Analysis DAG
+### Getting Started Prompts
 
-When you analyze a video, ClipCannon runs a directed acyclic graph of 22 stages:
+Once ClipCannon is connected, here are prompts to learn the system:
 
+#### Learn What's Available
 ```
-probe -> vfr_normalize -> audio_extract -----> source_separation
-                       -> frame_extract -----> visual_embed -> shot_type
-                                          |--> ocr, quality, storyboard
-                          audio_extract ----> transcribe -> semantic_embed
-                                                        -> narrative_llm
-                                                        -> profanity
-                          audio_extract ----> emotion_embed, reactions, acoustic
-                          audio + transcribe -> speaker_embed -> chronemic
-                          all signals -------> highlights -> finalize
+What ClipCannon tools do you have access to? Give me a categorized overview.
 ```
 
-6 required stages ensure the core data (frames, audio, transcript) is extracted. 16 optional stages run in parallel and degrade gracefully -- if one fails, the rest continue.
+```
+Explain the ClipCannon video analysis pipeline. What happens when I ingest a video?
+```
 
-### 2. Multi-Modal Embeddings
+#### Analyze Your First Video
+```
+Create a project from /path/to/my/video.mp4 and run the full analysis pipeline.
+Show me the results when it's done.
+```
 
-Five neural models embed the video content into queryable vector spaces:
+```
+Show me the transcript of the video we just analyzed. Who are the speakers?
+```
 
-| Embedding | Model | Dimensions | What It Captures |
-|-----------|-------|------------|------------------|
-| Visual | SigLIP-SO400M | 1152 | Frame semantics, scene boundaries, shot types |
-| Semantic | Nomic Embed v1.5 | 768 | Transcript meaning, topic clusters |
-| Emotion | Wav2Vec2-large | 1024 | Vocal emotion (energy, arousal, valence) |
-| Speaker | WavLM-base-plus-sv | 512 | Speaker identity for diarization |
-| Voice ID | ECAPA-TDNN (Qwen3) | 2048 | Voice fingerprint for cloning verification |
+```
+What are the best highlight moments in this video? Show me the top 5.
+```
 
-All embeddings are stored in `sqlite-vec` virtual tables for nearest-neighbor search.
+#### Create Edits
+```
+Create a 60-second TikTok highlight reel from the best moments.
+Use adaptive captions and face-tracking crop.
+```
 
-### 3. Cross-Stream Intelligence
+```
+Find all the moments where the speaker talks about [topic] and create a
+compilation clip for YouTube Shorts.
+```
 
-Discovery tools combine signals across all embedding spaces to find optimal editing moments:
+```
+Create a split-screen edit showing two speakers side by side during
+their debate. Add lower-third captions.
+```
 
-- **Highlight scoring** weights emotion (0.25), reactions (0.20), semantic density (0.20), narrative (0.15), visual variety (0.10), quality (0.05), and speaker confidence (0.05)
-- **Cut point detection** finds convergence of silence, beat, scene, and sentence boundaries
-- **Narrative flow** validates that proposed edits tell a coherent story
+#### Voice Cloning
+```
+Create a voice profile from this video's speaker. I want to clone their voice.
+```
 
-### 4. Edit, Render, Publish
+```
+Using the voice profile we just created, generate speech saying:
+"Welcome to our channel! Don't forget to subscribe."
+```
 
-The AI assistant creates declarative EDL (Edit Decision List) specifications, previews at 540p for free, iterates with version control, and renders to any of 7 platform profiles with NVENC GPU acceleration.
+```
+Generate a lip-synced talking-head video of the speaker saying a new script.
+```
+
+#### AI Audio
+```
+Generate background music for this clip. I want something upbeat and energetic,
+around 120 BPM, that fits the mood of the highlights.
+```
+
+```
+Create a cinematic intro sound effect for the beginning of this video.
+```
+
+```
+Clean up the audio in this clip - reduce background noise and normalize levels.
+```
+
+### Workflow Examples
+
+#### Content Creator Workflow
+```
+I have a 2-hour podcast recording. I need:
+1. Analyze the full video
+2. Find the 10 best moments (most engaging, emotional, or funny)
+3. Create 5 separate 60-second TikTok clips from those moments
+4. Each clip should have captions, face-tracking crop, and be 1080x1920
+5. Render all 5 clips
+
+Start with the analysis and show me what you find.
+```
+
+#### Meeting Recap Workflow
+```
+Analyze this meeting recording. I need:
+1. Full transcript with speaker identification
+2. Summary of key topics discussed
+3. Action items and decisions made
+4. A 3-minute highlight clip of the most important moments
+```
+
+#### Voice Clone Workflow
+```
+I want to create a voice clone from this interview video:
+1. Analyze the video to find the best voice samples
+2. Create a voice profile (aim for SECS > 0.95)
+3. Test the clone by generating a sample sentence
+4. If quality is good, generate a full intro script with the cloned voice
+```
+
+### Power User Prompts
+
+```
+Show me the scene map for this project. I want to understand the visual layout
+of each scene so I can plan my edit.
+```
+
+```
+Search the video content for any mention of "product launch" or "quarterly results".
+Show me timestamps and context.
+```
+
+```
+Compare the editing context between scene 3 and scene 7.
+Which would work better as an opening shot?
+```
+
+```
+Find safe cut points near the 2-minute mark. I need a clean transition
+that doesn't interrupt mid-sentence.
+```
+
+```
+Create a branch of my current edit. I want to try a different opening
+without losing my original version.
+```
+
+### Voice Agent ("Jarvis")
+
+ClipCannon includes a standalone real-time voice assistant:
+
+```bash
+# Start the voice agent
+python -m voiceagent talk --voice boris
+
+# WebSocket server for remote clients
+python -m voiceagent serve --port 8765
+```
+
+Ask Claude to set it up:
+```
+Set up the Jarvis voice agent with wake word detection.
+I want it to listen for "Hey Jarvis" and respond using my voice clone.
+Use Ollama with qwen3:8b for fast responses.
+```
+
+### Meeting Bot (Santa/Avatar)
+
+Join Google Meet as an AI-powered avatar:
+
+```
+Launch the Santa meeting bot on this Google Meet link: [URL]
+It should:
+1. Load all models into VRAM before joining
+2. Listen continuously and respond when addressed
+3. Use the Santa voice clone with full prosody
+4. Respond within 2 seconds of being asked a question
+```
+
+---
+
+## Features
+
+- **22-Stage Analysis Pipeline** -- Transcription, scene detection, emotion analysis, speaker diarization, narrative structure, beat tracking, OCR, quality scoring, and more. All running as a parallelized DAG.
+- **5 Embedding Spaces** -- Visual (SigLIP 1152-dim), semantic (Nomic 768-dim), emotion (Wav2Vec2 1024-dim), speaker (WavLM 512-dim), and voice identity (ECAPA-TDNN 2048-dim) stored in sqlite-vec for KNN search.
+- **Smart Editing** -- Declarative EDL architecture with adaptive captions, face-tracking crop, split-screen, PIP, canvas compositing, motion effects, overlays, and iterative version control.
+- **7 Platform Profiles** -- One-click rendering for TikTok, Instagram Reels, YouTube Shorts, YouTube Standard, YouTube 4K, Facebook, and LinkedIn with NVENC GPU acceleration.
+- **AI Audio** -- Text-to-music via ACE-Step diffusion, 6 MIDI presets with FluidSynth, 9 DSP sound effects, speech-aware mixing with automatic ducking.
+- **Voice Cloning** -- Qwen3-TTS 1.7B with multi-gate verification (sanity, intelligibility, identity via SECS), best-of-N optimization, and Resemble Enhance post-processing to 44.1kHz broadcast quality.
+- **Lip-Sync Avatars** -- LatentSync 1.6 (ByteDance) diffusion pipeline for talking-head video generation from text scripts.
+- **Meeting Bot** -- AI avatar that joins Google Meet, listens to conversation, and responds with voice-cloned speech via real-time ASR + LLM + TTS pipeline.
+- **Phoenix Avatar Engine** -- Custom GPU-native avatar rendering with CuPy CUDA kernels (0.2ms compositing), insightface landmark detection, emotion-driven blend shapes, and prosody-matched voice selection.
+- **Voice Agent ("Jarvis")** -- Real-time conversational AI with wake-word activation, streaming ASR, local LLM (Qwen3-8B/14B), and voice-cloned TTS. All local, zero cloud.
+- **OCR Provenance RAG** -- Meeting transcripts stored in OCR Provenance for AI-searchable history across sessions.
+- **Tamper-Evident Provenance** -- SHA-256 hash chain linking every pipeline operation.
+- **Credit Billing** -- HMAC-signed balance with Stripe integration, spending limits, and transaction history.
+- **100% Local** -- No data leaves your machine. All models run on your GPU. All storage is SQLite on disk.
 
 ---
 
 ## MCP Tools
 
-51 tools organized into 12 categories:
+55 tools organized into 12 categories:
 
 | Category | Count | Key Tools |
 |----------|-------|-----------|
 | **Project** | 5 | `create`, `open`, `list`, `status`, `delete` |
 | **Understanding** | 4 | `ingest`, `get_transcript`, `get_frame`, `search_content` |
-| **Discovery** | 4 | `find_best_moments`, `find_cut_points`, `get_narrative_flow`, `find_safe_cuts` |
-| **Editing** | 11 | `create_edit`, `modify_edit`, `auto_trim`, `color_adjust`, `add_motion`, `add_overlay`, `apply_feedback`, `branch_edit`, `edit_history`, `revert_edit` |
-| **Rendering** | 8 | `render`, `preview_clip`, `preview_layout`, `inspect_render`, `get_scene_map`, `get_editing_context`, `analyze_frame` |
-| **Audio** | 4 | `generate_music`, `compose_midi`, `generate_sfx`, `audio_cleanup` |
+| **Discovery** | 5 | `find_best_moments`, `find_cut_points`, `get_narrative_flow`, `find_safe_cuts`, `get_scene_map` |
+| **Editing** | 11 | `create_edit`, `modify_edit`, `auto_trim`, `color_adjust`, `add_motion`, `add_overlay`, `apply_feedback`, `branch_edit`, `edit_history`, `revert_edit`, `list_branches` |
+| **Rendering** | 6 | `render`, `preview_clip`, `preview_segment`, `preview_layout`, `inspect_render`, `analyze_frame` |
+| **Context** | 2 | `get_editing_context`, `get_scene_map` |
+| **Audio** | 5 | `generate_music`, `compose_music`, `compose_midi`, `generate_sfx`, `audio_cleanup`, `auto_music` |
 | **Voice** | 4 | `prepare_voice_data`, `voice_profiles`, `speak`, `speak_optimized` |
-| **Avatar** | 1 | `lip_sync` |
-| **Video Gen** | 1 | `generate_video` (end-to-end text -> voice -> lip-sync) |
+| **Avatar** | 3 | `lip_sync`, `extract_webcam`, `generate_video` |
 | **Billing** | 4 | `credits_balance`, `credits_history`, `credits_estimate`, `spending_limit` |
 | **Disk** | 2 | `disk_status`, `disk_cleanup` |
 | **Config** | 3 | `config_get`, `config_set`, `config_list` |
@@ -209,14 +392,13 @@ The AI assistant creates declarative EDL (Edit Decision List) specifications, pr
 
 ```
                     +-----------------+
-                    |  AI Assistant   |  (Claude, etc.)
+                    |  AI Assistant   |  (Claude Code, Claude Desktop)
                     |  (MCP Client)   |
                     +--------+--------+
                              | MCP Protocol (stdio)
                     +--------v--------+
                     |  ClipCannon     |
-                    |  MCP Server     |  51 tools
-                    |  (port: stdio)  |
+                    |  MCP Server     |  55 tools
                     +--------+--------+
                              |
           +------------------+------------------+
@@ -224,14 +406,14 @@ The AI assistant creates declarative EDL (Edit Decision List) specifications, pr
   +-------v------+  +-------v------+  +-------v-------+
   | Analysis     |  | Editing      |  | Voice/Avatar  |
   | Pipeline     |  | + Rendering  |  | Engine        |
-  | (22 stages)  |  | Engine       |  | (Qwen3-TTS +  |
-  |              |  | (FFmpeg +    |  |  LatentSync)  |
-  | SigLIP       |  |  NVENC)      |  |               |
-  | Nomic Embed  |  |              |  | ECAPA-TDNN    |
-  | Wav2Vec2     |  | 7 profiles   |  | verification  |
-  | WavLM        |  | ASS captions |  |               |
-  | Qwen3-8B     |  | Smart crop   |  | Resemble      |
-  | WhisperX     |  | Canvas comp  |  | Enhance       |
+  | (22 stages)  |  | Engine       |  |               |
+  |              |  | (FFmpeg +    |  | Qwen3-TTS     |
+  | SigLIP       |  |  NVENC)      |  | LatentSync    |
+  | Nomic Embed  |  |              |  | Phoenix CuPy  |
+  | Wav2Vec2     |  | 7 profiles   |  | insightface   |
+  | WavLM        |  | ASS captions |  | ECAPA-TDNN    |
+  | Qwen3-8B     |  | Smart crop   |  | Silero VAD    |
+  | WhisperX     |  | Canvas comp  |  | Resemble Enh  |
   +-------+------+  +-------+------+  +-------+-------+
           |                  |                  |
           +------------------+------------------+
@@ -240,78 +422,68 @@ The AI assistant creates declarative EDL (Edit Decision List) specifications, pr
                     | SQLite + vec    |  Per-project DB
                     | (analysis.db)   |  4 vector tables
                     +-----------------+  31 core tables
-
-  Separate processes:
-  +------------------+  +------------------+  +------------------+
-  | License Server   |  | Dashboard        |  | Voice Agent      |
-  | (port 3100)      |  | (port 3200)      |  | ("Jarvis")       |
-  | HMAC billing     |  | Web UI           |  | Wake word + ASR  |
-  | Stripe webhooks  |  | Projects/Credits |  | + LLM + TTS      |
-  +------------------+  +------------------+  +------------------+
 ```
 
-### ML Models Used
+### ML Models
 
-| Model | Provider | Purpose | VRAM |
-|-------|----------|---------|------|
-| SigLIP-SO400M | Google | Visual embeddings + shot classification | ~2 GB |
-| Nomic Embed v1.5 | Nomic AI | Semantic text embeddings | ~1 GB |
-| Wav2Vec2-large | Meta | Emotion embeddings | ~2 GB |
-| WavLM-base-plus-sv | Microsoft | Speaker diarization | ~1 GB |
-| WhisperX Large v3 | OpenAI | Speech-to-text | ~3 GB |
-| HTDemucs v4 | Meta | Audio source separation | ~2 GB |
-| Qwen3-8B | Qwen | Narrative analysis | ~8 GB |
-| Qwen3-TTS 1.7B | Qwen | Voice cloning (video) | ~4 GB |
-| faster-qwen3-tts 0.6B | Qwen | Voice Agent (real-time) | ~4 GB |
-| LatentSync 1.6 | ByteDance | Lip-sync avatars | ~4 GB |
-| ACE-Step v1.5 | ACE | AI music generation | ~4 GB |
-| SenseVoice Small | FunASR | Reaction detection | ~1 GB |
-| Silero VAD | Silero | Voice activity detection | CPU |
-| PaddleOCR v5 | PaddlePaddle | On-screen text detection | ~1 GB |
+| Model | Purpose | VRAM | Auto-Downloaded |
+|-------|---------|------|-----------------|
+| SigLIP-SO400M | Visual embeddings | ~2 GB | Yes (HF) |
+| Nomic Embed v1.5 | Semantic embeddings | ~1 GB | Yes (HF) |
+| Wav2Vec2-large | Emotion analysis | ~2 GB | Yes (HF) |
+| WavLM-base-plus-sv | Speaker diarization | ~1 GB | Yes (HF) |
+| WhisperX Large v3 | Speech-to-text | ~3 GB | Yes (HF) |
+| faster-whisper large-v3-turbo | Real-time ASR | ~2 GB | Yes (HF) |
+| HTDemucs v4 | Audio source separation | ~2 GB | Yes (HF) |
+| Qwen3-8B/14B | LLM (via Ollama) | 5-10 GB | Via `ollama pull` |
+| Qwen3-TTS 1.7B | Voice cloning (video) | ~4 GB | Yes (HF) |
+| faster-qwen3-tts 0.6B | Real-time TTS | ~2 GB | Yes (HF) |
+| LatentSync 1.6 | Lip-sync avatars | ~4 GB | Yes (HF) |
+| ACE-Step v1.5 | AI music generation | ~4 GB | Yes (HF) |
+| insightface buffalo_l | Face detection/landmarks | ~1 GB | Yes |
+| Silero VAD v5 | Voice activity detection | CPU | Yes (torch.hub) |
+| PaddleOCR v5 | On-screen text detection | ~1 GB | Yes |
 
-Models are loaded on-demand with LRU eviction. GPUs with >16 GB run models concurrently; smaller GPUs load sequentially.
+Models are loaded on-demand with LRU eviction. GPUs with 24+ GB run models concurrently; smaller GPUs load sequentially.
 
 ---
 
-## Voice Agent
+## Frequently Asked Questions
 
-ClipCannon includes a standalone real-time voice assistant:
+### "How much VRAM do I need?"
 
-```bash
-# Recommended: Pipecat + Ollama (all local)
-python -m voiceagent talk --voice boris
+- **8GB** -- Can run core analysis (one model at a time). Slower but functional.
+- **16GB** -- Comfortable for analysis + editing + basic voice work.
+- **24GB (RTX 4090)** -- Full pipeline including voice cloning and avatar generation.
+- **32GB (RTX 5090)** -- Everything concurrent, real-time meeting bot with TTS + ASR + LLM simultaneously.
 
-# WebSocket server for remote clients
-python -m voiceagent serve --port 8765
-```
+### "Can I run this without a GPU?"
 
-**Lifecycle**: DORMANT (CPU only, wake word listening) -> LOADING (~10-20s) -> ACTIVE (full conversation, ~30 GB VRAM) -> DORMANT
+The analysis pipeline requires CUDA. Editing and rendering work on CPU but are much slower without NVENC. The voice agent requires a GPU.
 
-**Components**: Whisper Large v3 ASR, Qwen3-14B FP8 local LLM (~120 tok/s), faster-qwen3-tts 0.6B (~500ms TTFB), Silero VAD, "Hey Jarvis" wake word.
+### "What about Mac/Apple Silicon?"
 
-The voice agent pauses other GPU workers on activation and resumes them on deactivation to share VRAM on a single GPU.
+Not currently supported. The pipeline depends heavily on CUDA, PyTorch CUDA, and NVENC. MPS support is planned for a future release.
 
----
+### "How long does analysis take?"
 
-## Database
+Depends on video length and GPU:
+- 5-minute video on RTX 4090: ~2-3 minutes
+- 1-hour video on RTX 4090: ~15-20 minutes
+- The 22-stage DAG runs in parallel, so more GPU = faster
 
-Each project gets its own SQLite database with:
+### "Is my data sent anywhere?"
 
-- **31 core tables** -- project metadata, transcripts, scenes, speakers, emotions, topics, highlights, edits, renders, audio assets, scene map, narrative analysis, provenance
-- **4 vector tables** -- `vec_frames` (1152-dim), `vec_semantic` (768-dim), `vec_emotion` (1024-dim), `vec_speakers` (512-dim) via sqlite-vec
-- **Tamper-evident provenance chain** -- SHA-256 hash chain linking every operation
+No. Everything runs locally. All models run on your GPU. All data stays in SQLite on disk. No cloud APIs are called. The only network calls are model downloads from Hugging Face (first run only) and optional Ollama API (which also runs locally).
 
 ---
 
 ## Configuration
 
-Config stored at `~/.clipcannon/config.json` with sensible defaults:
+Config stored at `~/.clipcannon/config.json`:
 
 ```bash
-# View all settings
-# (via MCP) clipcannon_config_list
-
-# Key settings
+# Key settings (via MCP tools)
 processing.whisper_model = "large-v3"       # Whisper model size
 processing.frame_extraction_fps = 2         # Frames per second to extract
 rendering.use_nvenc = true                  # GPU-accelerated rendering
@@ -323,43 +495,38 @@ Auto-detects GPU precision: Blackwell (nvfp4), Ada Lovelace (int8), Ampere (int8
 
 ---
 
-## Credit System
-
-Operations consume credits from an HMAC-signed local balance:
-
-| Operation | Credits |
-|-----------|---------|
-| Analyze (ingest) | 10 |
-| Render | 2 |
-| Preview | 0 |
-| Metadata | 1 |
-
-Dev mode starts with 100 credits. Production billing via Stripe webhooks.
-
----
-
 ## Project Structure
 
 ```
 src/
-  clipcannon/           # Core package
+  clipcannon/           # Core video editing package
     pipeline/           # 22-stage analysis DAG
     editing/            # EDL engine, captions, smart crop
     rendering/          # FFmpeg rendering, 7 profiles
     audio/              # AI music, MIDI, SFX, mixing
     voice/              # Voice cloning + verification
     avatar/             # LatentSync lip-sync
-    tools/              # 51 MCP tool definitions
+    tools/              # 55 MCP tool definitions
     db/                 # SQLite + sqlite-vec
     gpu/                # Precision detection, model manager
     provenance/         # SHA-256 hash chain
     billing/            # HMAC credits, license client
     dashboard/          # FastAPI web UI
   license_server/       # Credit billing service
-  voiceagent/           # Standalone voice assistant
-tests/                  # 626 tests across 43 files
-config/                 # Default config, Docker Compose
-docs/                   # White paper, codestate docs
+  voiceagent/           # Real-time voice assistant
+    asr/                # Whisper streaming, Silero VAD, endpointing
+    tts/                # Streaming TTS, sentence chunker
+    meeting/            # Meeting bot, MCP client, transcript store
+    adapters/           # FastTTSAdapter (0.6B with CUDA graphs)
+  phoenix/              # GPU-native avatar engine
+    render/             # CuPy CUDA kernels, face warper, lip sync
+    expression/         # Emotion fusion, speaker tracking, gesture library
+    behavior/           # Prosody matcher, emotion mirror, cross-modal detection
+scripts/
+  santa_meet_bot.py     # Google Meet avatar bot
+tests/                  # 994 tests across 50+ files
+config/                 # Docker Compose, default config
+docs/                   # White paper, architecture docs, codestate
 ```
 
 ---
@@ -367,11 +534,17 @@ docs/                   # White paper, codestate docs
 ## Testing
 
 ```bash
-# Run full test suite (626 tests)
+# Run full test suite (994 tests)
 pytest
 
-# Voice agent tests only
+# Core ClipCannon tests
+pytest tests/clipcannon/
+
+# Voice agent tests
 pytest tests/voiceagent/
+
+# Phoenix avatar engine tests (GPU required)
+pytest tests/phoenix/
 
 # Integration tests (requires GPU + test video)
 pytest tests/integration/
@@ -380,29 +553,28 @@ pytest tests/integration/
 ruff check src/
 ```
 
-626 tests across 43 files (425 ClipCannon + 201 Voice Agent), plus 10 FSV (Full State Verification) forensic scripts with 750+ individual checks.
-
 ---
 
 ## Supported Formats
 
 **Input**: mp4, mov, mkv, webm, avi, ts, mts
 
-**Output**: Platform-optimized mp4 (h264) at 7 resolution/bitrate profiles
+**Output**: Platform-optimized mp4 (h264/h265) at 7 resolution/bitrate profiles
 
 ---
 
 ## Documentation
 
-- [White Paper](docs/clipcannon_whitepaper.md) -- Full technical paper covering the multi-modal embedding architecture, cross-stream intelligence, and system design
-- [System Overview](docs/codestate/01_system_overview.md) -- High-level architecture and tool reference
-- [Source Code Map](docs/codestate/02_source_code_map.md) -- Complete file tree and dependency graph
-- [Pipeline Stages](docs/codestate/06_pipeline_stages.md) -- All 22 stages with models, inputs, outputs
-- [Database Schema](docs/codestate/04_database_schema.md) -- Full table definitions and indexes
-- [Editing Engine](docs/codestate/13_editing_engine.md) -- EDL models, captions, smart crop
-- [Rendering Engine](docs/codestate/14_rendering_engine.md) -- FFmpeg pipeline, encoding profiles
-- [Audio Engine](docs/codestate/15_audio_engine.md) -- AI music, MIDI, SFX, mixing
-- [Voice Agent](docs/codestate/16_voice_agent.md) -- Real-time conversational AI architecture
+- [White Paper](docs/clipcannon_whitepaper.md) -- Full technical paper
+- [System Overview](docs/codestate/01_system_overview.md) -- High-level architecture
+- [Source Code Map](docs/codestate/02_source_code_map.md) -- Complete file tree
+- [Pipeline Stages](docs/codestate/06_pipeline_stages.md) -- All 22 stages
+- [Database Schema](docs/codestate/04_database_schema.md) -- Full table definitions
+- [Editing Engine](docs/codestate/13_editing_engine.md) -- EDL models, captions
+- [Rendering Engine](docs/codestate/14_rendering_engine.md) -- FFmpeg pipeline
+- [Audio Engine](docs/codestate/15_audio_engine.md) -- AI music, MIDI, SFX
+- [Voice Agent](docs/codestate/16_voice_agent.md) -- Conversational AI architecture
+- [Phoenix Implementation Plan](docs/project_phoenix_implementation_plan.md) -- Avatar engine roadmap
 
 ---
 
@@ -434,6 +606,6 @@ You can use, modify, and self-host ClipCannon freely. The one restriction: you c
 
 <br><br>
 
-Built with PyTorch, FFmpeg, sqlite-vec, and the MCP protocol.
+Built with PyTorch, FFmpeg, sqlite-vec, CuPy, and the MCP protocol.
 
 </div>

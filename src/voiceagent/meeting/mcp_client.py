@@ -1,18 +1,14 @@
 """OCR Provenance MCP HTTP client for meeting transcript storage.
 
 Sends JSON-RPC tool calls to the OCR Provenance session proxy (port 3377).
-Each client instance gets its own session ID for isolated database state.
-Docker bridge auth trust means no API key is needed from WSL2.
+Performs the MCP initialize handshake on first call, uses the server-assigned
+session ID for all subsequent calls.
 
-Connection management:
-    - httpx.AsyncClient with connection pooling (max 10 connections)
-    - Proper cleanup on close() — no leaked connections
-    - Timeout: 30s connect, 120s read (ingest can take time for embedding)
+The session proxy returns SSE (Server-Sent Events) format responses:
+    event: message
+    data: {"jsonrpc": "2.0", "result": {...}, "id": 1}
 
-Memory management:
-    - Responses parsed and released immediately
-    - No response caching or accumulation
-    - Client is stateless between calls
+This client parses the SSE `data:` line to extract the JSON-RPC payload.
 """
 from __future__ import annotations
 
@@ -32,44 +28,69 @@ CONNECT_TIMEOUT = 30.0
 READ_TIMEOUT = 120.0
 
 
+def _parse_sse_response(text: str) -> dict[str, Any]:
+    """Parse SSE (Server-Sent Events) response body to extract JSON-RPC data.
+
+    The OCR Provenance session proxy returns responses as:
+        event: message
+        data: {"jsonrpc": "2.0", "result": {...}, "id": 1}
+
+    Args:
+        text: Raw response body text.
+
+    Returns:
+        Parsed JSON dict from the data line.
+
+    Raises:
+        MeetingTranscriptStoreError: If no valid JSON data found.
+    """
+    # Try direct JSON first (in case response is plain JSON)
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Parse SSE format — find the data: line
+    for line in text.split("\n"):
+        line = line.strip()
+        if line.startswith("data:"):
+            json_str = line[5:].strip()
+            if json_str:
+                try:
+                    return json.loads(json_str)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+    raise MeetingTranscriptStoreError(
+        f"No valid JSON found in SSE response: {text[:300]}"
+    )
+
+
 class OcrProvenanceClient:
     """HTTP JSON-RPC client for OCR Provenance MCP server.
 
-    Each instance has a unique session ID for multi-agent isolation.
-    The session proxy (port 3377) routes requests to the container's
-    MCP server with per-session database selection and state.
+    Automatically performs the MCP initialize/initialized handshake
+    on the first tool call and uses the server-assigned session ID.
 
     Args:
         base_url: URL of the OCR Provenance session proxy endpoint.
-        session_id: Optional fixed session ID. Auto-generated if not provided.
     """
 
-    def __init__(
-        self,
-        base_url: str = DEFAULT_URL,
-        session_id: str | None = None,
-    ) -> None:
+    def __init__(self, base_url: str = DEFAULT_URL) -> None:
         self._base_url = base_url.rstrip("/")
-        self._session_id = session_id or f"clone-meeting-{uuid.uuid4().hex[:12]}"
+        self._session_id: str = f"clone-meeting-{uuid.uuid4().hex[:12]}"
         self._request_id = 0
         self._client: httpx.AsyncClient | None = None
-        logger.info(
-            "OcrProvenanceClient created: url=%s session=%s",
-            self._base_url,
-            self._session_id,
-        )
+        self._initialized = False
+        logger.info("OcrProvenanceClient created: url=%s", self._base_url)
 
     @property
     def session_id(self) -> str:
-        """The MCP session ID for this client."""
+        """The MCP session ID (server-assigned after init)."""
         return self._session_id
 
     def _get_client(self) -> httpx.AsyncClient:
-        """Get or create the httpx async client.
-
-        Lazy initialization — client created on first call.
-        Connection pool: max 10 keepalive connections.
-        """
+        """Get or create the httpx async client."""
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(
@@ -85,8 +106,91 @@ class OcrProvenanceClient:
             )
         return self._client
 
-    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _headers(self) -> dict[str, str]:
+        """Standard headers for all MCP requests."""
+        return {
+            "Content-Type": "application/json",
+            "Mcp-Session-Id": self._session_id,
+        }
+
+    async def _ensure_initialized(self) -> None:
+        """Perform MCP initialize handshake if not yet done.
+
+        Sends initialize request, captures the server-assigned session ID,
+        then sends notifications/initialized. Must complete before any
+        tool calls.
+
+        Raises:
+            MeetingTranscriptStoreError: If handshake fails.
+        """
+        if self._initialized:
+            return
+
+        client = self._get_client()
+        headers = self._headers()
+
+        # Step 1: initialize
+        init_payload = {
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "clipcannon-meeting-clone",
+                    "version": "1.0",
+                },
+            },
+            "id": 1,
+        }
+
+        try:
+            resp = await client.post(
+                self._base_url, json=init_payload, headers=headers,
+            )
+        except httpx.HTTPError as e:
+            raise MeetingTranscriptStoreError(
+                f"MCP initialize handshake failed: {e}"
+            ) from e
+
+        if resp.status_code != 200:
+            raise MeetingTranscriptStoreError(
+                f"MCP initialize returned HTTP {resp.status_code}: "
+                f"{resp.text[:300]}"
+            )
+
+        # Use server-assigned session ID for all subsequent calls
+        server_session = resp.headers.get("mcp-session-id", "")
+        if server_session:
+            self._session_id = server_session
+            logger.info("Server assigned session: %s", server_session)
+
+        # Step 2: notifications/initialized
+        notif_payload = {
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {},
+        }
+        try:
+            await client.post(
+                self._base_url,
+                json=notif_payload,
+                headers=self._headers(),
+            )
+        except httpx.HTTPError:
+            pass  # Notification responses are optional per MCP spec
+
+        self._initialized = True
+        self._request_id = 1
+        logger.info("MCP session initialized: %s", self._session_id)
+
+    async def call_tool(
+        self, tool_name: str, arguments: dict[str, Any],
+    ) -> dict[str, Any]:
         """Call an OCR Provenance MCP tool via JSON-RPC over HTTP.
+
+        Automatically performs the MCP initialize handshake on first call.
+        Parses SSE response format.
 
         Args:
             tool_name: Name of the MCP tool (e.g., "ocr_db_create").
@@ -99,6 +203,8 @@ class OcrProvenanceClient:
             MeetingTranscriptStoreError: If the HTTP request fails,
                 the server returns an error, or the response is malformed.
         """
+        await self._ensure_initialized()
+
         self._request_id += 1
         payload = {
             "jsonrpc": "2.0",
@@ -109,18 +215,12 @@ class OcrProvenanceClient:
             },
             "id": self._request_id,
         }
-        headers = {
-            "Content-Type": "application/json",
-            "Mcp-Session-Id": self._session_id,
-        }
 
         client = self._get_client()
 
         try:
             response = await client.post(
-                self._base_url,
-                json=payload,
-                headers=headers,
+                self._base_url, json=payload, headers=self._headers(),
             )
         except httpx.ConnectError as e:
             raise MeetingTranscriptStoreError(
@@ -136,18 +236,14 @@ class OcrProvenanceClient:
                 f"HTTP error calling OCR Provenance tool '{tool_name}': {e}"
             ) from e
 
-        if response.status_code != 200:
+        if response.status_code not in (200, 202):
             raise MeetingTranscriptStoreError(
                 f"OCR Provenance returned HTTP {response.status_code} "
                 f"for tool '{tool_name}': {response.text[:500]}"
             )
 
-        try:
-            body = response.json()
-        except (json.JSONDecodeError, ValueError) as e:
-            raise MeetingTranscriptStoreError(
-                f"Invalid JSON response from OCR Provenance for '{tool_name}': {e}"
-            ) from e
+        # Parse SSE response format
+        body = _parse_sse_response(response.text)
 
         # Check for JSON-RPC error
         if "error" in body:
@@ -181,12 +277,9 @@ class OcrProvenanceClient:
             MeetingTranscriptStoreError: If server is unreachable.
         """
         client = self._get_client()
-        # Health endpoint is on the MCP server (3366), but we go through proxy
         health_url = self._base_url.replace("/mcp", "/health")
         if health_url == self._base_url:
-            # Fallback: just hit the base URL
             health_url = self._base_url.rsplit("/", 1)[0] + "/health"
-
         try:
             resp = await client.get(health_url, timeout=10.0)
             return resp.status_code == 200
@@ -196,11 +289,11 @@ class OcrProvenanceClient:
             ) from e
 
     async def close(self) -> None:
-        """Close the HTTP client and release all connections.
-
-        Must be called on shutdown to prevent connection leaks.
-        """
+        """Close the HTTP client and release all connections."""
         if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
             self._client = None
-            logger.info("OcrProvenanceClient closed (session=%s)", self._session_id)
+            self._initialized = False
+            logger.info(
+                "OcrProvenanceClient closed (session=%s)", self._session_id,
+            )

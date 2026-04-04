@@ -127,6 +127,14 @@ class SpeakerTracker:
                     "size": speaker_embedding.size,
                 },
             )
+        if speaker_embedding.shape[0] != 512:
+            raise BehaviorError(
+                f"speaker_embedding must be 512-dim, got {speaker_embedding.shape[0]}",
+                {
+                    "expected": 512,
+                    "got": speaker_embedding.shape[0],
+                },
+            )
 
         best_idx = -1
         best_sim = -1.0

@@ -90,6 +90,30 @@ class FastTTSAdapter:
                 "ref_text": self._ref_text,
             }
 
+    def set_ref_audio(self, ref_audio_path: str, ref_text: str | None = None) -> None:
+        """Temporarily override the reference audio for prosody matching.
+
+        Allows the caller to swap the reference clip used for TTS
+        without switching voices. Used by ProsodyMatcher to select
+        style-matched reference clips at runtime.
+
+        Args:
+            ref_audio_path: Path to the reference WAV file.
+            ref_text: Optional transcript of the reference audio.
+                If None, transcribes automatically.
+        """
+        from pathlib import Path
+        path = Path(ref_audio_path).expanduser()
+        if not path.exists():
+            logger.warning("Ref audio not found: %s", ref_audio_path)
+            return
+        self._ref_audio = str(path)
+        if ref_text is not None:
+            self._ref_text = ref_text
+        else:
+            self._ref_text = self._transcribe(str(path))
+        logger.debug("Ref audio set: %s", path.name)
+
     def switch_voice(self, voice_name: str) -> None:
         """Switch the active voice at runtime.
 
