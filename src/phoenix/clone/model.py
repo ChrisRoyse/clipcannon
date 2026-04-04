@@ -191,7 +191,12 @@ class CloneModel(nn.Module):
             hidden_dim=shared_dim,
         )
 
+        # North Star identity anchors (set via fuse_north_stars())
+        self._north_star_anchors = None
+        self._north_star_attn = None
+
         # Transformer decoder (self-attention on latents)
+        # Interleaves self-attention with North Star cross-attention
         self.decoder_layers = nn.ModuleList([
             TransformerBlock(shared_dim) for _ in range(num_layers)
         ])
@@ -203,6 +208,10 @@ class CloneModel(nn.Module):
         self.head_gaze = nn.Linear(shared_dim, GAZE_DIM)
         self.head_behavior = nn.Linear(shared_dim, BEHAVIOR_DIM)
 
+        # Reverse projection heads: shared_dim → each embedding space
+        # Used for cycle consistency / contrastive loss evaluation
+        self.reverse_projections = nn.ModuleDict()
+
         # Store modality order for consistent indexing
         self._modality_order = list(dims.keys())
 
@@ -212,12 +221,69 @@ class CloneModel(nn.Module):
             sum(p.numel() for p in self.parameters()) / 1e6,
         )
 
+    def fuse_north_stars(self, centroids: dict[str, "np.ndarray"]) -> None:
+        """Fuse North Star identity anchors into the transformer.
+
+        This is the key architectural innovation: embedding Santa's identity
+        directly into the transformer as frozen cross-attention targets.
+        After this call, every forward pass is pulled toward Santa.
+
+        Args:
+            centroids: Dict of modality name → centroid vector (numpy).
+        """
+        import numpy as np
+        from phoenix.clone.north_star import NorthStarAnchors, NorthStarAttention
+
+        shared_dim = self.latents.shape[-1]
+
+        # Create frozen anchor module
+        self._north_star_anchors = NorthStarAnchors(centroids, shared_dim)
+        self._north_star_anchors = self._north_star_anchors.to(self.latents.device)
+
+        # Create North Star cross-attention layers (one per decoder layer)
+        self._north_star_attn = nn.ModuleList([
+            NorthStarAttention(shared_dim) for _ in range(len(self.decoder_layers))
+        ]).to(self.latents.device)
+
+        # Create reverse projection heads for contrastive loss
+        for name in centroids:
+            dim = len(centroids[name])
+            self.reverse_projections[name] = nn.Linear(shared_dim, dim).to(self.latents.device)
+
+        total_new = sum(p.numel() for p in self._north_star_attn.parameters())
+        total_new += sum(p.numel() for p in self.reverse_projections.parameters())
+        logger.info(
+            "North Stars fused: %d anchors, %d new params (%.1fM), total %.1fM",
+            len(centroids), total_new, total_new / 1e6,
+            self.param_count / 1e6,
+        )
+
+    def project_to_embedding_spaces(self, pooled: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Project the model's pooled output back to each embedding space.
+
+        Used for contrastive loss: compare projected outputs against
+        North Star centroids to measure identity fidelity.
+
+        Args:
+            pooled: (B, shared_dim) model output after pooling.
+
+        Returns:
+            Dict of modality name → (B, D_m) projected vectors.
+        """
+        projections = {}
+        for name, proj in self.reverse_projections.items():
+            projections[name] = proj(pooled)
+        return projections
+
     def forward(
         self,
         embeddings: dict[str, torch.Tensor],
         prosody_scalars: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Forward pass: embeddings → avatar control signals.
+
+        If North Stars are fused, the decoder interleaves self-attention
+        with North Star cross-attention, pulling outputs toward identity.
 
         Args:
             embeddings: Dict of modality name → tensor (B, D_m).
@@ -256,21 +322,34 @@ class CloneModel(nn.Module):
         if prosody_scalars is not None:
             latents = self.film(latents, prosody_scalars)
 
-        # Transformer decoder: self-attention on latents
-        for layer in self.decoder_layers:
+        # Transformer decoder: interleave self-attention with North Star cross-attention
+        # Each layer: self-attend → cross-attend to identity anchors
+        north_stars = None
+        if self._north_star_anchors is not None:
+            north_stars = self._north_star_anchors.get_all_stars()
+
+        for i, layer in enumerate(self.decoder_layers):
             latents = layer(latents)
+            # North Star injection: pull latents toward Santa's identity
+            if north_stars is not None and self._north_star_attn is not None:
+                latents = self._north_star_attn[i](latents, north_stars)
 
         # Pool latents → single vector per sample
         pooled = latents.mean(dim=1)  # (B, D)
 
         # Output heads with appropriate activations
-        return {
+        output = {
             "blendshapes": torch.sigmoid(self.head_blendshape(pooled)),  # [0, 1]
             "voice": self.head_voice(pooled),  # Unconstrained
             "body": torch.tanh(self.head_body(pooled)),  # [-1, 1]
             "gaze": torch.tanh(self.head_gaze(pooled)) * 30.0,  # [-30, 30] degrees
             "behavior": torch.sigmoid(self.head_behavior(pooled)),  # [0, 1] probabilities
         }
+
+        # Include pooled vector for contrastive loss computation
+        output["_pooled"] = pooled
+
+        return output
 
     def _zero_output(self, batch_size: int, device: torch.device) -> dict[str, torch.Tensor]:
         return {
