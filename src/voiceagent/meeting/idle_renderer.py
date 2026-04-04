@@ -136,12 +136,23 @@ class IdleRenderer:
         # shift to the eye region pixels
         # (Skipped if no eye_region -- micro-saccade is only meaningful on eyes)
 
-        # Film grain
-        base = add_film_grain(base, intensity=0.015)
-
-        # Brightness jitter
-        self._brightness_phase += 0.02  # slow sine wave
-        base = apply_brightness_jitter(base, self._brightness_phase, amplitude=0.01)
+        # Film grain + brightness jitter (GPU-accelerated when available)
+        try:
+            from phoenix.render.compositor_bridge import (
+                gpu_brightness_jitter,
+                gpu_film_grain,
+            )
+            base = gpu_film_grain(base, intensity=0.015)
+            self._brightness_phase += 0.02
+            import math
+            amount = 0.01 * math.sin(self._brightness_phase)
+            base = gpu_brightness_jitter(base, amount=amount)
+        except ImportError:
+            base = add_film_grain(base, intensity=0.015)
+            self._brightness_phase += 0.02
+            base = apply_brightness_jitter(
+                base, self._brightness_phase, amplitude=0.01,
+            )
 
         return base
 

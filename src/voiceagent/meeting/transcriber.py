@@ -49,7 +49,8 @@ class MeetingTranscriber:
         self._buffer: list[np.ndarray] = []
         self._buffer_duration_s: float = 0.0
         self._running = False
-        self._process_lock = threading.Lock()
+        self._buffer_lock = threading.Lock()
+        self._transcribe_lock = threading.Lock()
 
     def _ensure_model(self) -> None:
         """Lazy-load the faster-whisper model.
@@ -109,57 +110,60 @@ class MeetingTranscriber:
                 audio, int(len(audio) * 16000 / sample_rate)
             ).astype(np.float32)
 
-        self._buffer.append(audio)
-        self._buffer_duration_s += len(audio) / 16000.0
+        with self._buffer_lock:
+            self._buffer.append(audio)
+            self._buffer_duration_s += len(audio) / 16000.0
 
-        # Cap buffer at 2x window to prevent unbounded growth if processing
-        # is slower than audio arrival
-        max_duration = self._config.window_seconds * 2.0
-        if self._buffer_duration_s > max_duration:
-            overflow = self._buffer_duration_s - max_duration
-            while self._buffer and overflow > 0:
-                dropped = self._buffer.pop(0)
-                dropped_s = len(dropped) / 16000.0
-                self._buffer_duration_s -= dropped_s
-                overflow -= dropped_s
-            logger.warning(
-                "Audio buffer overflow — dropped oldest chunks "
-                "(buffer capped at %.1fs)", max_duration,
+            # Cap buffer at 2x window to prevent unbounded growth if processing
+            # is slower than audio arrival
+            max_duration = self._config.window_seconds * 2.0
+            if self._buffer_duration_s > max_duration:
+                overflow = self._buffer_duration_s - max_duration
+                while self._buffer and overflow > 0:
+                    dropped = self._buffer.pop(0)
+                    dropped_s = len(dropped) / 16000.0
+                    self._buffer_duration_s -= dropped_s
+                    overflow -= dropped_s
+                logger.warning(
+                    "Audio buffer overflow — dropped oldest chunks "
+                    "(buffer capped at %.1fs)", max_duration,
+                )
+
+            should_process = (
+                self._buffer_duration_s >= self._config.window_seconds
             )
 
-        if self._buffer_duration_s >= self._config.window_seconds:
+        if should_process:
             self._process_buffer()
 
     def _process_buffer(self) -> None:
         """Process the accumulated audio buffer through Whisper.
 
-        Uses a non-blocking lock to avoid piling up processing when
-        the previous window has not finished yet. Concatenates all
-        buffered chunks, clears the buffer, and runs transcription.
-        Resulting segments are delivered to the callback as
-        MeetingSegment objects.
+        Uses a non-blocking transcribe lock to skip if the previous
+        window is still being transcribed. Snapshots and clears the
+        buffer under the buffer lock, then runs transcription WITHOUT
+        the buffer lock held (to avoid blocking feed_audio).
 
         Raises:
             MeetingTranscriptionError: On model load failure or
                 unrecoverable transcription errors.
         """
-        if not self._process_lock.acquire(blocking=False):
-            return  # Already processing
+        if not self._transcribe_lock.acquire(blocking=False):
+            return  # Previous transcription still running
 
         try:
             self._ensure_model()
 
-            # Concatenate buffer
-            if not self._buffer:
-                return
-            audio = np.concatenate(self._buffer)
-            buffer_duration_s = self._buffer_duration_s
+            # Snapshot and clear buffer under lock
+            with self._buffer_lock:
+                if not self._buffer:
+                    return
+                audio = np.concatenate(self._buffer)
+                buffer_duration_s = self._buffer_duration_s
+                self._buffer.clear()
+                self._buffer_duration_s = 0.0
 
-            # Clear buffer
-            self._buffer.clear()
-            self._buffer_duration_s = 0.0
-
-            # Transcribe
+            # Transcribe (slow -- runs WITHOUT buffer lock)
             segments, _info = self._model.transcribe(
                 audio,
                 language="en",
@@ -198,7 +202,7 @@ class MeetingTranscriber:
                 f"Transcription failed: {exc}"
             ) from exc
         finally:
-            self._process_lock.release()
+            self._transcribe_lock.release()
 
     def flush(self) -> None:
         """Force-process any remaining audio in the buffer.

@@ -9,6 +9,8 @@ Exports:
         ExpressionError, BehaviorError
     Configuration: PhoenixConfig, CompositorConfig, RenderConfig,
         BehaviorWeights
+    Expression engine: EmotionFusion, EmotionState, ProsodyFeatures,
+        SpeakerTracker, SpeakerInfo, GestureLibrary, GestureClip
 """
 
 from phoenix.config import (
@@ -24,15 +26,31 @@ from phoenix.errors import (
     PhoenixError,
     RenderError,
 )
+from phoenix.expression import (
+    EmotionFusion,
+    EmotionState,
+    GestureClip,
+    GestureLibrary,
+    ProsodyFeatures,
+    SpeakerInfo,
+    SpeakerTracker,
+)
 
 __all__ = [
     "BehaviorError",
     "BehaviorWeights",
     "CompositorConfig",
     "CompositorError",
+    "EmotionFusion",
+    "EmotionState",
     "ExpressionError",
+    "GestureClip",
+    "GestureLibrary",
     "PhoenixConfig",
     "PhoenixError",
+    "ProsodyFeatures",
     "RenderConfig",
     "RenderError",
+    "SpeakerInfo",
+    "SpeakerTracker",
 ]

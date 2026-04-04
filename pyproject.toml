@@ -82,7 +82,7 @@ dev = [
 clipcannon = "clipcannon.server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/clipcannon", "src/license_server"]
+packages = ["src/clipcannon", "src/license_server", "src/phoenix"]
 
 [tool.ruff]
 target-version = "py312"

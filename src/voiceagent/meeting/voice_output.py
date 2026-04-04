@@ -256,10 +256,9 @@ class MeetingVoiceOutput:
 
             candidates.append((audio, secs_score))
 
-        # ALL candidates failed SECS — keep only the best, free the rest
-        best_idx = max(range(len(candidates)), key=lambda i: candidates[i][1])
-        best_audio, best_score = candidates[best_idx]
-        del candidates  # Free all numpy arrays
+        # ALL candidates failed SECS — extract best score, then free all arrays
+        best_score = max(score for _, score in candidates)
+        del candidates
 
         raise MeetingVoiceError(
             f"SECS verification failed for all {max_candidates} candidates. "

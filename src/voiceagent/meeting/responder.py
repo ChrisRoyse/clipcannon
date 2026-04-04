@@ -209,7 +209,6 @@ class MeetingResponder:
             if isinstance(item, dict):
                 text = item.get("text", item.get("content", ""))
                 doc_title = item.get("document_title", "")
-                score = item.get("score", item.get("similarity", 0))
                 if text:
                     prefix = f"[{doc_title}]" if doc_title else ""
                     # Truncate long excerpts

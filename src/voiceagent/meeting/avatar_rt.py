@@ -103,6 +103,9 @@ class RealtimeLipSync:
     ) -> np.ndarray:
         """Composite a MuseTalk face frame onto the base driver frame.
 
+        Uses GPU-accelerated compositing via Phoenix CuPy kernels
+        when available, falls back to CPU if CuPy is not installed.
+
         Args:
             base_frame: Full resolution RGB frame from driver video.
             face_frame: 256x256 RGB face frame from MuseTalk.
@@ -113,19 +116,30 @@ class RealtimeLipSync:
 
         Returns:
             Composited full-resolution frame.
+
+        Raises:
+            MeetingLipSyncError: If compositing fails on both GPU and CPU.
         """
         x, y, w, h = face_region
-        result = base_frame.copy()
 
-        # Resize face frame to target region size
+        try:
+            from phoenix.render.compositor_bridge import gpu_composite_face
+            return gpu_composite_face(
+                base_frame, face_frame, x, y, w, h, blend_alpha,
+            )
+        except ImportError:
+            pass  # CuPy not available, use CPU path below
+        except Exception as exc:
+            logger.warning("GPU composite failed, falling back to CPU: %s", exc)
+
+        # CPU fallback
+        result = base_frame.copy()
         face_resized = cv2.resize(
             face_frame, (w, h), interpolation=cv2.INTER_LANCZOS4,
         )
-
         if blend_alpha >= 0.99:
             result[y : y + h, x : x + w] = face_resized
         else:
-            # Cross-fade blend
             original = result[y : y + h, x : x + w].astype(np.float32)
             blended = (
                 original * (1 - blend_alpha)
@@ -134,7 +148,6 @@ class RealtimeLipSync:
             result[y : y + h, x : x + w] = np.clip(
                 blended, 0, 255,
             ).astype(np.uint8)
-
         return result
 
     def release(self) -> None:
