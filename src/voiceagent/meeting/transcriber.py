@@ -112,6 +112,21 @@ class MeetingTranscriber:
         self._buffer.append(audio)
         self._buffer_duration_s += len(audio) / 16000.0
 
+        # Cap buffer at 2x window to prevent unbounded growth if processing
+        # is slower than audio arrival
+        max_duration = self._config.window_seconds * 2.0
+        if self._buffer_duration_s > max_duration:
+            overflow = self._buffer_duration_s - max_duration
+            while self._buffer and overflow > 0:
+                dropped = self._buffer.pop(0)
+                dropped_s = len(dropped) / 16000.0
+                self._buffer_duration_s -= dropped_s
+                overflow -= dropped_s
+            logger.warning(
+                "Audio buffer overflow — dropped oldest chunks "
+                "(buffer capped at %.1fs)", max_duration,
+            )
+
         if self._buffer_duration_s >= self._config.window_seconds:
             self._process_buffer()
 

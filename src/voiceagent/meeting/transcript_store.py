@@ -12,6 +12,7 @@ MeetingTranscriptStoreError.
 """
 from __future__ import annotations
 
+import gc
 import logging
 import uuid
 from datetime import datetime
@@ -27,6 +28,10 @@ from voiceagent.meeting.transcript_format import (
     build_partial_transcript,
     build_transcript_markdown,
 )
+
+# Maximum segments kept in memory per meeting. Older segments are
+# flushed to disk and dropped from the in-memory buffer.
+_MAX_IN_MEMORY_SEGMENTS = 500
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +152,9 @@ class MeetingTranscriptStore:
         """Append a transcript segment to the in-memory buffer.
 
         Automatically tracks participant names from non-clone speakers.
+        Caps in-memory segments at _MAX_IN_MEMORY_SEGMENTS to prevent
+        unbounded memory growth in long meetings. Older segments are
+        auto-flushed to disk before being dropped.
 
         Args:
             meeting_id: The meeting to append to.
@@ -163,6 +171,16 @@ class MeetingTranscriptStore:
         if segment.speaker_name and not segment.is_clone:
             if segment.speaker_name not in doc.participant_names:
                 doc.participant_names.append(segment.speaker_name)
+
+        # Cap in-memory segments to prevent memory bloat in long meetings
+        if len(doc.segments) > _MAX_IN_MEMORY_SEGMENTS:
+            self.flush(meeting_id)
+            trim = len(doc.segments) - _MAX_IN_MEMORY_SEGMENTS
+            del doc.segments[:trim]
+            logger.debug(
+                "Trimmed %d old segments from memory for %s",
+                trim, meeting_id,
+            )
 
     def record_interaction(
         self, meeting_id: str, interaction: CloneInteraction,
@@ -280,6 +298,10 @@ class MeetingTranscriptStore:
         del self._active_meetings[meeting_id]
         self._segment_counts.pop(meeting_id, None)
 
+        # Free memory from the potentially large MeetingDocument
+        del doc
+        gc.collect()
+
         logger.info(
             "Meeting ended: %s -> OCR Provenance doc %s (%d segments, %d interactions)",
             meeting_id,
@@ -309,6 +331,65 @@ class MeetingTranscriptStore:
                     "entity_id": doc_id,
                 },
             )
+
+    async def ingest_partial(self, meeting_id: str) -> str | None:
+        """Ingest current transcript state into OCR Provenance for live search.
+
+        Creates or updates a document in OCR Provenance with the current
+        transcript content. This enables real-time search of the ongoing
+        meeting via OCR Provenance's semantic search.
+
+        Unlike flush() which only writes to local disk, this pushes the
+        transcript into OCR Provenance so the AI can search it.
+
+        Args:
+            meeting_id: The meeting to ingest.
+
+        Returns:
+            OCR Provenance document_id if successful, None on failure.
+        """
+        doc = self._active_meetings.get(meeting_id)
+        if doc is None or not doc.segments:
+            return None
+
+        try:
+            await self._ensure_db()
+
+            # Write partial transcript to disk
+            md = build_partial_transcript(doc)
+            path = self._transcript_dir / f"{meeting_id}_live.md"
+            path.write_text(md, encoding="utf-8")
+
+            # Ingest into OCR Provenance (overwrites previous partial)
+            result = await self._client.call_tool(
+                "ocr_ingest_files",
+                {
+                    "files": [str(path)],
+                    "disable_image_extraction": True,
+                },
+            )
+
+            # Clean up the live file (keep the crash-safety flush file)
+            path.unlink(missing_ok=True)
+
+            doc_id = ""
+            if isinstance(result, dict):
+                docs = result.get("documents", [])
+                if isinstance(docs, list) and docs:
+                    first = docs[0]
+                    if isinstance(first, dict):
+                        doc_id = first.get("id", "")
+
+            if doc_id:
+                logger.debug(
+                    "Live transcript ingested: %s -> %s (%d segments)",
+                    meeting_id, doc_id, len(doc.segments),
+                )
+            return doc_id or None
+
+        except Exception as exc:
+            logger.debug("Live transcript ingest failed: %s", exc)
+            return None
 
     async def search(self, query: str, limit: int = 20) -> dict:
         """Semantic + full-text hybrid search across all meetings.

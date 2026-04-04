@@ -320,3 +320,16 @@ def setup_devices(clones: str) -> None:
             click.echo(f"  {name}: FAILED -- {e}", err=True)
 
     click.echo(f"Device setup complete for {len(clone_names)} clone(s).")
+
+
+@meeting.command(name="setup-account")
+def setup_account() -> None:
+    """One-time setup: log into a Google account for meeting bot access.
+
+    Opens a real browser window. Log into the Google account the bot
+    should use when joining meetings (can be a dedicated bot account
+    or your own). Session is saved and reused for all future joins.
+    """
+    from voiceagent.meeting.browser_bot import setup_google_account
+
+    asyncio.run(setup_google_account())

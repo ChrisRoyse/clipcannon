@@ -116,10 +116,12 @@ class CloneMeetingManager:
             on_audio=transcriber.feed_audio,
         )
 
-        # Create detection + response pipeline
+        # Create detection + response pipeline with OCR Provenance RAG
         detector = AddressDetector(clone_name, clone_cfg)
         responder = MeetingResponder(
-            config=self._config.response, clone_name=clone_name,
+            config=self._config.response,
+            clone_name=clone_name,
+            ocr_client=store._client,  # Share the OCR Provenance connection
         )
         voice_out = MeetingVoiceOutput(
             config=self._config.voice, clone_name=voice,
@@ -204,9 +206,10 @@ class CloneMeetingManager:
         )
         instance.recent_segments.append(segment)
 
-        # Keep last 40 segments for context window
-        if len(instance.recent_segments) > 40:
-            instance.recent_segments = instance.recent_segments[-40:]
+        # Keep last 40 segments for context window — slice in-place to
+        # avoid creating a new list object and leaking the old one
+        if len(instance.recent_segments) > 50:
+            del instance.recent_segments[:len(instance.recent_segments) - 40]
 
         # Check if clone is addressed
         result = instance.address_detector.check_segment(
@@ -322,12 +325,18 @@ class CloneMeetingManager:
     # ------------------------------------------------------------------
 
     async def _flush_loop(self, clone_name: str) -> None:
-        """Periodically flush transcript to disk for crash safety."""
+        """Periodically flush transcript to disk and ingest into OCR Provenance.
+
+        Two operations on each cycle:
+        1. Flush to local disk for crash safety
+        2. Ingest partial transcript into OCR Provenance for live search
+        """
         instance = self._clones.get(clone_name)
         if instance is None:
             return
 
         interval = self._config.transcript.flush_interval_seconds
+        ingest_counter = 0
         while instance._running:
             await asyncio.sleep(interval)
             if not instance._running:
@@ -337,6 +346,15 @@ class CloneMeetingManager:
                     instance.meeting_id,
                 ):
                     instance.transcript_store.flush(instance.meeting_id)
+
+                # Ingest into OCR Provenance every 3rd flush cycle
+                # for live search capability without overwhelming the server
+                ingest_counter += 1
+                if ingest_counter >= 3:
+                    ingest_counter = 0
+                    await instance.transcript_store.ingest_partial(
+                        instance.meeting_id,
+                    )
             except MeetingError as e:
                 logger.error(
                     "Flush failed for '%s': %s", clone_name, e,

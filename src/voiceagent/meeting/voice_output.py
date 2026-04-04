@@ -249,14 +249,17 @@ class MeetingVoiceOutput:
             )
 
             if secs_score >= threshold:
-                # PASS -- enhance and return
+                # PASS -- free failed candidates before enhancing
+                del candidates
                 enhanced = await self._enhance(audio)
                 return enhanced, secs_score, style
 
             candidates.append((audio, secs_score))
 
-        # ALL candidates failed SECS
-        _best_audio, best_score = max(candidates, key=lambda x: x[1])
+        # ALL candidates failed SECS — keep only the best, free the rest
+        best_idx = max(range(len(candidates)), key=lambda i: candidates[i][1])
+        best_audio, best_score = candidates[best_idx]
+        del candidates  # Free all numpy arrays
 
         raise MeetingVoiceError(
             f"SECS verification failed for all {max_candidates} candidates. "

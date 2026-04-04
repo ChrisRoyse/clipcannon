@@ -60,6 +60,7 @@ class FastTTSAdapter:
     REAL_MIC_OVERRIDES: dict[str, str] = {
         "boris": "~/.clipcannon/voice_data/boris/wavs/clip_ac0b9f40.wav",
         "taylor": "~/.clipcannon/voice_data/taylor/wavs/clip_77702bd4_trimmed.wav",
+        "santa": "~/.clipcannon/voice_data/santa/wavs/santa_best_ref.wav",
     }
 
     def __init__(
