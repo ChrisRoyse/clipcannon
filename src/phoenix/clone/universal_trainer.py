@@ -318,6 +318,29 @@ def train_clone(
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+    # Step 6 (optional): Train Gaussian avatar if FLAME params exist
+    flame_params_path = os.path.join(save_dir, "flame_params.npz")
+    gaussian_model_path = os.path.join(save_dir, "gaussian_avatar.pt")
+    if os.path.exists(flame_params_path):
+        logger.info("[6/6] Training Gaussian avatar...")
+        try:
+            from phoenix.render.gaussian_trainer import GaussianTrainer
+            g_trainer = GaussianTrainer(
+                flame_params_path=flame_params_path,
+                output_path=gaussian_model_path,
+                num_iters=5000,
+                batch_size=4,
+                tex_size=128,
+            )
+            g_trainer.train()
+            meta["gaussian_avatar"] = gaussian_model_path
+            logger.info("  Gaussian avatar trained: %s", gaussian_model_path)
+        except Exception as e:
+            logger.warning("  Gaussian avatar training failed: %s", e)
+            meta["gaussian_avatar_error"] = str(e)
+    else:
+        logger.info("[6/6] Skipping Gaussian avatar (no FLAME params at %s)", flame_params_path)
+
     total_time = time.time() - t_total_start
     logger.info("=== Clone '%s' trained in %.1fs ===", clone_name, total_time)
 

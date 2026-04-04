@@ -24,6 +24,12 @@ import torch.nn.functional as Fn
 
 from phoenix.render.gsplat_avatar import AvatarRenderConfig, GaussianAvatarModel
 
+# Allow safe loading of our config dataclass in torch.load
+try:
+    torch.serialization.add_safe_globals([AvatarRenderConfig])
+except AttributeError:
+    pass  # Older PyTorch versions don't have this
+
 logger = logging.getLogger(__name__)
 
 
@@ -231,3 +237,76 @@ class GaussianAvatarRenderer:
         # Load avatar weights
         self._avatar.load_state_dict(checkpoint["avatar_state_dict"])
         logger.info("Avatar model loaded from %s", path)
+
+    @classmethod
+    def load_trained(
+        cls,
+        model_path: str | Path | None = None,
+        flame_params_path: str | Path | None = None,
+        device_id: int = 0,
+    ) -> "GaussianAvatarRenderer":
+        """Load a trained Gaussian avatar and return a ready renderer.
+
+        This is the convenience entry point for real-time use. It:
+        1. Loads the trained Gaussian model checkpoint
+        2. Loads FLAME params for reference poses
+        3. Returns a renderer that can immediately render frames
+
+        Args:
+            model_path: Path to the trained Gaussian model (.pt).
+                Default: ~/.clipcannon/models/santa/gaussian_avatar.pt
+            flame_params_path: Path to fitted FLAME params (.npz).
+                Default: ~/.clipcannon/models/santa/flame_params.npz
+            device_id: CUDA device index.
+
+        Returns:
+            An initialized GaussianAvatarRenderer ready for real-time use.
+        """
+        default_dir = Path.home() / ".clipcannon" / "models" / "santa"
+        if model_path is None:
+            model_path = default_dir / "gaussian_avatar.pt"
+        if flame_params_path is None:
+            flame_params_path = default_dir / "flame_params.npz"
+
+        model_path = Path(model_path)
+        flame_params_path = Path(flame_params_path)
+
+        if not model_path.exists():
+            raise FileNotFoundError(f"Trained model not found: {model_path}")
+        if not flame_params_path.exists():
+            raise FileNotFoundError(f"FLAME params not found: {flame_params_path}")
+
+        logger.info("Loading trained avatar from %s", model_path)
+
+        # Load checkpoint to get config
+        checkpoint = torch.load(str(model_path), map_location=f"cuda:{device_id}")
+        config = checkpoint.get("config", AvatarRenderConfig(device_id=device_id))
+
+        # Create renderer with the saved config
+        renderer = cls(config)
+        renderer.initialize()
+
+        # Load trained weights
+        renderer._avatar.load_state_dict(checkpoint["avatar_state_dict"])
+        logger.info(
+            "Trained avatar loaded: %d Gaussians, step %d",
+            checkpoint.get("num_gaussians", renderer._avatar.num_gaussians),
+            checkpoint.get("step", -1),
+        )
+
+        # Store reference FLAME params for downstream use
+        import numpy as np
+        flame_data = np.load(str(flame_params_path))
+        renderer._ref_expressions = torch.from_numpy(
+            flame_data["expression"],
+        ).to(renderer.device)
+        renderer._ref_jaw_poses = torch.from_numpy(
+            flame_data["jaw_pose"],
+        ).to(renderer.device)
+        renderer._ref_timestamps = flame_data["timestamps"]
+        logger.info(
+            "Loaded %d reference FLAME frames",
+            len(renderer._ref_timestamps),
+        )
+
+        return renderer
