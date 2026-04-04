@@ -106,6 +106,20 @@ class FrameServer:
 
 
 # The JavaScript init script for Chrome
+# NOTE: This is the WebSocket-based version for reference. The active
+# implementation in santa_meet_bot.py uses a different approach:
+# page.evaluate() to set window.__santaJpegB64 (no WebSocket needed).
+#
+# IMPORTANT: Both approaches now use the Insertable Streams technique:
+# 1. Call original getUserMedia to get fake-device track (has real metadata)
+# 2. Use MediaStreamTrackProcessor to read fake-device frames
+# 3. Replace each frame with our rendered content
+# 4. Output via MediaStreamTrackGenerator (inherits real track metadata)
+# 5. Google Meet sees proper getSettings()/getCapabilities() → accepts video
+#
+# The old approach of creating a raw MediaStreamTrackGenerator FAILS because
+# Meet checks track metadata and silently disables tracks without proper
+# camera settings (width, height, deviceId, facingMode, etc).
 CHROME_INIT_SCRIPT = """
 (function() {
     const FRAME_WS = 'ws://localhost:9876';
@@ -117,129 +131,105 @@ CHROME_INIT_SCRIPT = """
         try {
             const ws = new WebSocket(FRAME_WS);
             ws.binaryType = 'arraybuffer';
-            ws.onopen = () => { wsConnected = true; console.log('[AvatarCam] WebSocket connected'); };
+            ws.onopen = () => { wsConnected = true; console.log('[AvatarCam] WS connected'); };
             ws.onmessage = (evt) => {
                 if (typeof evt.data === 'string') {
                     const [w, h] = evt.data.split('x').map(Number);
                     frameWidth = w; frameHeight = h;
-                    console.log('[AvatarCam] Resolution:', w, 'x', h);
                 } else {
                     latestFrame = new Uint8ClampedArray(evt.data);
                 }
             };
-            ws.onclose = () => {
-                wsConnected = false;
-                setTimeout(connectWS, 2000);
-            };
+            ws.onclose = () => { wsConnected = false; setTimeout(connectWS, 2000); };
             ws.onerror = () => { ws.close(); };
-        } catch(e) {
-            setTimeout(connectWS, 2000);
-        }
+        } catch(e) { setTimeout(connectWS, 2000); }
     }
     connectWS();
 
-    // Monkey-patch getUserMedia BEFORE Google Meet loads
     const origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
 
     navigator.mediaDevices.getUserMedia = async function(constraints) {
-        if (!constraints || !constraints.video) {
-            return origGUM(constraints);
-        }
+        if (!constraints || !constraints.video) return origGUM(constraints);
 
-        console.log('[AvatarCam] Intercepting getUserMedia for video');
+        // Get real fake-device track for metadata
+        const realStream = await origGUM({video: constraints.video});
+        const realTrack = realStream.getVideoTracks()[0];
+        const realSettings = realTrack.getSettings();
+        const realCaps = realTrack.getCapabilities ? realTrack.getCapabilities() : {};
 
-        // Create MediaStreamTrackGenerator for video
-        const generator = new MediaStreamTrackGenerator({ kind: 'video' });
-        const writer = generator.writable.getWriter();
+        // Insertable Streams: process real track, replace frames with ours
+        const proc = new MediaStreamTrackProcessor({track: realTrack});
+        const gen = new MediaStreamTrackGenerator({kind: 'video'});
+        const reader = proc.readable.getReader();
+        const writer = gen.writable.getWriter();
+        const oc = new OffscreenCanvas(frameWidth, frameHeight);
+        const ox = oc.getContext('2d');
 
-        // Frame pump: WebSocket data → VideoFrame → generator
-        (async function pumpFrames() {
+        (async function pump() {
             while (true) {
+                const {value: frame, done} = await reader.read();
+                if (done) break;
+                frame.close();
                 if (latestFrame && latestFrame.length === frameWidth * frameHeight * 4) {
                     try {
-                        const imageData = new ImageData(
-                            new Uint8ClampedArray(latestFrame), frameWidth, frameHeight
-                        );
-                        const bitmap = await createImageBitmap(imageData);
-                        const vf = new VideoFrame(bitmap, {
-                            timestamp: performance.now() * 1000
-                        });
-                        await writer.write(vf);
-                        vf.close();
-                        bitmap.close();
-                    } catch(e) { /* skip frame */ }
+                        const id = new ImageData(new Uint8ClampedArray(latestFrame), frameWidth, frameHeight);
+                        const bmp = await createImageBitmap(id);
+                        ox.drawImage(bmp, 0, 0);
+                        bmp.close();
+                    } catch(e) {}
                 }
-                await new Promise(r => setTimeout(r, 40));  // ~25fps
+                const bmp = oc.transferToImageBitmap();
+                const vf = new VideoFrame(bmp, {timestamp: performance.now() * 1000});
+                try { await writer.write(vf); } catch(e) { vf.close(); break; }
+                vf.close();
             }
         })();
 
-        // Build stream with our video track
-        const stream = new MediaStream([generator]);
+        // Spoof metadata
+        const origGS = gen.getSettings.bind(gen);
+        gen.getSettings = () => ({...origGS(), ...realSettings});
+        if (gen.getCapabilities) gen.getCapabilities = () => realCaps;
 
-        // If audio requested, get it from fake device or AudioContext
+        const stream = new MediaStream([gen]);
         if (constraints.audio) {
             try {
-                // Try getting audio from the original getUserMedia
-                const audioStream = await origGUM({ audio: constraints.audio });
-                for (const t of audioStream.getAudioTracks()) {
-                    stream.addTrack(t);
-                }
+                const aStream = await origGUM({audio: constraints.audio});
+                for (const t of aStream.getAudioTracks()) stream.addTrack(t);
             } catch(e) {
-                console.log('[AvatarCam] No audio device, using AudioContext');
-                const ctx = new AudioContext({ sampleRate: 48000 });
+                const ctx = new AudioContext({sampleRate: 48000});
                 const dest = ctx.createMediaStreamDestination();
                 stream.addTrack(dest.stream.getAudioTracks()[0]);
-                // Store for later audio injection
                 window.__santaAudioCtx = ctx;
                 window.__santaAudioDest = dest;
             }
         }
-
-        console.log('[AvatarCam] Returning synthetic stream:', stream.getTracks().length, 'tracks');
         return stream;
     };
 
-    // Ensure at least one videoinput in device enumeration
-    const origEnum = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
-    navigator.mediaDevices.enumerateDevices = async function() {
-        const devices = await origEnum();
-        if (!devices.some(d => d.kind === 'videoinput')) {
-            devices.push({
-                deviceId: 'avatar-cam', kind: 'videoinput',
-                label: 'Avatar Camera', groupId: 'virtual',
-                toJSON: () => ({})
-            });
-        }
-        return devices;
-    };
-
-    // Audio playback function (same as before)
     window.__santaPlayAudio = function(b64Data, sampleRate) {
         const ctx = window.__santaAudioCtx;
         const dest = window.__santaAudioDest;
         if (!ctx || !dest) return Promise.resolve(false);
-        return ctx.resume().then(() => {
-            return new Promise((resolve, reject) => {
-                try {
-                    const binary = atob(b64Data);
-                    const bytes = new Uint8Array(binary.length);
-                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                    const float32 = new Float32Array(bytes.buffer);
-                    const buffer = ctx.createBuffer(1, float32.length, sampleRate);
-                    buffer.copyToChannel(float32, 0);
-                    const source = ctx.createBufferSource();
-                    source.buffer = buffer;
-                    const gain = ctx.createGain();
-                    gain.gain.value = 3.0;
-                    source.connect(gain);
-                    gain.connect(dest);
-                    source.onended = () => resolve(true);
-                    source.start();
-                } catch(e) { reject(e.message); }
-            });
-        });
+        return ctx.resume().then(() => new Promise((resolve, reject) => {
+            try {
+                const binary = atob(b64Data);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                const float32 = new Float32Array(bytes.buffer);
+                const buffer = ctx.createBuffer(1, float32.length, sampleRate);
+                buffer.copyToChannel(float32, 0);
+                const source = ctx.createBufferSource();
+                source.buffer = buffer;
+                const gain = ctx.createGain();
+                gain.gain.value = 3.0;
+                source.connect(gain);
+                gain.connect(dest);
+                source.onended = () => resolve(true);
+                source.start();
+            } catch(e) { reject(e.message); }
+        }));
     };
 
-    console.log('[AvatarCam] getUserMedia hooked + WebSocket frame bridge active');
+    console.log('[AvatarCam] Insertable Streams + WebSocket bridge active');
 })();
 """

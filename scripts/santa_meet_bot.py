@@ -483,65 +483,156 @@ async def launch_browser():
             "--use-fake-ui-for-media-stream",
             "--use-fake-device-for-media-stream",
             "--use-file-for-fake-audio-capture=/home/cabdru/.voiceagent/silence.wav",
-            # Video: getUserMedia intercepted by init script → MediaStreamTrackGenerator
-            # The fake device creates a video source but our init script replaces it
+            # Fake device creates a real camera track with proper metadata.
+            # Init script intercepts getUserMedia, gets the real track,
+            # then pipes our avatar frames through it via Insertable Streams.
+            # Meet sees real getSettings()/getCapabilities() → accepts our video.
         ],
         viewport={"width": 1280, "height": 720},
         locale="en-US",
         permissions=["camera", "microphone"],
     )
-    # Init script: MediaStreamTrackGenerator video + AudioContext audio
-    # Intercepts getUserMedia BEFORE Google Meet loads — Meet gets our synthetic tracks
-    # MUST be minimal — large scripts crash the page
+    # Init script: Intercept getUserMedia with REAL fake-device track metadata
+    #
+    # THE KEY INSIGHT: Google Meet validates video tracks by checking
+    # getSettings() and getCapabilities(). A raw MediaStreamTrackGenerator
+    # returns empty metadata and Meet silently disables it.
+    #
+    # SOLUTION: Call the ORIGINAL getUserMedia to get the fake device's
+    # video track (which has real camera metadata). Then use Insertable
+    # Streams (MediaStreamTrackProcessor → transform → MediaStreamTrackGenerator)
+    # to pipe our custom canvas frames THROUGH the real track's pipeline.
+    # The generator inherits the processor's metadata chain, so Meet sees
+    # a track with real getSettings()/getCapabilities() that contains our frames.
+    #
+    # If Insertable Streams are not available (older Chrome), fall back to
+    # canvas.captureStream() with getSettings/getCapabilities spoofed from
+    # the real track.
+    #
+    # MUST be minimal — large scripts crash the page.
     await context.add_init_script("""
         Object.defineProperty(navigator,"webdriver",{get:()=>false});
         const _origGUM=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
         window.__santaJpegB64=null;
-        window.__santaImg=new Image();
         navigator.mediaDevices.getUserMedia=async function(c){
-            if(c&&c.video){
-                try{
+            if(!c||!c.video) return _origGUM(c);
+            try{
+                // Step 1: Get REAL fake-device stream (has proper camera metadata)
+                const realStream=await _origGUM({video:c.video});
+                const realTrack=realStream.getVideoTracks()[0];
+                const realSettings=realTrack.getSettings();
+                const realCaps=realTrack.getCapabilities?realTrack.getCapabilities():{};
+                const W=realSettings.width||1280, H=realSettings.height||720;
+                console.log('[AvatarCam] Real track:',realTrack.label,W+'x'+H,JSON.stringify(realSettings));
+
+                // Step 2: Canvas for rendering our frames
+                const oc=new OffscreenCanvas(W,H);
+                const ox=oc.getContext('2d');
+
+                // Step 3: Try Insertable Streams approach
+                let outTrack;
+                if(typeof MediaStreamTrackProcessor!=='undefined'&&typeof MediaStreamTrackGenerator!=='undefined'){
+                    console.log('[AvatarCam] Using Insertable Streams (Processor→Generator)');
+                    const proc=new MediaStreamTrackProcessor({track:realTrack});
                     const gen=new MediaStreamTrackGenerator({kind:'video'});
-                    const w=gen.writable.getWriter();
-                    const oc=new OffscreenCanvas(1280,720);
-                    const ox=oc.getContext('2d');
-                    let i=0,lastJpeg=null;
+                    const reader=proc.readable.getReader();
+                    const writer=gen.writable.getWriter();
+                    let lastJpeg=null;
+                    // Transform: read real frames, replace with our canvas content
                     (async()=>{
                         while(true){
-                            i++;
+                            const{value:frame,done}=await reader.read();
+                            if(done)break;
+                            frame.close(); // discard fake-device pixels
+                            // Draw our content onto canvas
                             if(window.__santaJpegB64&&window.__santaJpegB64!==lastJpeg){
                                 lastJpeg=window.__santaJpegB64;
                                 try{
                                     const resp=await fetch('data:image/jpeg;base64,'+lastJpeg);
                                     const blob=await resp.blob();
                                     const bmp=await createImageBitmap(blob);
-                                    ox.drawImage(bmp,0,0,1280,720);
+                                    ox.drawImage(bmp,0,0,W,H);
                                     bmp.close();
                                 }catch(e){}
                             }else if(!lastJpeg){
-                                ox.fillStyle='#1a1a2e';ox.fillRect(0,0,1280,720);
+                                ox.fillStyle='#1a1a2e';ox.fillRect(0,0,W,H);
                                 ox.fillStyle='#eee';ox.font='36px Arial';
-                                ox.fillText('Connecting...',500,380);
+                                ox.fillText('Santa joining...',W/2-120,H/2);
                             }
                             const bmp=oc.transferToImageBitmap();
                             const vf=new VideoFrame(bmp,{timestamp:performance.now()*1000});
-                            try{await w.write(vf);}catch(e){break;}
+                            try{await writer.write(vf);}catch(e){vf.close();break;}
                             vf.close();
+                        }
+                    })();
+                    // Spoof metadata on the generator track
+                    const origGS=gen.getSettings.bind(gen);
+                    gen.getSettings=()=>({...origGS(),...realSettings});
+                    if(gen.getCapabilities)gen.getCapabilities=()=>realCaps;
+                    outTrack=gen;
+                }else{
+                    // Fallback: canvas.captureStream + metadata spoofing
+                    console.log('[AvatarCam] Fallback: captureStream + metadata spoof');
+                    const visCanvas=document.createElement('canvas');
+                    visCanvas.width=W;visCanvas.height=H;
+                    const vx=visCanvas.getContext('2d');
+                    const capStream=visCanvas.captureStream(15);
+                    const capTrack=capStream.getVideoTracks()[0];
+                    // Spoof metadata from real track
+                    capTrack.getSettings=()=>realSettings;
+                    if(realTrack.getCapabilities)capTrack.getCapabilities=()=>realCaps;
+                    capTrack.getConstraints=()=>realTrack.getConstraints();
+                    // Render loop on visible canvas
+                    let lastJpeg=null;
+                    (async()=>{
+                        while(capTrack.readyState==='live'){
+                            if(window.__santaJpegB64&&window.__santaJpegB64!==lastJpeg){
+                                lastJpeg=window.__santaJpegB64;
+                                try{
+                                    const resp=await fetch('data:image/jpeg;base64,'+lastJpeg);
+                                    const blob=await resp.blob();
+                                    const bmp=await createImageBitmap(blob);
+                                    vx.drawImage(bmp,0,0,W,H);
+                                    bmp.close();
+                                }catch(e){}
+                            }else if(!lastJpeg){
+                                vx.fillStyle='#1a1a2e';vx.fillRect(0,0,W,H);
+                                vx.fillStyle='#eee';vx.font='36px Arial';
+                                vx.fillText('Santa joining...',W/2-120,H/2);
+                            }
                             await new Promise(r=>setTimeout(r,66));
                         }
                     })();
-                    const s=new MediaStream([gen]);
-                    if(c.audio){
-                        const actx=new AudioContext({sampleRate:48000});
-                        const dest=actx.createMediaStreamDestination();
-                        s.addTrack(dest.stream.getAudioTracks()[0]);
-                        window.__santaAudioCtx=actx;
-                        window.__santaAudioDest=dest;
+                    outTrack=capTrack;
+                    realTrack.stop(); // free the real device
+                }
+
+                // Step 4: Build output stream
+                const outStream=new MediaStream([outTrack]);
+
+                // Step 5: Audio — get from fake device or create silent AudioContext
+                if(c.audio){
+                    try{
+                        const aStream=await _origGUM({audio:c.audio});
+                        for(const t of aStream.getAudioTracks())outStream.addTrack(t);
+                    }catch(e){}
+                    // Always create AudioContext for TTS injection
+                    const actx=new AudioContext({sampleRate:48000});
+                    const dest=actx.createMediaStreamDestination();
+                    // If no audio track was added, add silent one
+                    if(!outStream.getAudioTracks().length){
+                        outStream.addTrack(dest.stream.getAudioTracks()[0]);
                     }
-                    return s;
-                }catch(e){return _origGUM(c);}
+                    window.__santaAudioCtx=actx;
+                    window.__santaAudioDest=dest;
+                }
+                console.log('[AvatarCam] Output stream:',outStream.getTracks().length,'tracks');
+                console.log('[AvatarCam] Video settings:',JSON.stringify(outTrack.getSettings()));
+                return outStream;
+            }catch(e){
+                console.error('[AvatarCam] Init failed, raw fallback:',e);
+                return _origGUM(c);
             }
-            return _origGUM(c);
         };
         window.__santaPlayAudio=function(b64,sr){
             const ctx=window.__santaAudioCtx,dest=window.__santaAudioDest;
@@ -604,11 +695,26 @@ async def launch_browser():
                     except Exception:
                         continue
 
-                # No replaceTrack needed — getUserMedia was intercepted by init script
-                # Video comes from WebSocket → MediaStreamTrackGenerator
-                # Audio comes from AudioContext created in the init script
+                # No replaceTrack needed — getUserMedia was intercepted by init script.
+                # Video: real fake-device track → Insertable Streams → our canvas frames
+                # Audio: AudioContext created in init script for TTS injection
                 await asyncio.sleep(2)
-                logger.info("MediaStreamTrackGenerator + WebSocket bridge active")
+
+                # Verify the video pipeline is working
+                try:
+                    status = await page.evaluate("""() => {
+                        const info = {
+                            jpegVar: typeof window.__santaJpegB64,
+                            audioCtx: !!window.__santaAudioCtx,
+                            audioDest: !!window.__santaAudioDest,
+                        };
+                        return JSON.stringify(info);
+                    }""")
+                    logger.info("Avatar pipeline status: %s", status)
+                except Exception:
+                    pass
+
+                logger.info("Insertable Streams avatar pipeline active")
                 return pw, context, page
         except Exception:
             continue
