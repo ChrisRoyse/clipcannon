@@ -39,50 +39,105 @@ class NorthStarConfig:
 class NorthStarAnchors(nn.Module):
     """Frozen identity anchors from each embedding space.
 
-    Stores the centroid of each embedding space computed from training
-    data. These are registered as buffers (non-trainable, saved with model).
+    Supports both single-centroid mode (basic) and full constellation
+    mode (per-state anchors for every prosody/emotion/behavior state).
 
     Args:
         centroids: Dict of modality name -> centroid vector (numpy).
         shared_dim: Dimension to project centroids to.
+        constellation: Optional NorthStarConstellation for per-state anchors.
     """
 
     def __init__(
         self,
         centroids: dict[str, np.ndarray],
         shared_dim: int = 512,
+        constellation: "NorthStarConstellation | None" = None,
     ) -> None:
         super().__init__()
         self._modality_names = sorted(centroids.keys())
+        self._has_constellation = constellation is not None
+        self._state_names: list[str] = []
 
-        # Project each centroid to shared dimension and freeze
+        # Learned projection matrices (trained, not random)
+        self._projectors = nn.ModuleDict()
+        for name in self._modality_names:
+            dim = len(centroids[name])
+            self._projectors[name] = nn.Linear(dim, shared_dim, bias=False)
+
+        # Register global centroid stars
         for name in self._modality_names:
             vec = centroids[name]
-            if len(vec.shape) == 1:
-                vec = vec.reshape(1, -1)
-            # Project to shared_dim via simple linear (trained during anchor computation)
-            proj = np.random.randn(vec.shape[1], shared_dim).astype(np.float32) * 0.02
-            projected = (vec @ proj).squeeze(0)
-            # Normalize to unit sphere
-            projected = projected / (np.linalg.norm(projected) + 1e-8)
-            self.register_buffer(
-                f"star_{name}",
-                torch.tensor(projected, dtype=torch.float32),
-            )
+            self.register_buffer(f"star_{name}", torch.tensor(vec, dtype=torch.float32))
 
-        logger.info("NorthStarAnchors: %d modalities, dim=%d", len(self._modality_names), shared_dim)
+        # Register per-state constellation stars
+        if constellation is not None:
+            all_states = set()
+            for modality_stars in constellation.stars.values():
+                all_states.update(modality_stars.keys())
+            self._state_names = sorted(all_states)
+
+            for modality_name, state_dict in constellation.stars.items():
+                for state_name, vec in state_dict.items():
+                    safe_name = f"constellation_{modality_name}_{state_name}"
+                    self.register_buffer(safe_name, torch.tensor(vec, dtype=torch.float32))
+
+            logger.info(
+                "NorthStarAnchors: %d modalities, %d states, %d total constellation vectors",
+                len(self._modality_names), len(self._state_names),
+                sum(len(s) for s in constellation.stars.values()),
+            )
+        else:
+            logger.info("NorthStarAnchors: %d modalities (global centroids only)", len(self._modality_names))
 
     @property
     def modality_names(self) -> list[str]:
         return self._modality_names
 
+    @property
+    def state_names(self) -> list[str]:
+        return self._state_names
+
+    @property
+    def has_constellation(self) -> bool:
+        return self._has_constellation
+
     def get_star(self, name: str) -> torch.Tensor:
-        """Get the North Star vector for a modality."""
+        """Get the global North Star vector for a modality."""
         return getattr(self, f"star_{name}")
 
+    def get_constellation_star(self, modality: str, state: str) -> torch.Tensor | None:
+        """Get a per-state constellation star."""
+        safe_name = f"constellation_{modality}_{state}"
+        if hasattr(self, safe_name):
+            return getattr(self, safe_name)
+        return None
+
     def get_all_stars(self) -> torch.Tensor:
-        """Get all North Star vectors stacked: (num_stars, shared_dim)."""
-        return torch.stack([self.get_star(n) for n in self._modality_names])
+        """Get all anchor vectors stacked for cross-attention.
+
+        In constellation mode, includes per-state vectors (many more anchors).
+        The model can attend to the specific state it needs.
+        """
+        stars = []
+        # Global centroids
+        for name in self._modality_names:
+            star = self.get_star(name)
+            projected = self._projectors[name](star.unsqueeze(0)).squeeze(0)
+            stars.append(projected)
+
+        # Per-state constellation (if available)
+        if self._has_constellation:
+            for modality in self._modality_names:
+                if modality not in self._projectors:
+                    continue
+                for state in self._state_names:
+                    vec = self.get_constellation_star(modality, state)
+                    if vec is not None:
+                        projected = self._projectors[modality](vec.unsqueeze(0)).squeeze(0)
+                        stars.append(projected)
+
+        return torch.stack(stars) if stars else torch.zeros(1, 512)
 
 
 class NorthStarAttention(nn.Module):
@@ -206,25 +261,219 @@ class NorthStarContrastiveLoss(nn.Module):
 def compute_north_stars(
     training_embeddings: dict[str, np.ndarray],
 ) -> dict[str, np.ndarray]:
-    """Compute North Star centroid vectors from training data.
+    """Compute single centroid North Star per modality (basic version).
 
-    Args:
-        training_embeddings: Dict of modality name -> (N, D) array
-            of all embeddings from training data.
-
-    Returns:
-        Dict of modality name -> (D,) centroid vector.
+    For the full constellation with per-state stars, use
+    compute_north_star_constellation() instead.
     """
     centroids = {}
     for name, embs in training_embeddings.items():
         if len(embs) == 0:
             continue
         centroid = np.mean(embs, axis=0).astype(np.float32)
-        # L2 normalize
         norm = np.linalg.norm(centroid)
         if norm > 0:
             centroid = centroid / norm
         centroids[name] = centroid
-        logger.info("North Star [%s]: dim=%d, computed from %d samples",
-                     name, len(centroid), len(embs))
+        logger.info("North Star [%s]: dim=%d, from %d samples", name, len(centroid), len(embs))
     return centroids
+
+
+# ---------------------------------------------------------------------------
+# North Star Constellation — per-state anchor vectors
+# ---------------------------------------------------------------------------
+
+# Every behavioral/emotional state that Santa can be in
+SANTA_STATES = [
+    # Emotional states
+    "neutral", "happy", "warm", "amused", "excited", "emphatic",
+    "thoughtful", "sad", "surprised", "concerned",
+    # Prosody states
+    "high_energy", "low_energy", "fast_speaking", "slow_speaking",
+    "rising_pitch", "falling_pitch", "varied_pitch",
+    # Behavioral states
+    "listening", "thinking", "speaking", "laughing", "nodding",
+    "greeting", "farewell",
+    # Mouth states
+    "mouth_open_wide", "mouth_slightly_open", "mouth_closed", "smile",
+    # Eye states
+    "eyes_open", "eyes_squint", "blink", "looking_left", "looking_right",
+    # Head states
+    "head_neutral", "head_tilt_left", "head_tilt_right", "head_nod",
+]
+
+
+@dataclass
+class NorthStarConstellation:
+    """Complete set of per-state North Star vectors for all modalities.
+
+    Instead of a single centroid per modality, this stores vectors for
+    every behavioral state — so the model can navigate to the EXACT
+    region of embedding space for "Santa laughing" vs "Santa thinking."
+    """
+    # modality_name -> state_name -> centroid_vector
+    stars: dict[str, dict[str, np.ndarray]]
+    # Global centroid (average across all states)
+    global_centroids: dict[str, np.ndarray]
+    # Per-state sample counts
+    state_counts: dict[str, int]
+
+
+def compute_north_star_constellation(
+    training_embeddings: dict[str, np.ndarray],
+    prosody_segments: list[dict],
+    emotion_data: list[dict],
+    blendshape_data: list[dict],
+    timestamps_ms: list[int],
+) -> NorthStarConstellation:
+    """Compute the full North Star constellation — per-state anchors.
+
+    For each behavioral state (happy, thinking, speaking, etc.), computes
+    the centroid of embeddings that correspond to that state. This gives
+    the model a complete map of Santa's identity manifold.
+
+    Args:
+        training_embeddings: Dict of modality -> (N, D) embeddings.
+        prosody_segments: Prosody data with energy_level, pitch_contour, etc.
+        emotion_data: Emotion curve entries with arousal, valence.
+        blendshape_data: Ground truth blendshapes per frame.
+        timestamps_ms: Timestamp for each training sample.
+
+    Returns:
+        NorthStarConstellation with per-state anchors.
+    """
+    n = len(timestamps_ms)
+    stars: dict[str, dict[str, np.ndarray]] = {}
+    state_counts: dict[str, int] = {}
+
+    # Classify each training frame into states
+    frame_states: list[set[str]] = [set() for _ in range(n)]
+
+    for i in range(n):
+        ts = timestamps_ms[i]
+        states = frame_states[i]
+        states.add("neutral")  # Every frame is at least neutral
+
+        # Classify from prosody
+        nearest_prosody = _find_nearest_by_ts(prosody_segments, ts)
+        if nearest_prosody:
+            energy = nearest_prosody.get("energy_level", "medium")
+            contour = nearest_prosody.get("pitch_contour", "flat")
+            rate = nearest_prosody.get("speaking_rate_wpm", 0)
+            emphasis = nearest_prosody.get("has_emphasis", False)
+
+            if energy == "high":
+                states.update({"high_energy", "excited"})
+            elif energy == "low":
+                states.update({"low_energy", "thoughtful"})
+
+            if contour == "rising":
+                states.add("rising_pitch")
+            elif contour == "falling":
+                states.update({"falling_pitch", "warm"})
+            elif contour == "varied":
+                states.update({"varied_pitch", "emphatic"})
+
+            if rate and rate > 170:
+                states.add("fast_speaking")
+            elif rate and rate < 130:
+                states.add("slow_speaking")
+
+            if emphasis:
+                states.add("emphatic")
+
+            if rate and rate > 0:
+                states.add("speaking")
+            else:
+                states.add("listening")
+
+        # Classify from emotion data
+        nearest_emotion = _find_nearest_by_ts(emotion_data, ts)
+        if nearest_emotion:
+            arousal = nearest_emotion.get("arousal", 0.5)
+            valence = nearest_emotion.get("valence", 0.5)
+            if arousal > 0.7:
+                states.add("excited")
+            if valence > 0.7:
+                states.add("happy")
+            if valence < 0.3:
+                states.add("sad")
+
+        # Classify from blendshapes
+        if i < len(blendshape_data):
+            bs = blendshape_data[i].get("blendshapes", [0] * 52)
+            jaw_open = bs[0] if len(bs) > 0 else 0
+            smile = (bs[3] + bs[4]) / 2 if len(bs) > 4 else 0
+            blink = (bs[28] + bs[29]) / 2 if len(bs) > 29 else 0
+            eye_wide = (bs[30] + bs[31]) / 2 if len(bs) > 31 else 0
+
+            if jaw_open > 0.6:
+                states.add("mouth_open_wide")
+            elif jaw_open > 0.2:
+                states.add("mouth_slightly_open")
+            else:
+                states.add("mouth_closed")
+
+            if smile > 0.5:
+                states.update({"smile", "happy", "amused"})
+
+            if blink > 0.7:
+                states.add("blink")
+
+            if eye_wide > 0.5:
+                states.update({"eyes_open", "surprised"})
+
+    # Compute per-state centroids for each modality
+    for modality_name, embs in training_embeddings.items():
+        if len(embs) != n:
+            # Skip modalities that don't align frame-by-frame
+            continue
+
+        stars[modality_name] = {}
+        for state in SANTA_STATES:
+            # Find all frames in this state
+            indices = [i for i in range(n) if state in frame_states[i]]
+            if len(indices) < 3:
+                continue  # Need at least 3 samples
+
+            state_embs = embs[indices]
+            centroid = np.mean(state_embs, axis=0).astype(np.float32)
+            norm = np.linalg.norm(centroid)
+            if norm > 0:
+                centroid = centroid / norm
+            stars[modality_name][state] = centroid
+            state_counts[state] = state_counts.get(state, 0) + len(indices)
+
+    # Global centroids (average across all states)
+    global_centroids = compute_north_stars(training_embeddings)
+
+    # Log constellation stats
+    total_stars = sum(len(s) for s in stars.values())
+    logger.info(
+        "North Star Constellation: %d modalities x %d states = %d anchor vectors",
+        len(stars), len(set().union(*(s.keys() for s in stars.values())) if stars else set()),
+        total_stars,
+    )
+    for state, count in sorted(state_counts.items(), key=lambda x: -x[1])[:10]:
+        logger.info("  %s: %d frame-modality samples", state, count)
+
+    return NorthStarConstellation(
+        stars=stars,
+        global_centroids=global_centroids,
+        state_counts=state_counts,
+    )
+
+
+def _find_nearest_by_ts(items: list[dict], target_ms: int) -> dict | None:
+    """Find item nearest to timestamp."""
+    if not items:
+        return None
+    best = None
+    best_dist = float("inf")
+    for item in items:
+        ts = item.get("start_ms", item.get("timestamp_ms", 0))
+        dist = abs(ts - target_ms)
+        if dist < best_dist:
+            best_dist = dist
+            best = item
+    return best if best_dist < 10000 else None  # Within 10s
