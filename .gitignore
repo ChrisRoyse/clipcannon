@@ -91,3 +91,4 @@ docs2/NDA_*.md
 *.mov
 *.webm
 *.y4m
+vendor/

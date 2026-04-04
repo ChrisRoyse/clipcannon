@@ -42,15 +42,21 @@ class RenderConfig:
         rasterizer_backend: Which rasterizer to use.
         nvenc_preset: NVENC encoder preset string.
         nvenc_bitrate_mbps: Target bitrate in megabits per second.
+        avatar_tex_size: UV texture resolution for Gaussian binding.
+        avatar_num_basis: Number of blendshape bases for Gaussians.
+        avatar_fov_y: Vertical field of view in degrees.
     """
 
     fps: int = 30
-    resolution_h: int = 1080
-    resolution_w: int = 1920
+    resolution_h: int = 720
+    resolution_w: int = 1280
     gaussian_sh_degree: int = 3
     rasterizer_backend: str = "gsplat"
     nvenc_preset: str = "p4"
     nvenc_bitrate_mbps: float = 8.0
+    avatar_tex_size: int = 256
+    avatar_num_basis: int = 20
+    avatar_fov_y: float = 25.0
 
 
 @dataclass(frozen=True)
