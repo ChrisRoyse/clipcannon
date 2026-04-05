@@ -7,8 +7,8 @@ name = "clipcannon"
 version = "0.1.0"
 description = "AI-powered video understanding and editing pipeline via MCP"
 readme = "README.md"
-license = "BSL-1.1"
-requires-python = ">=3.12"
+license = { text = "BSL-1.1" }
+requires-python = ">=3.12,<3.13"
 authors = [
     { name = "ClipCannon Team" },
 ]
@@ -80,6 +80,33 @@ dev = [
 
 [project.scripts]
 clipcannon = "clipcannon.server:main"
+
+[tool.uv]
+# audiocraft 1.3.0 pins torch==2.1.0 which conflicts with ml extra's torch>=2.3.0
+# Override to allow a single compatible torch version across all extras
+override-dependencies = [
+    "torch>=2.3.0",
+    "torchvision>=0.18.0",
+    "torchaudio>=2.3.0",
+    # torchtext was deprecated — audiocraft depends on it but it has no 3.12 wheels
+    # Override to allow resolution; audiocraft's torchtext usage is minimal
+    "torchtext>=0.6.0",
+    # resemble-enhance pins scipy==1.11.4 which conflicts with our scipy>=1.12.0
+    "scipy>=1.12.0",
+    # resemble-enhance 0.0.1 pins gradio==4.8.0, ace-step pins gradio==5.23.3
+    "gradio>=5.0.0",
+    # ace-step pins librosa==0.11.0, resemble-enhance pins librosa==0.10.1
+    "librosa>=0.10.0",
+    # resemble-enhance and ace-step pin conflicting exact versions of many packages
+    "matplotlib>=3.8.0",
+    "numpy>=1.26.0",
+    "soundfile>=0.12.0",
+    "pandas>=2.0.0",
+    "tqdm>=4.0.0",
+    "PyYAML>=6.0",
+    # av 11.0.0 uses removed AV_OPT_TYPE_CHANNEL_LAYOUT, incompatible with ffmpeg 8+
+    "av>=14.0.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/clipcannon", "src/license_server", "src/phoenix"]
