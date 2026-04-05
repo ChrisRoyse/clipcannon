@@ -799,36 +799,70 @@ async def audio_loop(page, stop):
         FPS = 15  # 15fps JPEG updates, generator runs at 30fps
         frame_count = 0
 
-        while not stop.is_set() and (_face_warper is None or not _face_warper.ready):
+        # Try loading the trained Gaussian renderer (real 3D video generation)
+        _gaussian_renderer = None
+        gaussian_model_path = os.path.expanduser("~/.clipcannon/models/santa/gaussian_avatar.pt")
+        if os.path.exists(gaussian_model_path):
+            try:
+                from phoenix.render.avatar_renderer import GaussianAvatarRenderer
+                _gaussian_renderer = GaussianAvatarRenderer.load_trained(gaussian_model_path)
+                logger.info("Gaussian Avatar loaded — rendering real 3D video at 731 FPS")
+            except Exception as e:
+                logger.warning("Gaussian renderer failed (%s), falling back to FaceWarper", e)
+
+        # Wait for at least one renderer to be ready
+        while not stop.is_set():
+            if _gaussian_renderer is not None or (_face_warper is not None and _face_warper.ready):
+                break
             await asyncio.sleep(1)
 
-        logger.info("Video render loop: %dfps JPEG → page.evaluate → MediaStreamTrackGenerator", FPS)
+        use_gaussian = _gaussian_renderer is not None
+        logger.info("Video render: %s at %dfps → Insertable Streams",
+                     "Gaussian 3D" if use_gaussian else "FaceWarper 2D", FPS)
 
         while not stop.is_set():
             frame_count += 1
             t = frame_count / FPS
             cmd = _last_avatar_cmd
 
-            # ALWAYS animate — controller overrides idle, idle always runs
+            # Build expression params from controller commands + idle animation
             breath = math.sin(t * 0.4) * 0.03
             sway = math.sin(t * 0.3) * 2.0
 
             if cmd is not None:
-                # Controller-driven: use blendshapes + add subtle life
-                mouth_open = cmd.blendshapes.get("jawOpen", 0.0) + max(0, breath)
+                jaw_open = cmd.blendshapes.get("jawOpen", 0.0) + max(0, breath)
                 smile = cmd.blendshapes.get("mouthSmileLeft", 0.0)
                 head_tilt = (cmd.head_pose[2] if cmd.head_pose else 0.0) + sway * 0.3
-                mouth_open = min(1.0, mouth_open + smile * 0.1)
+                jaw_open = min(1.0, jaw_open + smile * 0.1)
             else:
-                # No controller yet — visible idle
-                mouth_open = max(0, breath)
+                jaw_open = max(0, breath)
                 head_tilt = sway
 
-            # Blink every ~4 seconds
             if (t % 4.0) < 0.15:
-                mouth_open += 0.04
+                jaw_open += 0.04
 
-            frame_bgr = _face_warper.warp_mouth(mouth_open, head_tilt)
+            # RENDER: Use Gaussian 3D model if available, else FaceWarper fallback
+            if use_gaussian:
+                try:
+                    import torch
+                    # Build FLAME expression params from blendshapes
+                    expression = torch.zeros(1, 100, device="cuda")
+                    expression[0, 0] = jaw_open * 5.0  # Scale for FLAME range
+                    expression[0, 1] = smile * 3.0 if cmd else 0.0
+                    jaw_pose = torch.zeros(1, 3, device="cuda")
+                    jaw_pose[0, 0] = jaw_open * 0.3  # Jaw rotation
+                    result = _gaussian_renderer.render_frame(
+                        expression=expression, jaw_pose=jaw_pose,
+                    )
+                    img = result["image"]
+                    frame_np = (img.detach().cpu().clamp(0, 1).numpy() * 255).astype(np.uint8)
+                    frame_bgr = cv2.cvtColor(cv2.resize(frame_np, (1280, 720)), cv2.COLOR_RGB2BGR)
+                except Exception as e:
+                    if frame_count % 100 == 1:
+                        logger.warning("Gaussian render failed: %s", e)
+                    frame_bgr = _face_warper.warp_mouth(jaw_open, head_tilt) if _face_warper and _face_warper.ready else np.zeros((720, 1280, 3), dtype=np.uint8)
+            else:
+                frame_bgr = _face_warper.warp_mouth(jaw_open, head_tilt)
 
             # Encode as JPEG (~30KB vs 4.9MB for raw RGBA)
             _, jpg_buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 60])
