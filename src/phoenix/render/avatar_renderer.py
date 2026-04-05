@@ -64,6 +64,18 @@ class GaussianAvatarRenderer:
         self._frame_count = 0
         self._total_render_ms = 0.0
 
+        # CUDA 13.2: Stream priorities for pipeline parallelism.
+        # High-priority stream (-1) for the render path (gsplat + compositor)
+        # so it preempts lower-priority work on the same GPU.
+        # Normal-priority stream (0) for non-critical background work
+        # (e.g. stats collection, prefetch, deferred uploads).
+        self._render_stream = torch.cuda.Stream(
+            device=self.device, priority=-1,
+        )
+        self._aux_stream = torch.cuda.Stream(
+            device=self.device, priority=0,
+        )
+
     @property
     def ready(self) -> bool:
         return self._ready
@@ -156,6 +168,24 @@ class GaussianAvatarRenderer:
         if not self._ready:
             raise RuntimeError("Renderer not initialized. Call initialize() first.")
 
+        device = self.device
+
+        # CUDA 13.2: Run the entire render path on the high-priority
+        # stream so it preempts lower-priority GPU work.
+        with torch.cuda.stream(self._render_stream):
+            return self._render_frame_impl(
+                expression_params, jaw_pose, neck_pose, eye_pose, viewmat,
+            )
+
+    def _render_frame_impl(
+        self,
+        expression_params: torch.Tensor | None = None,
+        jaw_pose: torch.Tensor | None = None,
+        neck_pose: torch.Tensor | None = None,
+        eye_pose: torch.Tensor | None = None,
+        viewmat: torch.Tensor | None = None,
+    ) -> dict[str, Any]:
+        """Internal render implementation, runs on self._render_stream."""
         device = self.device
 
         # Prepare expression params

@@ -108,7 +108,10 @@ def alpha_blend_gpu(
                 alpha_channels,
             ),
         )
-        cp.cuda.Device().synchronize()
+        # CUDA 13.2: Removed synchronize() — serializes the GPU pipeline.
+        # CuPy kernels are async; only sync when CPU needs the result
+        # (e.g. .get() calls). The caller's next GPU op will chain
+        # correctly via the default stream's implicit ordering.
     except CompositorError:
         raise
     except Exception as exc:
@@ -175,7 +178,9 @@ def resize_gpu(
                 channels,
             ),
         )
-        cp.cuda.Device().synchronize()
+        # CUDA 13.2: Removed synchronize() — serializes the GPU pipeline.
+        # Implicit stream ordering guarantees correctness for chained
+        # GPU ops. Only call synchronize() when pulling data to CPU.
     except CompositorError:
         raise
     except Exception as exc:

@@ -33,6 +33,14 @@ from phoenix.render.flame_model import (
     FlameModelConfig,
 )
 
+from phoenix.render.gpu_pipeline import (
+    RenderPipeline,
+)
+
+from phoenix.render.frame_selector import (
+    FrameSelector,
+)
+
 __all__ = [
     "alpha_blend_gpu",
     "brightness_jitter_gpu",
@@ -49,4 +57,6 @@ __all__ = [
     "GaussianAvatarRenderer",
     "FlameModel",
     "FlameModelConfig",
+    "RenderPipeline",
+    "FrameSelector",
 ]

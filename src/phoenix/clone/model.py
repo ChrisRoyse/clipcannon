@@ -360,6 +360,63 @@ class CloneModel(nn.Module):
             "behavior": torch.zeros(batch_size, BEHAVIOR_DIM, device=device),
         }
 
+    # ------------------------------------------------------------------
+    # CUDA 13.2 Optimizations
+    # ------------------------------------------------------------------
+
+    def compile(self, mode: str = "max-autotune") -> "CloneModel":
+        """Wrap the forward pass with torch.compile for kernel fusion.
+
+        Call after model loading / warmup to let the compiler trace
+        and optimize the graph. The first forward pass after compile()
+        will be slower (tracing), subsequent passes benefit from fused
+        CUDA kernels and reduced launch overhead.
+
+        Args:
+            mode: torch.compile mode. "max-autotune" gives best
+                throughput at the cost of longer first-run compilation.
+                Use "reduce-overhead" for faster compilation.
+
+        Returns:
+            self, for chaining.
+        """
+        self.forward = torch.compile(self.forward, mode=mode)  # type: ignore[method-assign]
+        logger.info("CloneModel compiled with mode=%s", mode)
+        return self
+
+    def quantize_fp8(self) -> "CloneModel":
+        """Apply FP8 dynamic quantization to all Linear layers.
+
+        Uses torchao Float8DynamicActivationFloat8WeightConfig for
+        near-lossless 2x memory reduction and faster matmul on
+        Ada/Hopper GPUs. Call BEFORE compile() for best results.
+
+        Returns:
+            self, for chaining.
+
+        Raises:
+            ImportError: If torchao is not installed.
+        """
+        try:
+            from torchao.quantization import (
+                Float8DynamicActivationFloat8WeightConfig,
+                quantize_,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "torchao is required for FP8 quantization. "
+                "Install with: pip install torchao"
+            ) from exc
+
+        config = Float8DynamicActivationFloat8WeightConfig()
+        quantize_(self, config)
+
+        logger.info(
+            "CloneModel quantized to FP8: %.1fM params",
+            self.param_count / 1e6,
+        )
+        return self
+
     @property
     def param_count(self) -> int:
         return sum(p.numel() for p in self.parameters())
