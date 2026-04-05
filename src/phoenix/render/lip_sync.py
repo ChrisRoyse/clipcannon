@@ -1,7 +1,14 @@
 """Audio-driven lip sync: maps audio waveform to per-frame mouth parameters.
 
+.. deprecated::
+    This module is superseded by ``phoenix.render.physics_face.PhysicsFaceEngine``
+    which uses formant-based articulatory acoustics instead of energy-only mapping.
+    PhysicsFaceEngine produces full face state (jaw, lips, brow, etc.) from audio
+    physics, while this module only maps RMS energy to mouth openness.
+    Kept as a lightweight fallback when scipy is not available.
+
 Extracts amplitude envelope from audio at video frame rate and maps
-it to mouth openness values for the face warper. No ML model needed —
+it to mouth openness values for the face warper. No ML model needed --
 uses pure signal processing (RMS energy per frame window).
 
 Usage:

@@ -1,5 +1,12 @@
 """GPU-accelerated face warping for real-time lip sync.
 
+.. deprecated::
+    This module is superseded by ``phoenix.render.physics_face.PhysicsFaceEngine``
+    combined with the Gaussian Splatting renderer. PhysicsFaceEngine provides
+    physics-based FLAME parameters directly, while this module only warps pixels
+    based on a scalar mouth_open value. Kept as a 2D fallback when the 3D
+    Gaussian renderer is not available.
+
 Takes a source face frame and warps the mouth region to simulate
 speech based on lip sync parameters. Uses insightface for landmark
 detection and CuPy for GPU-accelerated pixel manipulation.
@@ -9,10 +16,10 @@ The approach:
 2. Identify mouth region (landmarks 52-71)
 3. For each target mouth_open value, vertically stretch the lower
    face region below the upper lip downward, and compress the chin
-   area back up — creating a natural mouth opening effect
+   area back up -- creating a natural mouth opening effect
 4. All pixel operations run on GPU via CuPy
 
-This is NOT a generative model — it warps existing pixels, so the
+This is NOT a generative model -- it warps existing pixels, so the
 result always looks like the original person. Fast enough for
 real-time at 25fps on RTX 5090.
 """

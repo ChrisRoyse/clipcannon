@@ -392,11 +392,12 @@ async def ingest_transcript(segments: list[dict], meeting_id: str) -> None:
 # ---------------------------------------------------------------------------
 # Dynamic avatar setup
 # ---------------------------------------------------------------------------
-_face_warper = None
+_face_warper = None  # DEPRECATED: replaced by PhysicsFaceEngine
+_physics_face = None
 
 
 def init_face_warper():
-    """Initialize the face warper from the reference frame."""
+    """Initialize the face warper from the reference frame (legacy fallback)."""
     global _face_warper
     import subprocess
     src_video = SANTA_IDLE_VIDEO
@@ -414,12 +415,23 @@ def init_face_warper():
         from phoenix.render.face_warper import FaceWarper
         _face_warper = FaceWarper(ref_frame, max_pixel_shift=20)
         if _face_warper.ready:
-            logger.info("Face warper ready for lip sync")
+            logger.info("Face warper ready (legacy fallback)")
         else:
             _face_warper = None
             logger.warning("Face warper: no face detected")
     except Exception as e:
         logger.warning("Face warper init failed: %s", e)
+
+
+def init_physics_face():
+    """Initialize the physics-based face animation engine."""
+    global _physics_face
+    try:
+        from phoenix.render.physics_face import PhysicsFaceEngine
+        _physics_face = PhysicsFaceEngine(sample_rate=24000, fps=15)
+        logger.info("PhysicsFaceEngine ready (deterministic audio-to-face)")
+    except Exception as e:
+        logger.warning("PhysicsFaceEngine init failed: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -467,7 +479,8 @@ async def launch_browser():
     gpu_cleanup()
     log_gpu_state("tts")
 
-    # 4. Face warper (optional, for future lip sync)
+    # 4. Physics face engine + legacy face warper fallback
+    init_physics_face()
     init_face_warper()
     gpu_cleanup()
 
@@ -817,15 +830,18 @@ async def audio_loop(page, stop):
             await asyncio.sleep(1)
 
         use_gaussian = _gaussian_renderer is not None
-        logger.info("Video render: %s at %dfps → Insertable Streams",
-                     "Gaussian 3D" if use_gaussian else "FaceWarper 2D", FPS)
+        has_physics = _physics_face is not None
+        logger.info("Video render: %s + %s at %dfps -> Insertable Streams",
+                     "Gaussian 3D" if use_gaussian else "FaceWarper 2D",
+                     "PhysicsFace" if has_physics else "manual blend",
+                     FPS)
 
         while not stop.is_set():
             frame_count += 1
             t = frame_count / FPS
             cmd = _last_avatar_cmd
 
-            # Build expression params from controller commands + idle animation
+            # Build expression from PhysicsFaceEngine or controller commands
             breath = math.sin(t * 0.4) * 0.03
             sway = math.sin(t * 0.3) * 2.0
 
@@ -836,23 +852,40 @@ async def audio_loop(page, stop):
                 jaw_open = min(1.0, jaw_open + smile * 0.1)
             else:
                 jaw_open = max(0, breath)
+                smile = 0.0
                 head_tilt = sway
 
             if (t % 4.0) < 0.15:
                 jaw_open += 0.04
 
-            # RENDER: Use Gaussian 3D model if available, else FaceWarper fallback
+            # RENDER: Gaussian 3D + PhysicsFace > Gaussian 3D > FaceWarper
             if use_gaussian:
                 try:
                     import torch
-                    # Build FLAME expression params from blendshapes
-                    expression = torch.zeros(1, 100, device="cuda")
-                    expression[0, 0] = jaw_open * 5.0  # Scale for FLAME range
-                    expression[0, 1] = smile * 3.0 if cmd else 0.0
-                    jaw_pose = torch.zeros(1, 3, device="cuda")
-                    jaw_pose[0, 0] = jaw_open * 0.3  # Jaw rotation
+                    if has_physics and cmd is not None:
+                        # PhysicsFaceEngine provides FLAME params directly
+                        # from the last processed audio chunk (set by speak())
+                        physics_bs = cmd.blendshapes
+                        exp = torch.zeros(100, device="cuda")
+                        exp[0] = physics_bs.get("jawOpen", jaw_open) * 5.0
+                        exp[1] = physics_bs.get("mouthSmileLeft", 0.0) * 3.0
+                        exp[2] = physics_bs.get("mouthPucker", 0.0) * 4.0
+                        exp[3] = physics_bs.get("mouthUpperUpLeft", 0.0) * 2.0
+                        exp[4] = physics_bs.get("mouthLowerDownLeft", 0.0) * 2.0
+                        exp[5] = physics_bs.get("browInnerUp", 0.0) * 3.0
+                        exp[6] = physics_bs.get("eyeSquintLeft", 0.0) * 2.0
+                        exp[7] = physics_bs.get("mouthFunnel", 0.0) * 2.5
+                        jp = torch.zeros(3, device="cuda")
+                        jp[0] = physics_bs.get("jawOpen", jaw_open) * 0.4
+                    else:
+                        exp = torch.zeros(100, device="cuda")
+                        exp[0] = jaw_open * 5.0
+                        exp[1] = (smile * 3.0) if cmd else 0.0
+                        exp[2] = math.sin(t * 0.5) * 0.5
+                        jp = torch.zeros(3, device="cuda")
+                        jp[0] = jaw_open * 0.3
                     result = _gaussian_renderer.render_frame(
-                        expression=expression, jaw_pose=jaw_pose,
+                        expression_params=exp, jaw_pose=jp,
                     )
                     img = result["image"]
                     frame_np = (img.detach().cpu().clamp(0, 1).numpy() * 255).astype(np.uint8)
@@ -874,8 +907,8 @@ async def audio_loop(page, stop):
                 pass
 
             if frame_count % (FPS * 10) == 1:
-                logger.info("Video frame #%d (%dKB JPEG, mouth=%.2f)",
-                            frame_count, len(jpg_b64) // 1024, mouth_open)
+                logger.info("Video frame #%d (%dKB JPEG, jaw=%.2f)",
+                            frame_count, len(jpg_b64) // 1024, jaw_open)
 
             await asyncio.sleep(1.0 / FPS)
 
@@ -1171,19 +1204,37 @@ async def speak(page, text):
                      audio_duration, len(audio), len(segs))
         del segs
 
-        # Compute lip sync frames and send to browser for video animation
-        if _face_warper is not None and _face_warper.ready:
+        # Compute physics-based face animation and send to browser
+        if _physics_face is not None:
+            try:
+                from phoenix.render.physics_face import PhysicsFaceEngine
+                _physics_face.reset()
+                face_states = _physics_face.process_audio_batch(audio)
+                # Build per-frame blendshape schedules for the render loop
+                blendshape_schedule = [s.to_blendshapes() for s in face_states]
+                # Also extract mouth-only schedule for backward compat
+                mouth_schedule = [round(s.jaw_open, 2) for s in face_states]
+                logger.info("PhysicsFace: %d frames, jaw range %.2f-%.2f",
+                            len(face_states),
+                            min(mouth_schedule), max(mouth_schedule))
+                await page.evaluate(
+                    "schedule => { window.__santaMouthSchedule = schedule; }",
+                    mouth_schedule,
+                )
+                await page.evaluate(
+                    "schedule => { window.__santaBlendSchedule = schedule; }",
+                    blendshape_schedule,
+                )
+            except Exception as e:
+                logger.warning("PhysicsFace prep failed: %s", e)
+        elif _face_warper is not None and _face_warper.ready:
+            # Legacy fallback: energy-only lip sync
             try:
                 from phoenix.render.lip_sync import LipSync
                 lip = LipSync(fps=25, sample_rate=sr)
                 lip_frames = lip.from_audio(audio)
-                # Extract unique mouth openness levels (quantize to reduce data)
                 mouth_schedule = [round(f.mouth_open, 2) for f in lip_frames]
-                logger.info("Lip sync: %d frames, mouth range %.2f-%.2f",
-                            len(lip_frames),
-                            min(mouth_schedule), max(mouth_schedule))
-                # Send the mouth schedule to browser — JS will animate the
-                # video track frame by frame using the schedule
+                logger.info("Lip sync (legacy): %d frames", len(lip_frames))
                 await page.evaluate(
                     "schedule => { window.__santaMouthSchedule = schedule; }",
                     mouth_schedule,

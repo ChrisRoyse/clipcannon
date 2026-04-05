@@ -41,6 +41,11 @@ from phoenix.render.frame_selector import (
     FrameSelector,
 )
 
+from phoenix.render.physics_face import (
+    FaceState,
+    PhysicsFaceEngine,
+)
+
 __all__ = [
     "alpha_blend_gpu",
     "brightness_jitter_gpu",
@@ -59,4 +64,6 @@ __all__ = [
     "FlameModelConfig",
     "RenderPipeline",
     "FrameSelector",
+    "FaceState",
+    "PhysicsFaceEngine",
 ]
