@@ -1,14 +1,11 @@
 """Real-time Y4M frame writer for dynamic avatar rendering.
 
-Writes YUV420 frames to a FIFO pipe that Chrome reads via
---use-file-for-fake-video-capture. Manages three avatar states:
+DEPRECATED: This module is superseded by the Insertable Streams approach
+in santa_meet_bot.py, which injects frames directly into Chrome's media
+pipeline via page.evaluate() + MediaStreamTrackProcessor/Generator.
+The Y4M FIFO pipe approach is no longer used in production.
 
-  IDLE: Subtle breathing motion (slight scale oscillation)
-  LISTENING: Attentive, mostly still, occasional micro-nods
-  SPEAKING: Lip-synced mouth animation driven by TTS audio
-
-The writer runs in a background thread at 25fps. The main thread
-controls state transitions and feeds audio for lip sync.
+Retained for reference and potential v4l2loopback usage.
 """
 from __future__ import annotations
 
