@@ -71,9 +71,10 @@ class BotManager:
         if not _BOT_SCRIPT.exists():
             raise FileNotFoundError(f"Bot script not found: {_BOT_SCRIPT}")
         env = {**os.environ, "DISPLAY": XVFB_DISPLAY}
+        bot_log = open("/tmp/santa_bot.log", "w")
         self.bot_proc = subprocess.Popen(
-            [sys.executable, str(_BOT_SCRIPT), "--url", url],
-            env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            [sys.executable, str(_BOT_SCRIPT), url],
+            env=env, stdout=bot_log, stderr=subprocess.STDOUT,
         )
         logger.info("Bot started (pid=%d) for %s", self.bot_proc.pid, url)
         Thread(target=self._monitor_bot, daemon=True).start()

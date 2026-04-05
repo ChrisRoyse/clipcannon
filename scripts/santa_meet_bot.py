@@ -473,20 +473,26 @@ async def launch_browser():
 
     logger.info("=== ALL MODELS WARM — joining meeting ===")
 
+    # Start Xvfb virtual display — Chrome runs invisible, no window on user's screen
+    import subprocess as _sp
+    _xvfb = _sp.Popen(
+        ["Xvfb", ":99", "-screen", "0", "1280x720x24", "-ac"],
+        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+    )
+    os.environ["DISPLAY"] = ":99"
+    logger.info("Xvfb started on :99 (invisible virtual display)")
+
     from playwright.async_api import async_playwright
     pw = await async_playwright().start()
     context = await pw.chromium.launch_persistent_context(
-        user_data_dir=SESSION_DIR, headless=False,
+        user_data_dir=SESSION_DIR, headless=False,  # headful on virtual display
         args=[
             "--no-sandbox",
             "--disable-blink-features=AutomationControlled",
             "--use-fake-ui-for-media-stream",
             "--use-fake-device-for-media-stream",
+            f"--use-file-for-fake-video-capture={IDLE_Y4M}",
             "--use-file-for-fake-audio-capture=/home/cabdru/.voiceagent/silence.wav",
-            # Fake device creates a real camera track with proper metadata.
-            # Init script intercepts getUserMedia, gets the real track,
-            # then pipes our avatar frames through it via Insertable Streams.
-            # Meet sees real getSettings()/getCapabilities() → accepts our video.
         ],
         viewport={"width": 1280, "height": 720},
         locale="en-US",
@@ -537,24 +543,27 @@ async def launch_browser():
                     const gen=new MediaStreamTrackGenerator({kind:'video'});
                     const reader=proc.readable.getReader();
                     const writer=gen.writable.getWriter();
+                    let imgReady=false;
+                    const img=new Image();
+                    img.onload=()=>{imgReady=true;};
+                    // Background: decode JPEGs as they arrive (non-blocking)
                     let lastJpeg=null;
-                    // Transform: read real frames, replace with our canvas content
+                    setInterval(()=>{
+                        if(window.__santaJpegB64&&window.__santaJpegB64!==lastJpeg){
+                            lastJpeg=window.__santaJpegB64;
+                            img.src='data:image/jpeg;base64,'+lastJpeg;
+                        }
+                    },30);
+                    // Frame pump: runs at fake device rate (~30fps), NEVER blocks
                     (async()=>{
                         while(true){
                             const{value:frame,done}=await reader.read();
                             if(done)break;
-                            frame.close(); // discard fake-device pixels
-                            // Draw our content onto canvas
-                            if(window.__santaJpegB64&&window.__santaJpegB64!==lastJpeg){
-                                lastJpeg=window.__santaJpegB64;
-                                try{
-                                    const resp=await fetch('data:image/jpeg;base64,'+lastJpeg);
-                                    const blob=await resp.blob();
-                                    const bmp=await createImageBitmap(blob);
-                                    ox.drawImage(bmp,0,0,W,H);
-                                    bmp.close();
-                                }catch(e){}
-                            }else if(!lastJpeg){
+                            frame.close();
+                            // Draw current image (already decoded, instant)
+                            if(imgReady){
+                                ox.drawImage(img,0,0,W,H);
+                            }else{
                                 ox.fillStyle='#1a1a2e';ox.fillRect(0,0,W,H);
                                 ox.fillStyle='#eee';ox.font='36px Arial';
                                 ox.fillText('Santa joining...',W/2-120,H/2);
@@ -787,7 +796,7 @@ async def audio_loop(page, stop):
         """
         import base64, math
 
-        FPS = 10  # 10fps JPEG updates, generator interpolates at 15fps
+        FPS = 15  # 15fps JPEG updates, generator runs at 30fps
         frame_count = 0
 
         while not stop.is_set() and (_face_warper is None or not _face_warper.ready):
@@ -797,14 +806,27 @@ async def audio_loop(page, stop):
 
         while not stop.is_set():
             frame_count += 1
+            t = frame_count / FPS
             cmd = _last_avatar_cmd
+
+            # ALWAYS animate — controller overrides idle, idle always runs
+            breath = math.sin(t * 0.4) * 0.03
+            sway = math.sin(t * 0.3) * 2.0
+
             if cmd is not None:
-                mouth_open = cmd.blendshapes.get("jawOpen", 0.0)
-                head_tilt = cmd.head_pose[2] if cmd.head_pose else 0.0
+                # Controller-driven: use blendshapes + add subtle life
+                mouth_open = cmd.blendshapes.get("jawOpen", 0.0) + max(0, breath)
+                smile = cmd.blendshapes.get("mouthSmileLeft", 0.0)
+                head_tilt = (cmd.head_pose[2] if cmd.head_pose else 0.0) + sway * 0.3
+                mouth_open = min(1.0, mouth_open + smile * 0.1)
             else:
-                t = frame_count / FPS
-                mouth_open = 0.0
-                head_tilt = math.sin(t * 0.5) * 0.3
+                # No controller yet — visible idle
+                mouth_open = max(0, breath)
+                head_tilt = sway
+
+            # Blink every ~4 seconds
+            if (t % 4.0) < 0.15:
+                mouth_open += 0.04
 
             frame_bgr = _face_warper.warp_mouth(mouth_open, head_tilt)
 
@@ -1218,6 +1240,11 @@ async def main():
         if _ocr_client is not None:
             await _ocr_client.close()
 
+        # Kill Xvfb
+        try:
+            _xvfb.kill()
+        except Exception:
+            pass
         logger.info("Shutdown complete")
 
 
