@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head><title>Generate Icons</title></head>
+<body>
+<p>Open this file in a browser, then right-click each canvas to save the PNG.</p>
+<canvas id="c16" width="16" height="16"></canvas>
+<canvas id="c48" width="48" height="48"></canvas>
+<canvas id="c128" width="128" height="128"></canvas>
+<script>
+function drawIcon(canvasId, size) {
+  const c = document.getElementById(canvasId);
+  const ctx = c.getContext("2d");
+  // Red circle background
+  ctx.fillStyle = "#ff6b6b";
+  ctx.beginPath();
+  ctx.arc(size/2, size/2, size/2, 0, Math.PI * 2);
+  ctx.fill();
+  // White "S" letter
+  ctx.fillStyle = "#ffffff";
+  ctx.font = `bold ${Math.floor(size * 0.6)}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("S", size/2, size/2 + 1);
+}
+drawIcon("c16", 16);
+drawIcon("c48", 48);
+drawIcon("c128", 128);
+</script>
+</body>
+</html>

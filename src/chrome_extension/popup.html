@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 300px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 16px;
+    }
+    h1 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: #ff6b6b;
+    }
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid #2a2a4a;
+    }
+    .status-label { font-size: 12px; color: #888; }
+    .status-value { font-size: 12px; font-weight: 600; }
+    .status-value.idle { color: #888; }
+    .status-value.joining { color: #FFA500; }
+    .status-value.in-meeting { color: #4CAF50; }
+    .status-value.unreachable { color: #f44336; }
+    .toggle-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+    }
+    .toggle-label { font-size: 13px; }
+    .toggle {
+      position: relative;
+      width: 40px;
+      height: 22px;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #444;
+      border-radius: 11px;
+      transition: 0.2s;
+    }
+    .slider::before {
+      content: "";
+      position: absolute;
+      height: 16px; width: 16px;
+      left: 3px; bottom: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: 0.2s;
+    }
+    .toggle input:checked + .slider { background: #4CAF50; }
+    .toggle input:checked + .slider::before { transform: translateX(18px); }
+    .section { margin-top: 12px; }
+    .section-title { font-size: 11px; color: #666; text-transform: uppercase; margin-bottom: 6px; }
+    input[type="text"] {
+      width: 100%;
+      padding: 8px;
+      background: #2a2a4a;
+      border: 1px solid #3a3a5a;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-size: 12px;
+      outline: none;
+    }
+    input[type="text"]:focus { border-color: #ff6b6b; }
+    input[type="text"]::placeholder { color: #555; }
+    .btn {
+      width: 100%;
+      padding: 8px;
+      margin-top: 8px;
+      border: none;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: 0.15s;
+    }
+    .btn-join {
+      background: #ff6b6b;
+      color: #fff;
+    }
+    .btn-join:hover { background: #ff5252; }
+    .btn-leave {
+      background: #444;
+      color: #e0e0e0;
+    }
+    .btn-leave:hover { background: #555; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .meeting-url {
+      font-size: 11px;
+      color: #4CAF50;
+      word-break: break-all;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Santa Meet Bot</h1>
+
+  <div class="status-row">
+    <span class="status-label">Bot Status</span>
+    <span id="botStatus" class="status-value idle">Idle</span>
+  </div>
+  <div class="status-row">
+    <span class="status-label">Server</span>
+    <span id="serverStatus" class="status-value idle">Checking...</span>
+  </div>
+  <div id="meetingUrlRow" class="status-row" style="display:none;">
+    <span class="status-label">Meeting</span>
+    <span id="meetingUrl" class="meeting-url"></span>
+  </div>
+
+  <div class="toggle-row">
+    <span class="toggle-label">Auto-join meetings</span>
+    <label class="toggle">
+      <input type="checkbox" id="autoJoinToggle" checked>
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Manual Join</div>
+    <input type="text" id="meetUrl" placeholder="https://meet.google.com/abc-defg-hij">
+    <button class="btn btn-join" id="joinBtn">Join with Santa</button>
+    <button class="btn btn-leave" id="leaveBtn" disabled>Leave Meeting</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
