@@ -269,11 +269,29 @@ def _highlight_dialogue_text(
 # ============================================================
 # ASS FILE GENERATION
 # ============================================================
+def _position_fields(position: str, resolution_w: int, resolution_h: int) -> dict[str, int]:
+    """ASS Alignment/MarginV for a caption position.
+
+    ``bottom`` sits above the region platform UIs cover on vertical video
+    (caption bar, buttons): 22% of the height on portrait canvases, 6% on
+    landscape. ``center`` is true center; ``top`` is just below the top edge.
+    """
+    portrait = resolution_h > resolution_w
+    if position == "top":
+        return {"Alignment": 8, "MarginV": int(resolution_h * (0.12 if portrait else 0.05))}
+    if position == "center":
+        return {"Alignment": 5, "MarginV": 0}
+    return {"Alignment": 2, "MarginV": int(resolution_h * (0.22 if portrait else 0.06))}
+
+
 def generate_ass_file(
     chunks: list[CaptionChunk],
     style: CaptionStyleLiteral,
     resolution_w: int = 1080,
     resolution_h: int = 1920,
+    *,
+    font_size: int | None = None,
+    position: str | None = None,
 ) -> str:
     """Generate a complete ASS subtitle file string.
 
@@ -294,10 +312,15 @@ def generate_ass_file(
     # Scale font size relative to 1080x1920 baseline
     base_h = 1920
     scale = resolution_h / base_h
-    scaled_font_size = int(int(style_def["Fontsize"]) * scale)
+    # font_size (from the EDL) is in 1080x1920-baseline pixels, like the
+    # style defaults; scale it to the output resolution the same way.
+    base_size = font_size if font_size is not None else int(style_def["Fontsize"])
+    scaled_font_size = int(base_size * scale)
 
     style_fields = dict(style_def)
     style_fields["Fontsize"] = scaled_font_size
+    if position is not None:
+        style_fields.update(_position_fields(position, resolution_w, resolution_h))
 
     style_format = (
         "Format: Name, Fontname, Fontsize, PrimaryColour, "

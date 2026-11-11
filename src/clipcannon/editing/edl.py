@@ -221,7 +221,9 @@ class CaptionSpec(BaseModel):
     color: str = "#FFFFFF"
     stroke_color: str = "#000000"
     stroke_width: int = Field(default=3, ge=0, le=20)
-    position: CaptionPosition = "center"
+    # "bottom" = the safe zone above platform UI on vertical video (see
+    # caption_render._position_fields); matches the long-standing look.
+    position: CaptionPosition = "bottom"
     animation: CaptionAnimation = "word_by_word"
     chunks: list[CaptionChunk] = Field(default_factory=list)
 

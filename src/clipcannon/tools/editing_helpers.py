@@ -271,7 +271,7 @@ def build_caption_spec(
         color=str(raw.get("color", "#FFFFFF")),
         stroke_color=str(raw.get("stroke_color", "#000000")),
         stroke_width=int(raw.get("stroke_width", 3)),  # type: ignore[arg-type]
-        position=raw.get("position", "center"),  # type: ignore[arg-type]
+        position=raw.get("position", "bottom"),  # type: ignore[arg-type]
         animation=raw.get("animation", "word_by_word"),  # type: ignore[arg-type]
         chunks=chunks,
     )

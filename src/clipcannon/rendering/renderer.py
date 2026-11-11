@@ -548,6 +548,8 @@ class RenderEngine:
             edl.captions.style,  # type: ignore[arg-type]
             resolution_w=profile.width,
             resolution_h=profile.height,
+            font_size=edl.captions.font_size,
+            position=edl.captions.position,
         )
         ass_path = render_dir / "captions.ass"
         ass_path.write_text(ass_content, encoding="utf-8")

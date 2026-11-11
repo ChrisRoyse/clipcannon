@@ -8,11 +8,14 @@ for deterministic, fast parsing -- no LLM calls.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
 from clipcannon.editing.edl import EditDecisionList, SegmentSpec
+
+if TYPE_CHECKING:
+    from clipcannon.editing.feedback_ops import FeedbackPlan
 
 
 class FeedbackIntent(BaseModel):
@@ -102,8 +105,25 @@ def _ext_speed(m: re.Match[str], text: str) -> dict[str, Any]:
 
 def _ext_caption(_m: re.Match[str], text: str) -> dict[str, Any]:
     lo = text.lower()
-    direction = "bigger" if any(w in lo for w in ("bigger", "larger", "increase")) else "smaller"
-    return {"direction": direction}
+    # "too small"/"tiny" are complaints that call for BIGGER text.
+    grow = ("bigger", "larger", "increase", "too small", "tiny", "hard to read", "can't read")
+    shrink = ("smaller", "decrease", "too big", "too large", "huge")
+    if any(w in lo for w in grow):
+        return {"direction": "bigger"}
+    if any(w in lo for w in shrink):
+        return {"direction": "smaller"}
+    return {"direction": "bigger"}
+
+
+def _ext_caption_position(_m: re.Match[str], text: str) -> dict[str, Any]:
+    lo = text.lower()
+    if re.search(r"\b(?:to|at)\s+the\s+top\b|\bmove\s+(?:\S+\s+)*up\b|\bhigher\b", lo):
+        return {"position": "center" if "bottom" in lo or "out of" in lo else "top"}
+    if re.search(r"\bcent(?:er|re)\b|\bmiddle\b", lo):
+        return {"position": "center"}
+    if re.search(r"\bbottom\b|\bdown\b|\blower\b", lo):
+        return {"position": "bottom"}
+    return {"position": "center"}
 
 
 def _ext_canvas(_m: re.Match[str], text: str) -> dict[str, Any]:
@@ -164,8 +184,10 @@ def _ext_transition_add(_m: re.Match[str], text: str) -> dict[str, Any]:
 _RULES: list[tuple[re.Pattern[str], str, float, Any]] = [
     (re.compile(r"(?:cut|transition|edit)\s+(?:at\s+)?\S*\s*(?:is\s+)?(?:too\s+)?(?:abrupt|harsh|jarring|rough|sudden)", re.I), "transition_fix", 0.85, _ext_transition_fix),
     (re.compile(r"(?:too\s+fast|too\s+slow|speed\s+up|slow\s*down|faster|slower)", re.I), "speed_adjust", 0.80, _ext_speed),
-    (re.compile(r"(?:text|caption|subtitle|font)\s+(?:\S+\s+)*(?:bigger|smaller|larger|tiny|huge|increase|decrease)", re.I), "caption_resize", 0.85, _ext_caption),
-    (re.compile(r"(?:make\s+(?:the\s+)?(?:text|caption|subtitle|font)\s+(?:bigger|smaller|larger))", re.I), "caption_resize", 0.90, _ext_caption),
+    (re.compile(r"\b(?:text|captions?|subtitles?|font)\b\s+(?:\S+\s+)*?(?:too\s+)?(?:bigger|smaller|larger|small|big|tiny|huge|increase|decrease)\b", re.I), "caption_resize", 0.85, _ext_caption),
+    (re.compile(r"\b(?:bigger|larger|smaller|tiny|huge)\s+(?:text|captions?|subtitles?|font)\b", re.I), "caption_resize", 0.90, _ext_caption),
+    (re.compile(r"(?:make\s+(?:the\s+)?(?:text|captions?|subtitles?|font)\s+(?:bigger|smaller|larger))", re.I), "caption_resize", 0.90, _ext_caption),
+    (re.compile(r"\b(?:captions?|subtitles?|text)\b\s+(?:\S+\s+)*?(?:up|down|higher|lower|top|bottom|middle|cent(?:er|re))\b", re.I), "caption_position", 0.80, _ext_caption_position),
     (re.compile(r"(?:speaker|webcam|face|person)\s+(?:\S+\s+)*(?:too\s+)?(?:small|big|tiny|huge|larger|smaller)", re.I), "canvas_resize", 0.75, _ext_canvas),
     (re.compile(r"(?:remove|cut\s+out|delete|drop)\s+(?:the\s+)?(?:part|section|bit)\s+(?:where|about|when)", re.I), "segment_remove", 0.80, _ext_remove),
     (re.compile(r"(?:music|background\s*(?:music|audio|track))\s+(?:\S+\s+)*(?:too\s+)?(?:loud|quiet|soft|low|high)", re.I), "audio_adjust", 0.85, _ext_audio),
@@ -214,6 +236,78 @@ def parse_feedback(feedback_text: str, edl: EditDecisionList) -> FeedbackIntent:
             )
 
     return best or FeedbackIntent(intent_type="unknown", confidence=0.0, raw_feedback=feedback_text)
+
+
+def parse_feedback_all(feedback_text: str, edl: EditDecisionList) -> list[FeedbackIntent]:
+    """Like parse_feedback, but return EVERY matched intent (one per type).
+
+    "bigger captions and slow it down" yields caption_resize AND speed_adjust.
+    """
+    text = feedback_text.strip()
+    if not text:
+        return []
+    ts_ms = parse_timestamp_ms(text)
+    seg = find_segment_at_timestamp(edl, ts_ms) if ts_ms is not None else None
+    found: dict[str, FeedbackIntent] = {}
+    for pattern, itype, base_conf, extractor in _RULES:
+        match = pattern.search(text)
+        if not match:
+            continue
+        conf = min(base_conf + (0.05 if seg else 0.0), 1.0)
+        if itype in found and found[itype].confidence >= conf:
+            continue
+        found[itype] = FeedbackIntent(
+            intent_type=itype,
+            target_segment_ids=[seg.segment_id] if seg else [],
+            target_timestamp_ms=ts_ms, parameters=extractor(match, text),
+            confidence=conf, raw_feedback=feedback_text,
+        )
+    return list(found.values())
+
+
+def regex_plan(feedback_text: str, edl: EditDecisionList) -> FeedbackPlan | None:
+    """Fallback parser: map every matched regex intent to a typed operation.
+
+    Returns a FeedbackPlan, or None when nothing applicable matched. Intents
+    that need a target the text does not give (e.g. "fix the cut" with no
+    timestamp) are dropped rather than guessed.
+    """
+    from clipcannon.editing.feedback_ops import FeedbackPlan
+
+    ops: list[dict[str, Any]] = []
+    for it in parse_feedback_all(feedback_text, edl):
+        p, tids = it.parameters, it.target_segment_ids
+        t = it.intent_type
+        if t == "caption_resize":
+            delta = 16 if p.get("direction") == "bigger" else -12
+            ops.append({"op": "captions", "font_size_delta": delta})
+        elif t == "caption_position":
+            ops.append({"op": "captions", "position": p.get("position", "center")})
+        elif t == "speed_adjust":
+            mag = float(p.get("magnitude", 0.15))
+            ops.append({"op": "speed", "segment_ids": tids,
+                        "delta": mag if p.get("direction") == "faster" else -mag})
+        elif t in ("transition_fix", "transition_add") and tids:
+            ops.append({"op": "transition", "segment_id": tids[0],
+                        "type": p.get("transition_type", "crossfade"),
+                        "duration_ms": int(p.get("duration_ms", 400))})
+        elif t == "segment_remove" and tids:
+            ops.append({"op": "remove_segments", "segment_ids": tids})
+        elif t == "audio_adjust":
+            ops.append({"op": "audio", "delta_db": float(p.get("magnitude_db", -3.0))})
+        elif t == "motion_add":
+            ops.append({"op": "motion", "segment_ids": tids, "effect": p.get("effect", "zoom_in")})
+        elif t == "color_adjust":
+            sign = 1.0 if p.get("direction") == "increase" else -1.0
+            key = {"brightness": "brightness_delta", "contrast": "contrast_delta"}.get(
+                str(p.get("parameter")), "saturation_delta")
+            ops.append({"op": "color", key: sign * float(p.get("magnitude", 0.2))})
+        elif t == "overlay_add" and p.get("text"):
+            ops.append({"op": "overlay", "overlay_type": p.get("overlay_type", "title_card"),
+                        "text": p["text"]})
+    if not ops:
+        return None
+    return FeedbackPlan(ops=ops, summary="regex fallback")
 
 
 # ============================================================

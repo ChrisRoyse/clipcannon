@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import ImageContent, TextContent, Tool
+from mcp.types import CallToolResult, ImageContent, TextContent, Tool
 
 from clipcannon import __version__
 from clipcannon.tools import ALL_TOOL_DEFINITIONS, TOOL_DISPATCHERS
@@ -86,7 +86,7 @@ def create_server() -> Server:
     async def call_tool(
         name: str,
         arguments: dict[str, object] | None = None,
-    ) -> list[TextContent | ImageContent]:
+    ) -> list[TextContent | ImageContent] | CallToolResult:
         """Dispatch a tool call and return the result.
 
         Routes the call to the appropriate tool dispatcher based on
@@ -154,6 +154,11 @@ def create_server() -> Server:
                     mimeType=str(image_data["mimeType"]),
                 )
             )
+
+        # Tools report failures as {"error": {...}}. Surface them as MCP tool
+        # errors so clients (and agents) can tell failure from success.
+        if isinstance(result, dict) and isinstance(result.get("error"), dict):
+            return CallToolResult(content=contents, isError=True)
 
         return contents
 
