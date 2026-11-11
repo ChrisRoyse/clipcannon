@@ -1,5 +1,5 @@
 /**
- * Santa Meet Bot - Background Service Worker
+ * ClipCannon Meet Avatar - Background Service Worker
  *
  * Listens for tab updates to detect Google Meet URLs,
  * sends join/leave requests to the local bot server on port 9877,
@@ -45,7 +45,7 @@ async function sendJoin(url) {
     });
     return await resp.json();
   } catch (err) {
-    console.error("[SantaBot] Join request failed:", err.message);
+    console.error("[MeetAvatar] Join request failed:", err.message);
     return { error: err.message };
   }
 }
@@ -58,7 +58,7 @@ async function sendLeave() {
     });
     return await resp.json();
   } catch (err) {
-    console.error("[SantaBot] Leave request failed:", err.message);
+    console.error("[MeetAvatar] Leave request failed:", err.message);
     return { error: err.message };
   }
 }
@@ -75,7 +75,7 @@ async function fetchStatus() {
 // ---- Auto-join setting ----
 
 async function isAutoJoinEnabled() {
-  const result = await chrome.storage.local.get({ autoJoin: true });
+  const result = await chrome.storage.local.get({ autoJoin: false });
   return result.autoJoin;
 }
 

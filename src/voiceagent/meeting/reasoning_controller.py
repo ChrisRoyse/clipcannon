@@ -25,8 +25,10 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
+import re
 import time
 from collections import deque
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -78,7 +80,15 @@ class SituationalAwareness:
 # ---------------------------------------------------------------------------
 # Address words for name detection
 # ---------------------------------------------------------------------------
-_ADDRESS_WORDS = {"santa", "jarvis", "claus", "mr. claus", "father christmas"}
+def _address_pattern(words: Iterable[str]) -> re.Pattern[str]:
+    """Whole-word, case-insensitive matcher for the names the avatar answers to."""
+    names = sorted(
+        {w.strip().lower() for w in words if w and w.strip()}, key=len, reverse=True
+    )
+    if not names:
+        return re.compile(r"(?!x)x")  # matches nothing
+    alternation = "|".join(re.escape(n) for n in names)
+    return re.compile(r"\b(?:" + alternation + r")(?!\w)", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +136,7 @@ class ReasoningController:
 
     Args:
         character_name: The name the avatar responds to.
+        aliases: Other names or nicknames that also count as being addressed.
         respond_callback: Async callable(text) -> str that generates
             a response and speaks it. Called when intent is RESPOND.
         expression_callback: Callable(intent, awareness) that updates
@@ -136,12 +147,14 @@ class ReasoningController:
 
     def __init__(
         self,
-        character_name: str = "Santa",
+        character_name: str = "Avatar",
+        aliases: Iterable[str] = (),
         respond_callback=None,
         expression_callback=None,
         avatar_callback=None,
     ) -> None:
         self._name = character_name.lower()
+        self._address_re = _address_pattern([character_name, *aliases])
         self._respond = respond_callback
         self._avatar_cb = avatar_callback
         self._update_expression = expression_callback
@@ -179,9 +192,7 @@ class ReasoningController:
 
         # Update addressing detection
         low = text.lower()
-        self._awareness.speaker_is_addressing_me = any(
-            w in low for w in _ADDRESS_WORDS
-        )
+        self._awareness.speaker_is_addressing_me = bool(self._address_re.search(low))
 
         # Simple sentiment from keywords (Tier 1 — no model needed)
         self._awareness.detected_emotion = self._detect_emotion_keywords(low)

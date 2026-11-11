@@ -1,5 +1,5 @@
 /**
- * Santa Meet Bot - Content Script for Google Meet pages
+ * ClipCannon Meet Avatar - Content Script for Google Meet pages
  *
  * Detects meeting state transitions (lobby, in-meeting, left)
  * and notifies the background service worker.

@@ -18,8 +18,11 @@ CONSTELLATION_TOOL_DEFINITIONS: list[Tool] = [
             "properties": {
                 "person": {
                     "type": "string",
-                    "default": "santa",
-                    "description": "Clone identity name",
+                    "description": (
+                        "Clone identity name (folder under ~/.clipcannon/models). "
+                        "Optional when CLIPCANNON_CLONE_PERSON is set or only one "
+                        "identity is trained."
+                    ),
                 },
             },
         },
@@ -36,8 +39,11 @@ CONSTELLATION_TOOL_DEFINITIONS: list[Tool] = [
             "properties": {
                 "person": {
                     "type": "string",
-                    "default": "santa",
-                    "description": "Clone identity name",
+                    "description": (
+                        "Clone identity name (folder under ~/.clipcannon/models). "
+                        "Optional when CLIPCANNON_CLONE_PERSON is set or only one "
+                        "identity is trained."
+                    ),
                 },
             },
         },
@@ -58,8 +64,25 @@ CONSTELLATION_TOOL_DEFINITIONS: list[Tool] = [
             "properties": {
                 "person": {
                     "type": "string",
-                    "default": "santa",
-                    "description": "Clone identity name (must have trained LoRA)",
+                    "description": (
+                        "Clone identity name (folder under ~/.clipcannon/models, must have a "
+                        "trained LoRA). Optional when CLIPCANNON_CLONE_PERSON is set or only "
+                        "one identity is trained."
+                    ),
+                },
+                "trigger_word": {
+                    "type": "string",
+                    "description": (
+                        "LoRA trigger token placed at the start of the prompt. Default: "
+                        "clone.json trigger_word, else the person name upper-cased."
+                    ),
+                },
+                "scene_prompt": {
+                    "type": "string",
+                    "description": (
+                        "Scene/framing text appended to the prompt (background, lighting). "
+                        "Default: clone.json scene_prompt, else a neutral interview scene."
+                    ),
                 },
                 "audio_path": {
                     "type": "string",
@@ -95,6 +118,15 @@ CONSTELLATION_TOOL_DEFINITIONS: list[Tool] = [
                     "default": 42,
                     "description": "Random seed for reproducibility",
                 },
+                "identity_guard": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": (
+                        "Run the Teleological Constellation Guard on the result: sample "
+                        "frames, re-embed with frozen SigLIP, and reject the clip if any "
+                        "falls below the person's visual identity threshold."
+                    ),
+                },
             },
             "required": ["audio_path"],
         },
@@ -112,8 +144,11 @@ CONSTELLATION_TOOL_DEFINITIONS: list[Tool] = [
             "properties": {
                 "person": {
                     "type": "string",
-                    "default": "santa",
-                    "description": "Clone identity name",
+                    "description": (
+                        "Clone identity name (folder under ~/.clipcannon/models). "
+                        "Optional when CLIPCANNON_CLONE_PERSON is set or only one "
+                        "identity is trained."
+                    ),
                 },
                 "constellation": {
                     "type": "string",

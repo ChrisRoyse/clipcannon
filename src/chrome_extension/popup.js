@@ -1,5 +1,5 @@
 /**
- * Santa Meet Bot - Popup UI logic
+ * ClipCannon Meet Avatar - Popup UI logic
  */
 
 const botStatusEl = document.getElementById("botStatus");
@@ -48,7 +48,7 @@ function updateUI(botState, activeMeetUrl, serverState) {
 }
 
 // Load auto-join setting
-chrome.storage.local.get({ autoJoin: true }, (result) => {
+chrome.storage.local.get({ autoJoin: false }, (result) => {
   autoJoinToggle.checked = result.autoJoin;
 });
 

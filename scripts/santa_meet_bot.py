@@ -979,6 +979,7 @@ async def audio_loop(page, stop):
     # --- Create the reasoning controller ---
     controller = ReasoningController(
         character_name="Santa",
+        aliases=("claus", "mr. claus", "father christmas", "jarvis"),
         respond_callback=handle_respond,
         expression_callback=handle_expression,
         avatar_callback=handle_avatar_command,

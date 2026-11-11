@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Santa Meet Bot",
-  "version": "1.0.0",
-  "description": "Auto-detects Google Meet meetings and triggers the local Santa avatar bot to join.",
+  "name": "ClipCannon Meet Avatar",
+  "version": "1.1.0",
+  "description": "Auto-detects Google Meet meetings and lets your local ClipCannon avatar join (auto-join is off by default).",
   "permissions": [
     "tabs",
     "activeTab",

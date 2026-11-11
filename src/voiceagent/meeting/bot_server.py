@@ -1,4 +1,9 @@
-"""HTTP server managing the Santa meeting bot lifecycle.
+"""HTTP server managing the meeting avatar bot lifecycle.
+
+Only accepts requests from the ClipCannon Chrome extension (or local tools
+that send no Origin header), and only joins https://meet.google.com URLs.
+The bot script defaults to scripts/santa_meet_bot.py; point
+CLIPCANNON_MEET_BOT_SCRIPT at your own avatar's bot script to change it.
 
 POST /join  {"url": "https://meet.google.com/xxx-yyyy-zzz"}
 POST /leave
@@ -6,7 +11,7 @@ GET  /status -> {"state": "idle|joining|in-meeting", ...}
 """
 from __future__ import annotations
 
-import json, logging, os, signal, subprocess, sys, time
+import json, logging, os, re, signal, subprocess, sys, tempfile, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from threading import Lock, Thread
@@ -15,8 +20,24 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [BotServer] %(levelname)s %(message)s")
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_BOT_SCRIPT = _PROJECT_ROOT / "scripts" / "santa_meet_bot.py"
+_BOT_SCRIPT = Path(
+    os.environ.get("CLIPCANNON_MEET_BOT_SCRIPT")
+    or _PROJECT_ROOT / "scripts" / "santa_meet_bot.py"
+).expanduser()
+_BOT_LOG = Path(tempfile.gettempdir()) / "clipcannon_meet_bot.log"
 HOST, PORT, XVFB_DISPLAY = "127.0.0.1", 9877, ":99"
+
+# Google Meet meeting codes look like abc-defg-hij.
+_MEET_URL_RE = re.compile(r"^https://meet\.google\.com/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:[?#][^\s]*)?$")
+
+
+def is_meet_url(url: str) -> bool:
+    return bool(_MEET_URL_RE.match(url))
+
+
+def is_allowed_origin(origin: str | None) -> bool:
+    """Browser requests must come from a Chrome extension; no Origin = local CLI."""
+    return origin is None or origin.startswith("chrome-extension://")
 
 
 class BotManager:
@@ -71,7 +92,7 @@ class BotManager:
         if not _BOT_SCRIPT.exists():
             raise FileNotFoundError(f"Bot script not found: {_BOT_SCRIPT}")
         env = {**os.environ, "DISPLAY": XVFB_DISPLAY}
-        bot_log = open("/tmp/santa_bot.log", "w")
+        bot_log = open(_BOT_LOG, "w")
         self.bot_proc = subprocess.Popen(
             [sys.executable, str(_BOT_SCRIPT), url],
             env=env, stdout=bot_log, stderr=subprocess.STDOUT,
@@ -128,15 +149,27 @@ _manager = BotManager()
 class BotRequestHandler(BaseHTTPRequestHandler):
     """HTTP handler for bot control API."""
 
+    def _cors_headers(self) -> list[tuple[str, str]]:
+        origin = self.headers.get("Origin")
+        if origin and is_allowed_origin(origin):
+            return [("Access-Control-Allow-Origin", origin), ("Vary", "Origin")]
+        return []
+
     def _send_json(self, data: dict, status: int = 200) -> None:
         body = json.dumps(data).encode()
         self.send_response(status)
         for k, v in [("Content-Type", "application/json"),
                       ("Content-Length", str(len(body))),
-                      ("Access-Control-Allow-Origin", "*")]:
+                      *self._cors_headers()]:
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
+
+    def _origin_ok(self) -> bool:
+        if is_allowed_origin(self.headers.get("Origin")):
+            return True
+        self._send_json({"error": "Origin not allowed"}, 403)
+        return False
 
     def _read_body(self) -> dict:
         length = int(self.headers.get("Content-Length", 0))
@@ -148,24 +181,33 @@ class BotRequestHandler(BaseHTTPRequestHandler):
             return {}
 
     def do_OPTIONS(self) -> None:
-        self.send_response(204)
-        for k, v in [("Access-Control-Allow-Origin", "*"),
+        self.send_response(204 if is_allowed_origin(self.headers.get("Origin")) else 403)
+        for k, v in [*self._cors_headers(),
                       ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
                       ("Access-Control-Allow-Headers", "Content-Type")]:
             self.send_header(k, v)
         self.end_headers()
 
     def do_GET(self) -> None:
+        if not self._origin_ok():
+            return
         if self.path == "/status":
             self._send_json(_manager.status())
         else:
             self._send_json({"error": "Not found"}, 404)
 
     def do_POST(self) -> None:
+        if not self._origin_ok():
+            return
         if self.path == "/join":
-            url = self._read_body().get("url", "")
+            url = str(self._read_body().get("url", "")).strip()
             if not url:
                 self._send_json({"error": "Missing 'url' field"}, 400)
+                return
+            if not is_meet_url(url):
+                self._send_json(
+                    {"error": "Only https://meet.google.com/xxx-yyyy-zzz URLs are allowed"}, 400
+                )
                 return
             result = _manager.join(url)
             self._send_json(result, 200 if "ok" in result else 409)

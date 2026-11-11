@@ -5,19 +5,31 @@ clone video generation with behavioral state management.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+MODELS_DIR = Path.home() / ".clipcannon" / "models"
 FLAME_PATH = Path.home() / ".clipcannon" / "models" / "{person}" / "flame_params.npz"
 LORA_PATH = Path.home() / ".clipcannon" / "models" / "{person}" / "echov3_lora" / "final"
 REF_IMAGE_PATH = Path.home() / ".clipcannon" / "models" / "{person}" / "reference" / "{person}_portrait.jpg"
 AUDIO_REF_PATH = Path.home() / ".clipcannon" / "models" / "{person}" / "reference"
+
+# Identity names become directory names, so keep them to a safe charset.
+_PERSON_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+# Generic scene description. Override per identity in clone.json.
+DEFAULT_SCENE_PROMPT = (
+    "Natural subtle head movements, genuine facial expressions. "
+    "Clear focused eyes. Professional interview framing. Warm lighting."
+)
 
 # Cache loaded skill libraries per person
 _skill_library_cache: dict[str, object] = {}
@@ -25,6 +37,103 @@ _skill_library_cache: dict[str, object] = {}
 
 def _error(code: str, message: str, details: dict | None = None) -> dict:
     return {"error": {"code": code, "message": message, "details": details or {}}}
+
+
+def _trained_identities() -> list[str]:
+    """Identities under ~/.clipcannon/models that have FLAME params."""
+    if not MODELS_DIR.is_dir():
+        return []
+    return sorted(
+        d.name for d in MODELS_DIR.iterdir()
+        if d.is_dir() and (d / "flame_params.npz").exists()
+    )
+
+
+def _resolve_person(arguments: dict) -> str:
+    """Pick the clone identity: argument, then env var, then the only one trained.
+
+    Raises ValueError with the available identities when it can't decide.
+    """
+    person = str(arguments.get("person") or os.environ.get("CLIPCANNON_CLONE_PERSON") or "")
+    if not person:
+        available = _trained_identities()
+        if len(available) == 1:
+            person = available[0]
+        else:
+            raise ValueError(
+                "person is required (or set CLIPCANNON_CLONE_PERSON). "
+                f"Trained identities found: {available or 'none'}"
+            )
+    if not _PERSON_RE.match(person) or ".." in person:
+        raise ValueError(f"Invalid person name: {person!r}")
+    return person
+
+
+def _load_clone_config(person: str) -> dict:
+    """Optional per-identity settings from models/<person>/clone.json.
+
+    Keys: trigger_word (LoRA trigger token, default PERSON upper-cased),
+    scene_prompt (appended to every prompt).
+    """
+    cfg_path = MODELS_DIR / person / "clone.json"
+    if not cfg_path.exists():
+        return {}
+    with open(cfg_path, encoding="utf-8") as f:
+        cfg = json.load(f)
+    if not isinstance(cfg, dict):
+        raise ValueError(f"{cfg_path} must contain a JSON object")
+    return cfg
+
+
+def _guard_check_video(person: str, video_path: str, n_frames: int = 16) -> dict:
+    """Run the Teleological Constellation Guard over a generated video.
+
+    Samples n_frames evenly, re-embeds them with frozen SigLIP, and compares
+    each to the person's visual centroid. passed=True only if every sampled
+    frame clears the visual threshold.
+    """
+    import cv2
+
+    from phoenix.video.constellation_guard import ConstellationGuard
+
+    embeddings_path = MODELS_DIR / person / "embeddings" / "all_embeddings.npz"
+    guard = ConstellationGuard(str(embeddings_path))
+
+    cap = cv2.VideoCapture(video_path)
+    try:
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total <= 0:
+            raise RuntimeError(f"Could not read frames from {video_path}")
+        n = max(1, min(n_frames, total))
+        indices = sorted({int(i * (total - 1) / max(1, n - 1)) for i in range(n)})
+        frames = []
+        for idx in indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ok, bgr = cap.read()
+            if ok:
+                frames.append(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+    finally:
+        cap.release()
+    if not frames:
+        raise RuntimeError(f"No frames decoded from {video_path}")
+
+    guard.load_visual_encoder()
+    try:
+        results = guard.validate_batch(frames)
+    finally:
+        guard.unload()
+
+    sims = [r.visual_similarity for r in results]
+    rejected = sum(1 for r in results if not r.valid)
+    return {
+        "status": "checked",
+        "passed": rejected == 0,
+        "frames_checked": len(results),
+        "frames_rejected": rejected,
+        "visual_similarity_min": round(min(sims), 4),
+        "visual_similarity_mean": round(sum(sims) / len(sims), 4),
+        "visual_threshold": guard.get_constellation_stats()["thresholds"].get("visual"),
+    }
 
 
 def _get_skill_library(person: str):
@@ -35,7 +144,7 @@ def _get_skill_library(person: str):
     from phoenix.video.expression_skills import SkillLibrary
 
     flame_path = str(FLAME_PATH).format(person=person)
-    embeddings_path = str(Path.home() / ".clipcannon" / "models" / person / "embeddings" / "all_embeddings.npz")
+    embeddings_path = str(MODELS_DIR / person / "embeddings" / "all_embeddings.npz")
 
     if not Path(flame_path).exists():
         raise FileNotFoundError(f"FLAME params not found for '{person}' at {flame_path}")
@@ -49,7 +158,10 @@ def _get_skill_library(person: str):
 
 
 async def _handle_list_constellations(arguments: dict) -> dict:
-    person = str(arguments.get("person", "santa"))
+    try:
+        person = _resolve_person(arguments)
+    except ValueError as e:
+        return _error("INVALID_PERSON", str(e))
     try:
         library = _get_skill_library(person)
         constellations = library.list_constellations()
@@ -70,7 +182,10 @@ async def _handle_list_constellations(arguments: dict) -> dict:
 
 
 async def _handle_list_skills(arguments: dict) -> dict:
-    person = str(arguments.get("person", "santa"))
+    try:
+        person = _resolve_person(arguments)
+    except ValueError as e:
+        return _error("INVALID_PERSON", str(e))
     try:
         library = _get_skill_library(person)
         skills = library.list_skills()
@@ -89,12 +204,16 @@ async def _handle_list_skills(arguments: dict) -> dict:
 
 
 async def _handle_generate_video(arguments: dict) -> dict:
-    person = str(arguments.get("person", "santa"))
+    try:
+        person = _resolve_person(arguments)
+    except ValueError as e:
+        return _error("INVALID_PERSON", str(e))
     audio_path = str(arguments.get("audio_path", ""))
     constellation = str(arguments.get("constellation", "warm_conversational"))
     intensity = float(arguments.get("intensity", 0.8))
     seed = int(arguments.get("seed", 42))
     output_path = str(arguments.get("output_path", ""))
+    guard_enabled = bool(arguments.get("identity_guard", True))
 
     if not audio_path:
         return _error("MISSING_PARAMETER", "audio_path is required")
@@ -122,13 +241,18 @@ async def _handle_generate_video(arguments: dict) -> dict:
     except Exception as e:
         return _error("CONSTELLATION_ERROR", f"Failed to build prompt: {e}")
 
-    # Build full prompt
-    full_prompt = (
-        f"SANTA {prompt} "
-        "Natural subtle head movements, genuine facial expressions. "
-        "Clear focused eyes. Professional interview framing. "
-        "Wood paneling background. Warm lighting."
+    # Build full prompt: LoRA trigger word + constellation + scene.
+    try:
+        clone_cfg = _load_clone_config(person)
+    except (OSError, ValueError) as e:
+        return _error("CONFIG_ERROR", f"Bad clone.json for '{person}': {e}")
+    trigger_word = str(
+        arguments.get("trigger_word") or clone_cfg.get("trigger_word") or person.upper()
     )
+    scene_prompt = str(
+        arguments.get("scene_prompt") or clone_cfg.get("scene_prompt") or DEFAULT_SCENE_PROMPT
+    )
+    full_prompt = f"{trigger_word} {prompt} {scene_prompt}"
 
     # Auto output path
     if not output_path:
@@ -176,7 +300,7 @@ async def _handle_generate_video(arguments: dict) -> dict:
     ]
 
     env = os.environ.copy()
-    env["FFMPEG_PATH"] = "/usr/bin"
+    env.setdefault("FFMPEG_PATH", "/usr/bin")
     env["PYTORCH_CUDA_ALLOC_CONF"] = ""
     env["PYTHONPATH"] = echomimic_dir
 
@@ -197,7 +321,7 @@ async def _handle_generate_video(arguments: dict) -> dict:
             if str(expected_output) != output_path:
                 expected_output.rename(output_path)
 
-            return {
+            response = {
                 "output_path": output_path,
                 "constellation": constellation,
                 "intensity": intensity,
@@ -205,6 +329,27 @@ async def _handle_generate_video(arguments: dict) -> dict:
                 "person": person,
                 "seed": seed,
             }
+
+            # Per-output identity guard: the clip must still look like this person.
+            if guard_enabled:
+                try:
+                    guard_result = await asyncio.to_thread(_guard_check_video, person, output_path)
+                except Exception as e:  # report, don't hide, a guard that couldn't run
+                    logger.error("Constellation guard failed to run: %s", e)
+                    guard_result = {"status": "error", "passed": False, "error": str(e)}
+                response["identity_guard"] = guard_result
+                if guard_result.get("status") == "checked" and not guard_result["passed"]:
+                    return _error(
+                        "IDENTITY_GUARD_REJECTED",
+                        f"{guard_result['frames_rejected']}/"
+                        f"{guard_result['frames_checked']} sampled "
+                        f"frames fell below the visual identity threshold. The video was kept at "
+                        f"{output_path} for inspection; try another seed or lower intensity.",
+                        response,
+                    )
+            else:
+                response["identity_guard"] = {"status": "skipped", "passed": None}
+            return response
         else:
             return _error("GENERATION_FAILED",
                           f"Output not found at {expected_output}",
@@ -216,7 +361,10 @@ async def _handle_generate_video(arguments: dict) -> dict:
 
 
 async def _handle_expression_sequence(arguments: dict) -> dict:
-    person = str(arguments.get("person", "santa"))
+    try:
+        person = _resolve_person(arguments)
+    except ValueError as e:
+        return _error("INVALID_PERSON", str(e))
     constellation = str(arguments.get("constellation", ""))
     duration_s = float(arguments.get("duration_s", 5.0))
     intensity = float(arguments.get("intensity", 0.8))

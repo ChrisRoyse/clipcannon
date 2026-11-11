@@ -11,7 +11,7 @@ Outputs: expression (N, 100), jaw_pose (N, 3), timestamps (N,).
 
 Usage:
     fitter = FlameFitter(flame_model_path, video_path)
-    fitter.fit(output_path="~/.clipcannon/models/santa/flame_params.npz")
+    fitter.fit(output_path="~/.clipcannon/models/<person>/flame_params.npz")
 """
 
 from __future__ import annotations
@@ -534,20 +534,12 @@ def main() -> None:
     )
 
     parser = argparse.ArgumentParser(description="Fit FLAME to video")
-    parser.add_argument(
-        "--video",
-        type=str,
-        default=str(
-            Path.home()
-            / ".clipcannon/projects/proj_2ea7221d/source/2026-04-03 04-23-11.mp4"
-        ),
-        help="Path to input video",
-    )
+    parser.add_argument("--video", type=str, required=True, help="Path to input video")
     parser.add_argument(
         "--output",
         type=str,
-        default=str(Path.home() / ".clipcannon/models/santa/flame_params.npz"),
-        help="Output path for FLAME parameters",
+        required=True,
+        help="Output .npz path, e.g. ~/.clipcannon/models/<person>/flame_params.npz",
     )
     parser.add_argument("--sample-fps", type=float, default=5.0)
     parser.add_argument("--batch-size", type=int, default=32)
