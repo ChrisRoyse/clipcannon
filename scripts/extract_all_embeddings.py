@@ -209,8 +209,11 @@ def compute_voice_embeddings(pro_segments):
     import torchaudio
     from speechbrain.inference.speaker import EncoderClassifier
 
-    # Load ECAPA model
-    cache_dir = os.path.expanduser("~/.cache/huggingface/hub/models--speechbrain--spkrec-ecapa-voxceleb/snapshots/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286")
+    from huggingface_hub import snapshot_download
+
+    # Load ECAPA model from the HF cache (downloaded on first use; no
+    # machine-specific snapshot path)
+    cache_dir = snapshot_download(repo_id="speechbrain/spkrec-ecapa-voxceleb")
     classifier = EncoderClassifier.from_hparams(
         source=cache_dir,
         run_opts={"device": "cuda" if torch.cuda.is_available() else "cpu"},

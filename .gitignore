@@ -62,6 +62,9 @@ benchmarks/samples/**/*.wav
 *.pth
 *.zip
 
+# SpeechBrain savedirs: absolute symlinks into the local HF cache, recreated on first run
+benchmarks/models/
+
 # Documentation (kept locally, not in repo)
 docs/
 docs2/

@@ -315,10 +315,7 @@ def _build_multi_segment_cmd(
         # Video chain for this segment
         # Combine PTS reset + speed into one expression to avoid
         # an intermediate PTS rounding step.
-        if seg.speed != 1.0:
-            pts_expr = f"(PTS-STARTPTS)/{seg.speed}"
-        else:
-            pts_expr = "PTS-STARTPTS"
+        pts_expr = _segment_pts(seg)
 
         vchain = (
             f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
@@ -1102,6 +1099,17 @@ def _build_per_segment_canvas_cmd(
     return cmd
 
 
+def _segment_pts(seg: SegmentSpec) -> str:
+    """setpts expression that restarts the segment at 0 and applies its speed.
+
+    The audio side applies atempo=speed, so the video must be retimed by the
+    same factor or the two drift apart (and the segment's duration is wrong).
+    """
+    if seg.speed != 1.0:
+        return f"(PTS-STARTPTS)/{seg.speed}"
+    return "PTS-STARTPTS"
+
+
 def _build_region_scale(region: CanvasRegion) -> str:
     """Build FFmpeg scale filter for a canvas region respecting fit_mode.
 
@@ -1173,10 +1181,10 @@ def _build_segment_canvas_chain(
 
     delogo_chain = _build_delogo_chain(removals)
 
-    # 1. Trim source (with delogo if removals present)
+    # 1. Trim source (with delogo if removals present), retimed by speed
     filters.append(
         f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-        f"setpts=PTS-STARTPTS{delogo_chain}[seg{idx}_src]"
+        f"setpts={_segment_pts(seg)}{delogo_chain}[seg{idx}_src]"
     )
 
     # 2+3. Background + split into copies for regions
@@ -1281,10 +1289,11 @@ def _build_segment_zoom_chain(
 
     delogo_chain = _build_delogo_chain(removals)
 
-    # Trim and reset PTS so t starts at 0
+    # Trim, reset PTS so t starts at 0, and apply speed so t runs in output
+    # time (the easing below spans seg_dur_s, which is already speed-scaled)
     filters.append(
         f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-        f"setpts=PTS-STARTPTS{delogo_chain}[seg{idx}_src]"
+        f"setpts={_segment_pts(seg)}{delogo_chain}[seg{idx}_src]"
     )
 
     # Build easing progress expression
@@ -1414,7 +1423,7 @@ def _build_segment_plain_chain(
 
     trim_scale = (
         f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-        f"setpts=PTS-STARTPTS{delogo_chain},"
+        f"setpts={_segment_pts(seg)}{delogo_chain},"
         f"scale={profile.width}:{profile.height},setsar=1"
     )
 
