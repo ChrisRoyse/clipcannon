@@ -203,7 +203,9 @@ async def main_async(run: Run) -> None:
                          "rows": len(r_rows), "distinct": sorted(set(map(str, r_rows))),
                          "provenance": [rprov[0], json.loads(rprov[1]), rprov[2]]})
 
-        # 8. Energy instrument (FunASR reported not installed): replaces, never appends.
+        # 8. AST instrument (FunASR reported not installed), real stage on the
+        # full mix: rows tagged, confidence = model probability >= its pinned
+        # threshold, replaces the SenseVoice rows, a re-run does not append.
         orig = reactions_stage._check_sensevoice_funasr
         reactions_stage._check_sensevoice_funasr = lambda: False
         try:
@@ -212,32 +214,31 @@ async def main_async(run: Run) -> None:
             res2 = await reactions_stage.run_reactions(PID, db, work, cfg)
         finally:
             reactions_stage._check_sensevoice_funasr = orig
-        e_rows = q(db, "SELECT instrument, confidence FROM reactions WHERE project_id=?", (PID,))
-        run.check("energy_run_replaces_sensevoice_rows",
-                  res1.success and res2.success and len(e_rows) == n1
-                  and not any(r[0] == "sensevoice_funasr" for r in e_rows),
-                  action="run_reactions twice with FunASR reported absent (NASA audio)",
+        a_rows = q(db, "SELECT instrument, type, confidence, start_ms, end_ms, context_transcript"
+                       " FROM reactions WHERE project_id=? ORDER BY start_ms", (PID,))
+        aprov = q(db, "SELECT model_name, model_version, model_parameters, input_file_path"
+                      " FROM provenance WHERE project_id=? AND operation='reaction_detection'"
+                      " ORDER BY timestamp_utc DESC LIMIT 1", (PID,))[0]
+        ap = json.loads(aprov[2])
+        thr = {"laughter": ap.get("instrument_laughter_threshold"),
+               "applause": ap.get("instrument_applause_threshold")}
+        run.check("ast_rows_tagged_with_model_probability",
+                  res1.success and res2.success and a_rows and len(a_rows) == n1
+                  and all(r[0] == "ast_audioset" and thr[r[1]] is not None
+                          and thr[r[1]] <= r[2] <= 1.0 for r in a_rows)
+                  and aprov[0] == "ast_audioset"
+                  and aprov[1] == "f826b80d28226b62986cc218e5cec390b1096902",
+                  action="run_reactions twice with FunASR reported absent (real mix audio)",
                   before={"sensevoice_rows": len(r_rows)},
-                  after={"rows_run1": n1, "rows_run2": len(e_rows),
-                         "instruments": sorted({r[0] for r in e_rows})})
-
-        # 8b. The NASA audio has no energy-detectable reaction, so the energy rows'
-        # tagging is shown on a synthetic applause-like burst (white noise, rms 0.3)
-        # through the real detector and the real writer.
-        rng = np.random.default_rng(0)
-        audio = np.concatenate([np.zeros(16000 * 3), rng.normal(0, 0.3, 16000 * 6),
-                                np.zeros(16000 * 3)]).astype(np.float32)
-        det = reactions_stage._merge_overlapping_reactions(
-            reactions_stage._detect_reactions_energy(audio, 16000))
-        n_e = reactions_stage._insert_reactions(db, PID, det, "energy_spectral")
-        e2 = q(db, "SELECT instrument, type, confidence, intensity, start_ms, end_ms"
-                   " FROM reactions WHERE project_id=?", (PID,))
-        run.check("energy_rows_tagged_with_measured_confidence",
-                  n_e > 0 and len(e2) == n_e
-                  and all(r[0] == "energy_spectral" and r[2] is not None and 0.3 < r[2] <= 0.6
-                          for r in e2),
-                  action="energy detector on 6 s of N(0, 0.3) noise between 3 s silences",
-                  after={"rows": [list(r) for r in e2]})
+                  after={"success": [res1.success, res2.success],
+                         "error": res1.error_message or res2.error_message,
+                         "rows_run1": n1, "rows_run2": len(a_rows),
+                         "rows": [[r[1], r[2], r[3], r[4], (r[5] or "")[:60]] for r in a_rows],
+                         "provenance": [aprov[0], aprov[1], ap]})
+        run.check("reactions_read_full_mix_not_vocals",
+                  str(aprov[3]).endswith("stems/audio_16k.wav"),
+                  before={"old_input": "stems/vocals.wav (speech resolver)"},
+                  after={"input_file_path": aprov[3]})
 
         # 9. Readers expose the instrument (MCP tool fn + dashboard route).
         from clipcannon.dashboard.routes.timeline import get_timeline
@@ -250,7 +251,7 @@ async def main_async(run: Run) -> None:
         run.check("readers_expose_instrument",
                   "quality_instrument" in sc and "sharpness_avg" in sc
                   and "quality_instrument" in tsc and "sharpness_avg" in tsc
-                  and (not rc or all(r.get("instrument") == "energy_spectral" for r in rc)),
+                  and (not rc or all(r.get("instrument") == "ast_audioset" for r in rc)),
                   after={"segment_scene": {k: sc.get(k) for k in ("quality_avg", "quality_instrument",
                                                                    "sharpness_avg")},
                          "timeline_scene": {k: tsc.get(k) for k in ("quality_instrument",
@@ -273,9 +274,9 @@ def main() -> int:
     return run.finish(limitations=[
         "pyiqa is not installed here: BRISQUE column routing uses synthetic 70.0 scores "
         "through the real writer; BRISQUE numbers themselves are not measured",
-        "the energy instrument ran on the stage with FunASR reported absent (monkeypatched "
-        "check); it found no reaction in the NASA audio, so its row tagging is shown on a "
-        "synthetic noise burst",
+        "the AST instrument ran on the stage with FunASR reported absent (monkeypatched "
+        "check); the NASA audio has no reaction labels, so this probe checks storage, "
+        "not accuracy (accuracy: fsv_reactions_bench.py on labelled ESC-50)",
         "the recompute shares PIL resizing with the stage; only the convolution is independent"])
 
 

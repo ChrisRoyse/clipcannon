@@ -85,6 +85,26 @@ async def resolve_source_path(project_id: str, db_path: Path) -> Path:
     return source_path
 
 
+def resolve_mix_input(project_dir: Path) -> Path:
+    """The full 16 kHz mix, for stages that measure non-speech sound.
+
+    Reactions (applause, laughter, crowd) are what source separation moves
+    out of vocals.wav, so these stages must not read the vocals stem.
+
+    Raises:
+        PipelineError: If stems/audio_16k.wav is missing or empty.
+    """
+    mix = project_dir / "stems" / "audio_16k.wav"
+    if mix.exists() and mix.stat().st_size > 0:
+        return mix
+    raise PipelineError(
+        f"Full-mix audio not found: {mix}",
+        stage_name="source_resolution",
+        operation="resolve_mix",
+        details={"project_dir": str(project_dir)},
+    )
+
+
 def resolve_audio_input(project_dir: Path) -> Path:
     """Resolve the best audio input file for speech processing stages.
 

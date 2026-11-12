@@ -1,7 +1,8 @@
-"""SenseVoice reaction detection pipeline stage for ClipCannon.
+"""Reaction detection pipeline stage for ClipCannon.
 
-Detects audience reactions (laughter, applause) in audio using the
-SenseVoice model. Falls back to energy-based detection if unavailable.
+Detects audience reactions (laughter, applause) in the full audio mix with
+SenseVoice when FunASR is installed, otherwise with the pinned AST AudioSet
+classifier (reactions_ast). Each row names its instrument.
 """
 
 # Implementation lives in the reactions_* sibling modules; this facade keeps the
@@ -21,15 +22,14 @@ from clipcannon.db.connection import get_connection  # noqa: F401
 from clipcannon.db.queries import batch_insert, fetch_all  # noqa: F401
 from clipcannon.exceptions import PipelineError  # noqa: F401
 from clipcannon.pipeline.orchestrator import StageResult  # noqa: F401
+from clipcannon.pipeline.reactions_ast import detect_reactions_ast  # noqa: F401
 from clipcannon.pipeline.reactions_detect import (  # noqa: F401
-    ENERGY_REACTION_THRESHOLD,
     OPERATION,
     STAGE,
     STRIDE_S,
     TARGET_SR,
     WINDOW_S,
     _check_sensevoice_funasr,
-    _detect_reactions_energy,
     _detect_reactions_funasr,
     _load_audio,
 )
@@ -39,7 +39,7 @@ from clipcannon.pipeline.reactions_stage import (  # noqa: F401
     _merge_overlapping_reactions,
     run_reactions,
 )
-from clipcannon.pipeline.source_resolution import resolve_audio_input  # noqa: F401
+from clipcannon.pipeline.source_resolution import resolve_mix_input  # noqa: F401
 from clipcannon.provenance import (  # noqa: F401
     ExecutionInfo,
     InputInfo,

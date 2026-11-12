@@ -13,20 +13,20 @@ from clipcannon.db.queries import batch_insert, fetch_all
 from clipcannon.db.schema_migrations import migrate_to_v5
 from clipcannon.exceptions import PipelineError
 from clipcannon.pipeline.orchestrator import StageResult
+from clipcannon.pipeline.reactions_ast import IDENTITY as AST_IDENTITY
+from clipcannon.pipeline.reactions_ast import INSTRUMENT as AST
+from clipcannon.pipeline.reactions_ast import detect_reactions_ast
 from clipcannon.pipeline.reactions_detect import (
-    ENERGY,
-    ENERGY_REACTION_THRESHOLD,
     OPERATION,
     SENSEVOICE,
     STAGE,
     STRIDE_S,
     WINDOW_S,
     _check_sensevoice_funasr,
-    _detect_reactions_energy,
     _detect_reactions_funasr,
     _load_audio,
 )
-from clipcannon.pipeline.source_resolution import resolve_audio_input
+from clipcannon.pipeline.source_resolution import resolve_mix_input
 from clipcannon.provenance import (
     ExecutionInfo,
     InputInfo,
@@ -199,8 +199,10 @@ async def run_reactions(
 ) -> StageResult:
     """Execute the reaction detection pipeline stage.
 
-    SenseVoice (FunASR) when installed, otherwise the energy/spectral
-    heuristic; each row records which instrument produced it.
+    SenseVoice (FunASR) when installed, otherwise the pinned AST AudioSet
+    classifier; each row records which instrument produced it. Reads the
+    full mix: applause and crowd noise are what source separation removes
+    from the vocals stem.
 
     Args:
         project_id: Project identifier.
@@ -214,7 +216,7 @@ async def run_reactions(
     start_time = time.monotonic()
 
     try:
-        audio_path = resolve_audio_input(project_dir)
+        audio_path = resolve_mix_input(project_dir)
         logger.info("Reaction detection starting: %s", audio_path)
 
         audio, sample_rate = await asyncio.to_thread(_load_audio, audio_path)
@@ -224,17 +226,19 @@ async def run_reactions(
         )
 
         # Instrument chosen by installation; an installed SenseVoice that
-        # fails fails the stage (#68), it never switches to energy.
+        # fails fails the stage (#68), it never switches to AST.
         if _check_sensevoice_funasr():
-            backend_name = SENSEVOICE
+            backend_name, version = SENSEVOICE, "iic/SenseVoiceSmall"
+            params: dict[str, object] = {"window_s": WINDOW_S, "stride_s": STRIDE_S}
             try:
                 reactions = await asyncio.to_thread(_detect_reactions_funasr, audio, sample_rate)
             except Exception as sv_err:
                 raise RuntimeError(f"SenseVoice reaction detection failed: {sv_err}") from sv_err
         else:
-            backend_name = ENERGY
-            logger.info("FunASR not installed: detecting reactions with %s", ENERGY)
-            reactions = await asyncio.to_thread(_detect_reactions_energy, audio, sample_rate)
+            backend_name, version = AST, AST_IDENTITY.revision
+            params = {"model_id": AST_IDENTITY.model_id, **AST_IDENTITY.as_params()}
+            logger.info("FunASR not installed: detecting reactions with %s", AST)
+            reactions = await asyncio.to_thread(detect_reactions_ast, audio, sample_rate)
         logger.info("%s detected %d reactions", backend_name, len(reactions))
 
         # Merge overlapping reactions
@@ -283,17 +287,8 @@ async def run_reactions(
             ),
             model_info=ModelInfo(
                 name=backend_name,
-                version="1.0",
-                parameters={
-                    "window_s": WINDOW_S,
-                    "stride_s": STRIDE_S,
-                    "instrument": backend_name,
-                    **(
-                        {"energy_threshold": ENERGY_REACTION_THRESHOLD}
-                        if backend_name == ENERGY
-                        else {}
-                    ),
-                },
+                version=version,
+                parameters={"instrument": backend_name, **params},  # type: ignore[dict-item]
             ),
             execution_info=ExecutionInfo(duration_ms=elapsed_ms),
             parent_record_id=None,
