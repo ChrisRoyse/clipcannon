@@ -59,7 +59,12 @@ async def _handle_speak(arguments: dict[str, object]) -> dict[str, object]:
                     prosody_style, prosody_ref.name,
                 )
         except Exception as exc:
-            logger.debug("Prosody reference selection failed: %s", exc)
+            return _error(
+                "PROSODY_SELECTION_FAILED",
+                f"Prosody style '{prosody_style}' was requested but selection failed: {exc}",
+                {"remediation": "Retry without prosody_style, or backfill prosody data "
+                                "for this voice first."},
+            )
 
     # Output path
     projects_dir = _projects_dir()
@@ -108,7 +113,12 @@ async def _handle_speak(arguments: dict[str, object]) -> dict[str, object]:
             enhanced_duration_ms = int(_info.duration * 1000)
             enhanced_sample_rate = _info.samplerate
         except Exception as exc:
-            logger.warning("Enhancement failed, using raw TTS output: %s", exc)
+            # enhance=True was requested; raw TTS is a different output (#68).
+            return _error(
+                "ENHANCEMENT_FAILED", f"Speech enhancement failed: {exc}",
+                {"raw_audio_path": str(result.audio_path),
+                 "remediation": "Retry, or call again with enhance=false to accept raw TTS."},
+            )
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
 
@@ -220,7 +230,12 @@ async def _handle_speak_optimized(arguments: dict[str, object]) -> dict[str, obj
             enhanced_duration_ms = int(_info.duration * 1000)
             enhanced_sample_rate = _info.samplerate
         except Exception as exc:
-            logger.warning("Enhancement failed, using raw TTS output: %s", exc)
+            # enhance=True was requested; raw TTS is a different output (#68).
+            return _error(
+                "ENHANCEMENT_FAILED", f"Speech enhancement failed: {exc}",
+                {"raw_audio_path": str(result.audio_path),
+                 "remediation": "Retry, or call again with enhance=false to accept raw TTS."},
+            )
 
     return {
         "audio_asset_id": asset_id,

@@ -46,12 +46,9 @@ def edl_row(db: Path, edit_id: str) -> tuple[dict, str] | tuple[None, None]:
 async def call(s: ClientSession, tool: str, args: dict) -> tuple[bool, dict]:
     res = await s.call_tool(tool, args, read_timeout_seconds=None)
     text = "".join(c.text for c in res.content if c.type == "text")
-    try:
-        return bool(res.isError), json.loads(text)
-    except json.JSONDecodeError:
-        # The MCP SDK validates arguments against the tool's input schema before
-        # the handler runs and replies with plain text; record it as that layer.
-        return bool(res.isError), {"error": {"code": "MCP_INPUT_SCHEMA", "message": text}}
+    # Every reply, refusals included, must be JSON with a typed error (#68);
+    # a non-JSON reply raises here and fails the probe.
+    return bool(res.isError), json.loads(text)
 
 
 async def probe(run: Run, pid: str) -> None:
@@ -100,14 +97,14 @@ async def probe(run: Run, pid: str) -> None:
                                  {"project_id": pid, "edit_id": edit_id, **args})
             _, digest = edl_row(db, edit_id)
             got = (body.get("error") or {}).get("code")
-            run.check(name, e and got == code and digest == digest1,
+            remediation = (body.get("error") or {}).get("remediation")
+            run.check(name, e and got == code and digest == digest1 and bool(remediation),
                       action=args, expected_code=code, got_code=got, is_error=e,
-                      row_unchanged=digest == digest1, remediation=(body.get("error") or {})
-                      .get("details", {}).get("remediation"))
+                      row_unchanged=digest == digest1, remediation=remediation)
 
         await refused("out_of_range_op_refused",
                       {"operations": [{"op": "speed", "segment_ids": [2], "speed": 9}]},
-                      "MCP_INPUT_SCHEMA")
+                      "INVALID_ARGUMENTS")
         await refused("nonexistent_segment_refused",
                       {"operations": [{"op": "speed", "segment_ids": [99], "speed": 2}]},
                       "INVALID_OPERATION")
@@ -116,7 +113,8 @@ async def probe(run: Run, pid: str) -> None:
         await refused("empty_request_refused", {}, "INVALID_PARAMETER")
         e, body = await call(s, "clipcannon_apply_feedback", {
             "project_id": pid, "edit_id": "edit_does_not_exist", "operations": ops})
-        run.check("unknown_edit_refused", e and isinstance(body.get("error"), dict),
+        run.check("unknown_edit_refused", e and isinstance(body.get("error"), dict)
+                  and bool(body["error"].get("code")) and bool(body["error"].get("remediation")),
                   got=body.get("error"))
         run.meta["edit_id"] = edit_id
         run.meta["row_sha256_created"] = digest0

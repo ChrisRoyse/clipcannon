@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 
 from clipcannon.db.connection import get_connection
+from clipcannon.db.optional import require_missing_table
 from clipcannon.db.queries import fetch_all, fetch_one
 from clipcannon.tools.discovery_common import _db_path, _error, _validate_project
 
@@ -344,7 +346,8 @@ async def clipcannon_get_narrative_flow(
                 }
         finally:
             conn2.close()
-    except Exception:
+    except sqlite3.OperationalError as _exc:  # absent table only (#68)
+        require_missing_table(_exc)
         # Table may not exist yet; not a failure
         pass
 

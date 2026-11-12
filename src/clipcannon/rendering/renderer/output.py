@@ -180,13 +180,11 @@ class _RenderOutputMixin:
                     f"{profile.name}"
                 ),
             )
-        except Exception:
-            logger.warning(
-                "Render %s: provenance recording failed",
-                render_id,
-                exc_info=True,
-            )
-            return None
+        except Exception as exc:
+            # A render without its provenance record is not a completed render (#68).
+            raise RuntimeError(
+                f"Render {render_id}: provenance recording failed: {exc}"
+            ) from exc
 
     # ----------------------------------------------------------------
     # Database updates

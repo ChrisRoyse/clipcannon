@@ -9,16 +9,15 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Query
 
+from clipcannon.config import projects_dir as _cfg_projects_dir
 from clipcannon.db import fetch_all, fetch_one, get_connection
+from clipcannon.db.optional import require_missing_table
 from clipcannon.db.queries import table_exists
-
-if TYPE_CHECKING:
-    import sqlite3
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +26,7 @@ router = APIRouter(tags=["timeline"])
 PROJECTS_DIR = Path(
     os.environ.get(
         "CLIPCANNON_PROJECTS_DIR",
-        str(Path.home() / ".clipcannon" / "projects"),
+        str(_cfg_projects_dir()),
     )
 )
 
@@ -65,7 +64,8 @@ def _safe_fetch_all(
         return []
     try:
         return fetch_all(conn, sql, params)
-    except Exception as exc:
+    except sqlite3.OperationalError as exc:  # absent table only (#68)
+        require_missing_table(exc)
         logger.debug("Query on table %s failed: %s", table, exc)
         return []
 

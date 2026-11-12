@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Body
 
+from clipcannon.config import projects_dir as _cfg_projects_dir
 from clipcannon.db import execute, fetch_all, fetch_one, get_connection
 from clipcannon.db.queries import table_exists
 
@@ -22,7 +23,7 @@ router = APIRouter(tags=["review"])
 PROJECTS_DIR = Path(
     os.environ.get(
         "CLIPCANNON_PROJECTS_DIR",
-        str(Path.home() / ".clipcannon" / "projects"),
+        str(_cfg_projects_dir()),
     )
 )
 

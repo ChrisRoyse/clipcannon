@@ -136,7 +136,7 @@ async def run_scene_analysis(
         except FileNotFoundError:
             logger.warning("BlazeFace model not found - skipping face detection")
         except Exception as exc:
-            logger.warning("Face detector creation failed: %s", exc)
+            raise RuntimeError(f"BlazeFace detector failed to initialise: {exc}") from exc
 
         webcam_detections: list[dict[str, int]] = []
         for scene in scenes:
@@ -145,12 +145,10 @@ async def run_scene_analysis(
 
             face = None
             if detector is not None:
-                try:
-                    face = _detect_face_with_detector(
-                        detector, mid_path, frame_w, frame_h,
-                    )
-                except Exception as exc:
-                    logger.debug("Face detection failed for scene: %s", exc)
+                # A detector error is not "no face" (#68): let it fail the stage.
+                face = _detect_face_with_detector(
+                    detector, mid_path, frame_w, frame_h,
+                )
 
             scene["face"] = face
             if face is not None:

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .filters import _apply_color_grading, _build_delogo_chain, _segment_pts
+from .filters import (
+    _apply_color_grading,
+    _build_delogo_chain,
+    _segment_pts,
+    _speed_resample,
+)
 
 if TYPE_CHECKING:
     from clipcannon.editing.edl import CanvasRegion, SegmentCanvasSpec, SegmentSpec
@@ -85,7 +90,8 @@ def _build_segment_canvas_chain(
     # 1. Trim source (with delogo if removals present), retimed by speed
     filters.append(
         f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-        f"setpts={_segment_pts(seg)}{delogo_chain}[seg{idx}_src]"
+        f"setpts={_segment_pts(seg)}{_speed_resample(seg, profile.fps)}"
+        f"{delogo_chain}[seg{idx}_src]"
     )
 
     # 2+3. Background + split into copies for regions
@@ -170,9 +176,10 @@ def _build_segment_zoom_chain(
 ) -> None:
     """Build filter chain for one segment with animated zoom.
 
-    Uses FFmpeg time-varying crop expressions to interpolate from
-    the start crop region to the end crop region over the segment
-    duration. After setpts=PTS-STARTPTS, t resets to 0 per segment.
+    Interpolates the crop window (position and size) from the start
+    region to the end region over the segment duration via a per-frame
+    scale followed by a fixed-size crop. After setpts=PTS-STARTPTS, t
+    resets to 0 per segment.
 
     Args:
         filters: Accumulating filter parts (modified in place).
@@ -194,7 +201,8 @@ def _build_segment_zoom_chain(
     # time (the easing below spans seg_dur_s, which is already speed-scaled)
     filters.append(
         f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-        f"setpts={_segment_pts(seg)}{delogo_chain}[seg{idx}_src]"
+        f"setpts={_segment_pts(seg)}{_speed_resample(seg, profile.fps)}"
+        f"{delogo_chain}[seg{idx}_src]"
     )
 
     # Build easing progress expression
@@ -221,10 +229,17 @@ def _build_segment_zoom_chain(
     crop_x = lerp(zoom.start_x, zoom.end_x)
     crop_y = lerp(zoom.start_y, zoom.end_y)
 
-    # Apply zoom crop and scale
+    # FFmpeg's crop evaluates w/h once at configuration, so a time-varying
+    # crop size never animates (#69, measured: the window snapped to one size
+    # while x/y kept panning, drifting the target off-centre). Instead scale
+    # the whole frame per frame by canvas/window, then cut a fixed canvas-sized
+    # window whose offset is the window origin in the scaled frame. Dimensions
+    # round up to even so the scaled frame always covers the canvas.
     crop_scale = (
-        f"crop=w='{crop_w}':h='{crop_h}':x='{crop_x}':y='{crop_y}',"
-        f"scale={cw}:{ch},setsar=1"
+        f"scale=w='2*ceil(iw*{cw}/{crop_w}/2)':h='2*ceil(ih*{ch}/{crop_h}/2)'"
+        f":eval=frame,"
+        f"crop=w={cw}:h={ch}:x='{crop_x}*{cw}/{crop_w}':y='{crop_y}*{ch}/{crop_h}',"
+        f"setsar=1"
     )
 
     if seg.color is not None:
@@ -264,6 +279,7 @@ def _build_segment_track_chain(
     cw: int,
     ch: int,
     removals: list | None = None,
+    fps: int = 30,
 ) -> None:
     """Speaker-following framing: one crop path per shot piece, concatenated.
 
@@ -285,7 +301,8 @@ def _build_segment_track_chain(
             f"scale={cw}:{ch}:flags=lanczos,setsar=1[{label}]"
         )
         labels.append(label)
-    speed = f",setpts=PTS/{seg.speed}" if seg.speed != 1.0 else ""
+    speed = (f",setpts=PTS/{seg.speed}{_speed_resample(seg, fps)}"
+             if seg.speed != 1.0 else "")
     joined = f"seg{idx}_tracked"
     if len(labels) == 1:
         filters.append(f"[{labels[0]}]null{speed}[{joined}]")
@@ -324,7 +341,7 @@ def _build_segment_plain_chain(
 
     trim_scale = (
         f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-        f"setpts={_segment_pts(seg)}{delogo_chain},"
+        f"setpts={_segment_pts(seg)}{_speed_resample(seg, profile.fps)}{delogo_chain},"
         f"scale={profile.width}:{profile.height},setsar=1"
     )
 

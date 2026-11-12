@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from clipcannon.config import ClipCannonConfig
+from clipcannon.config import projects_dir as _cfg_projects_dir
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import fetch_one
-from clipcannon.exceptions import ClipCannonError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ============================================================
 # PLATFORM -> RENDER PROFILE MAPPING
@@ -43,16 +45,12 @@ def error_response(
 
 
 def projects_dir() -> Path:
-    """Resolve projects base directory from config or default.
+    """Resolve the configured projects directory (no fallback, see config.projects_dir).
 
     Returns:
         Absolute path to the projects directory.
     """
-    try:
-        config = ClipCannonConfig.load()
-        return config.resolve_path("directories.projects")
-    except ClipCannonError:
-        return Path.home() / ".clipcannon" / "projects"
+    return _cfg_projects_dir()
 
 
 def db_path(project_id: str) -> Path:

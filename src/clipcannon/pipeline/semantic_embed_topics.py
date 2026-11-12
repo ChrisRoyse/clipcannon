@@ -161,20 +161,18 @@ def _compute_sentiment(texts: list[str]) -> list[dict[str, object]]:
     Returns:
         List of {label: 'POSITIVE'/'NEGATIVE', score: float} dicts.
     """
-    try:
-        from transformers import pipeline as hf_pipeline
+    # No substitute on failure: a NEUTRAL/0.5 placeholder would be stored as if
+    # it were a measurement (#68). Errors propagate and fail the stage.
+    from transformers import pipeline as hf_pipeline
 
-        classifier = hf_pipeline(
-            "sentiment-analysis",
-            model="distilbert/distilbert-base-uncased-finetuned-sst-2-english",
-            device="cpu",  # CPU is fast enough for text classification
-            batch_size=32,
-        )
-        results = classifier(texts, truncation=True, max_length=512)
-        return [{"label": r["label"], "score": round(r["score"], 3)} for r in results]
-    except Exception as exc:
-        logger.warning("Sentiment analysis failed: %s", exc)
-        return [{"label": "NEUTRAL", "score": 0.5} for _ in texts]
+    classifier = hf_pipeline(
+        "sentiment-analysis",
+        model="distilbert/distilbert-base-uncased-finetuned-sst-2-english",
+        device="cpu",  # CPU is fast enough for text classification
+        batch_size=32,
+    )
+    results = classifier(texts, truncation=True, max_length=512)
+    return [{"label": r["label"], "score": round(r["score"], 3)} for r in results]
 
 
 def _extract_keywords(

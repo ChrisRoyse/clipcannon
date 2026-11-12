@@ -250,35 +250,30 @@ def _insert_results(
         for idx, (start_ms, _end_ms, emb) in enumerate(embeddings):
             sc = next((c for c, ii in cluster_map.items() if idx in ii), 0)
             emb_bytes = struct.pack(f"{len(emb)}f", *emb.tolist())
-            try:
-                vec_conn.execute(
-                    "INSERT INTO vec_speakers"
-                    " (project_id, segment_text,"
-                    " timestamp_ms, speaker_id,"
-                    " speaker_embedding)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    (
-                        project_id,
-                        "",
-                        start_ms,
-                        speaker_ids.get(sc, 1),
-                        emb_bytes,
-                    ),
-                )
-                vec_inserted += 1
-            except Exception as ve:
-                if vec_inserted == 0:
-                    logger.error(
-                        "vec_speakers insert FAILED — %d embeddings LOST: %s",
-                        len(embeddings), ve,
-                    )
-                    break
-                raise
+            vec_conn.execute(
+                "INSERT INTO vec_speakers"
+                " (project_id, segment_text,"
+                " timestamp_ms, speaker_id,"
+                " speaker_embedding)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    project_id,
+                    "",
+                    start_ms,
+                    speaker_ids.get(sc, 1),
+                    emb_bytes,
+                ),
+            )
+            vec_inserted += 1
         vec_conn.commit()
         counts["vec_speakers"] = vec_inserted
     except Exception as exc:
-        logger.error("vec_speakers inserts FAILED — embeddings LOST: %s", exc)
-        counts["vec_speakers"] = 0
+        # Embeddings are not "lost" with a success result (#68): fail the stage.
+        vec_conn.rollback()
+        raise PipelineError(
+            f"vec_speakers insert failed ({len(embeddings)} embeddings): {exc}",
+            stage_name=STAGE, operation=OPERATION,
+        ) from exc
     finally:
         vec_conn.close()
     return counts
@@ -307,8 +302,9 @@ def _insert_fallback_speaker(db_path: Path, project_id: str) -> dict[str, int]:
         return {"speakers": 1, "fallback": True}
     except Exception as exc:
         conn.rollback()
-        logger.error("Fallback speaker insertion failed: %s", exc)
-        return {"speakers": 0, "fallback": True}
+        raise PipelineError(
+            f"Single-speaker insertion failed: {exc}", stage_name=STAGE, operation=OPERATION,
+        ) from exc
     finally:
         conn.close()
 
@@ -344,8 +340,11 @@ async def run_speaker_embed(
             speech_segments = await asyncio.to_thread(_detect_speech_vad, audio, sample_rate)
             logger.info("VAD detected %d speech segments", len(speech_segments))
         except (ImportError, RuntimeError) as vad_err:
-            logger.warning("Silero VAD failed, using energy fallback: %s", vad_err)
-            speech_segments = await asyncio.to_thread(_detect_speech_energy, audio, sample_rate)
+            # No energy-threshold substitute for the VAD instrument (#68).
+            return StageResult(
+                success=False, operation=OPERATION,
+                error_message=f"SPEAKER_VAD_UNAVAILABLE: Silero VAD failed: {vad_err}",
+            )
         if not speech_segments:
             logger.warning("No speech segments, using fallback speaker")
             await asyncio.to_thread(_insert_fallback_speaker, db_path, project_id)
@@ -364,28 +363,11 @@ async def run_speaker_embed(
             )
             logger.info("Extracted %d speaker embeddings", len(embeddings))
         except (ImportError, OSError, RuntimeError) as model_err:
-            logger.warning("WavLM failed, fallback to speaker_0: %s", model_err)
-            backend_name = "fallback"
-            await asyncio.to_thread(_insert_fallback_speaker, db_path, project_id)
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            input_sha = await asyncio.to_thread(sha256_file, audio_path)
-            record_provenance(
-                db_path=db_path,
-                project_id=project_id,
-                operation=OPERATION,
-                stage=STAGE,
-                input_info=InputInfo(
-                    file_path=str(audio_path),
-                    sha256=input_sha,
-                    size_bytes=audio_path.stat().st_size,
-                ),
-                output_info=OutputInfo(sha256=sha256_string("fallback_speaker_0"), record_count=1),
-                model_info=ModelInfo(name="fallback", version="1.0"),
-                execution_info=ExecutionInfo(duration_ms=elapsed_ms),
-                parent_record_id=None,
-                description="Speaker diarization fallback: all segments -> speaker_0",
+            # Was: assign every segment to speaker_0 and report success (#68).
+            return StageResult(
+                success=False, operation=OPERATION,
+                error_message=f"SPEAKER_MODEL_UNAVAILABLE: WavLM failed: {model_err}",
             )
-            return StageResult(success=True, operation=OPERATION, duration_ms=elapsed_ms)
         if not embeddings:
             await asyncio.to_thread(_insert_fallback_speaker, db_path, project_id)
             return StageResult(

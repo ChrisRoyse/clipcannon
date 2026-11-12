@@ -100,8 +100,10 @@ def _extract_dominant_colors(frame_path: Path, num_colors: int = 5) -> list[str]
             colors.append(f"#{r:02x}{g:02x}{b:02x}")
         return colors
     except Exception as exc:
-        logger.warning("Failed to extract dominant colors from %s: %s", frame_path, exc)
-        return []
+        raise PipelineError(
+            f"Failed to extract dominant colors from {frame_path}: {exc}",
+            stage_name="visual_embed", operation="visual_embedding",
+        ) from exc
 
 
 def _serialize_embedding(embedding: list[float]) -> bytes:

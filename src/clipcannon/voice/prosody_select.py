@@ -11,6 +11,8 @@ import logging
 import sqlite3
 from pathlib import Path
 
+from clipcannon.config import projects_dir as _cfg_projects_dir
+
 logger = logging.getLogger(__name__)
 
 # Style presets map to SQL query conditions
@@ -89,10 +91,7 @@ def select_prosody_reference(
             return None
 
         training_projects = profile.get("training_projects", "[]")
-        try:
-            project_ids = _json.loads(training_projects) if isinstance(training_projects, str) else []
-        except Exception:
-            project_ids = []
+        project_ids = _json.loads(training_projects) if isinstance(training_projects, str) else []
 
     preset = STYLE_PRESETS.get(style, STYLE_PRESETS["best"])
 
@@ -101,7 +100,7 @@ def select_prosody_reference(
 
     # Strategy 1: check per-project analysis.db files
     if project_ids:
-        projects_base = Path.home() / ".clipcannon" / "projects"
+        projects_base = _cfg_projects_dir()
         for pid in project_ids:
             result = _search_prosody_db(
                 projects_base / pid / "analysis.db", pid, preset,
@@ -211,7 +210,7 @@ def get_prosody_stats(
         Dict with total segments, score distribution, style breakdown.
     """
     # Try per-project DB first
-    db_path = Path.home() / ".clipcannon" / "projects" / project_id / "analysis.db"
+    db_path = _cfg_projects_dir() / project_id / "analysis.db"
 
     # Fallback: voice_data prosody.db
     if not db_path.exists() and voice_name:

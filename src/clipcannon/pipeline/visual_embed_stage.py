@@ -103,8 +103,6 @@ async def run_visual_embed(
             )
             conn.commit()
             logger.info("Cleared vec_frames table for re-ingest")
-        except Exception as exc:
-            logger.warning("vec_frames cleanup failed: %s", exc)
         finally:
             conn.close()
 
@@ -115,8 +113,6 @@ async def run_visual_embed(
                 (project_id,),
             )
             conn.commit()
-        except Exception as exc:
-            logger.debug("scenes cleanup skipped: %s", exc)
         finally:
             conn.close()
 

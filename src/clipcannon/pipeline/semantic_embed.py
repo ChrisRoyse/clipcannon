@@ -1,6 +1,7 @@
 """Nomic semantic embedding and topic clustering pipeline stage.
 
-Loads nomic-ai/nomic-embed-text-v1.5 via sentence-transformers to compute
+Runs nomic-ai/nomic-embed-text-v1.5 through the pinned native port
+(``nomic_native``, no remote code, independent of the transformers version) to compute
 768-dim semantic embeddings for each transcript segment, then clusters
 segments into topics using agglomerative clustering with TF-IDF-based
 topic label generation.

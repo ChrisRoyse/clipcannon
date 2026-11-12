@@ -11,6 +11,7 @@ from .filters import (
     _build_delogo_chain,
     _escape_subtitle_path,
     _segment_pts,
+    _speed_resample,
 )
 from .layouts import _build_pip_cmd, _build_split_screen_cmd
 
@@ -159,7 +160,10 @@ def _build_single_segment_cmd(
     if segment.speed != 1.0:
         # Speed adjustment via PTS rescale (separate pass for single-
         # segment path where trim/setpts is handled by -ss/-to seeking)
-        vfilters.append(f"setpts={1.0 / segment.speed}*PTS")
+        vfilters.append(
+            f"setpts={1.0 / segment.speed}*PTS"
+            f"{_speed_resample(segment, profile.fps)}"
+        )
 
     if ass_path is not None:
         escaped = _escape_subtitle_path(ass_path)
@@ -234,7 +238,7 @@ def _build_multi_segment_cmd(
 
         vchain = (
             f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-            f"setpts={pts_expr}{delogo_chain}"
+            f"setpts={pts_expr}{_speed_resample(seg, profile.fps)}{delogo_chain}"
         )
 
         if crop_region is not None:

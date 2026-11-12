@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 
 from clipcannon.db.connection import get_connection
+from clipcannon.db.optional import require_missing_table
 from clipcannon.db.queries import fetch_all, fetch_one
 from clipcannon.tools.discovery_common import _db_path, _error, _validate_project
 
@@ -44,7 +46,8 @@ def _score_cut_point(
         )
         if sg:
             signals.append("silence_gap")
-    except Exception:
+    except sqlite3.OperationalError as _exc:  # absent table only (#68)
+        require_missing_table(_exc)
         pass
 
     # Check sentence endings
@@ -57,7 +60,8 @@ def _score_cut_point(
         )
         if se:
             signals.append("sentence_end")
-    except Exception:
+    except sqlite3.OperationalError as _exc:  # absent table only (#68)
+        require_missing_table(_exc)
         pass
 
     # Check scene boundaries
@@ -70,7 +74,8 @@ def _score_cut_point(
         )
         if sb:
             signals.append("scene_boundary")
-    except Exception:
+    except sqlite3.OperationalError as _exc:  # absent table only (#68)
+        require_missing_table(_exc)
         pass
 
     if len(signals) >= 3:
@@ -205,7 +210,8 @@ async def clipcannon_find_cut_points(
                             "type": "beat_hit",
                             "quality": "good",
                         })
-        except Exception as exc:
+        except sqlite3.OperationalError as exc:  # absent table only (#68)
+            require_missing_table(exc)
             logger.debug("Beat position lookup skipped: %s", exc)
 
     except Exception as exc:

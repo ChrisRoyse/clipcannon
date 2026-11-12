@@ -142,12 +142,8 @@ async def run_highlights(
             )
 
         # Determine max highlights from config
-        try:
-            max_highlights = int(
-                config.get("processing.highlight_count_default"),
-            )
-        except Exception:
-            max_highlights = 20
+        # No silent default (#68): a missing/invalid key raises ConfigError.
+        max_highlights = int(config.get("processing.highlight_count_default"))
 
         # Load all signal data in parallel
         emotions, reactions, topics, scenes, segments = await asyncio.gather(

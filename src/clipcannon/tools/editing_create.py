@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import sqlite3
 import sqlite3 as _sqlite3
 import time
 
 from clipcannon.db.connection import get_connection
+from clipcannon.db.optional import require_missing_table
 from clipcannon.db.queries import execute, fetch_all, fetch_one
 from clipcannon.editing.edl import (
     CanvasSpec,
@@ -271,7 +273,8 @@ async def clipcannon_create_edit(
                                     f"Gap between segments {i+1}-{i+2}: "
                                     f"{gap_ms/1000:.0f}s skipped ({gap_words} words)"
                                 )
-                        except Exception:
+                        except sqlite3.OperationalError as _exc:  # absent table only (#68)
+                            require_missing_table(_exc)
                             pass
 
                     # Check thought completion of current segment
@@ -290,14 +293,18 @@ async def clipcannon_create_edit(
                                     f"Segment {i+1}: may cut mid-thought "
                                     f"(last text: '...{last_text[-40:]}')"
                                 )
-                    except Exception:
+                    except sqlite3.OperationalError as _exc:  # absent table only (#68)
+                        require_missing_table(_exc)
                         pass
             finally:
                 nv_conn.close()
 
         response["narrative_warnings"] = narrative_warnings if narrative_warnings else None
-    except Exception:
-        # Never let narrative validation break edit creation
+    except Exception as exc:
+        # The edit is stored; validation that could not run is reported, not
+        # shown as "no warnings" (#68).
+        logger.exception("Narrative validation failed for %s", edit_id)
         response["narrative_warnings"] = None
+        response["narrative_validation_error"] = f"{type(exc).__name__}: {exc}"
 
     return response

@@ -7,11 +7,11 @@ records, walking chains, and viewing timelines.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mcp.types import Tool
 
-from clipcannon.config import ClipCannonConfig
+from clipcannon.config import projects_dir as _cfg_projects_dir
 from clipcannon.exceptions import ClipCannonError
 from clipcannon.provenance import (
     get_chain_from_genesis,
@@ -19,6 +19,9 @@ from clipcannon.provenance import (
     get_provenance_timeline,
     verify_chain,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +51,7 @@ def _get_db_path(project_id: str) -> Path:
     Returns:
         Path to the project's analysis.db.
     """
-    try:
-        config = ClipCannonConfig.load()
-        projects_dir = config.resolve_path("directories.projects")
-    except ClipCannonError:
-        projects_dir = Path.home() / ".clipcannon" / "projects"
+    projects_dir = _cfg_projects_dir()
     return projects_dir / project_id / "analysis.db"
 
 

@@ -282,8 +282,12 @@ class ClipCannonConfig:
                 merged = _deep_merge(defaults, user_data)
                 logger.info("Loaded user config from %s", path)
             except json.JSONDecodeError as exc:
-                logger.warning("Invalid user config at %s, using defaults: %s", path, exc)
-                merged = defaults
+                # Fail closed (#68): a broken user config must not silently
+                # become the defaults (which may point at another data tree).
+                raise ConfigError(
+                    f"User config at {path} is not valid JSON: {exc}",
+                    details={"path": str(path), "line": exc.lineno, "col": exc.colno},
+                ) from exc
         else:
             logger.info("No user config at %s, using defaults", path)
             merged = defaults
@@ -367,3 +371,13 @@ class ClipCannonConfig:
             Deep copy of the configuration dictionary.
         """
         return deepcopy(self.data)
+
+
+def projects_dir() -> Path:
+    """The configured projects directory; the one resolver every tool uses.
+
+    No fallback: if the config cannot be loaded or validated, ``ConfigError``
+    propagates and the MCP boundary refuses with ``CONFIG_INVALID`` (#68),
+    instead of silently pointing at the default tree.
+    """
+    return ClipCannonConfig.load().resolve_path("directories.projects")

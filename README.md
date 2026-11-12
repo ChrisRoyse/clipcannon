@@ -130,7 +130,7 @@ ClipCannon doesn't dump raw tensors on your model. Every tool returns **compact,
 | *"Where can I cut?"* | `find_safe_cuts` | Cut points where silence, sentence ends, beats, scene changes, on-screen text changes, and energy agree, each with the words on either side, whether the thought is complete, recommended padding in ms, and a safety rating. |
 | *"Will this edit make sense?"* | `get_narrative_flow` | What is said at every boundary, what a gap skips, and warnings like a **promise with no payoff**. |
 | *"What's happening at 3:42?"* | `get_frame` | The frame plus everything around it: transcript, speaker, emotion, topic, shot type, quality, pacing, on-screen text. |
-| *"Find where they talk about pricing."* | `search_content` | Semantic search over the meaning of the speech, falling back to text search. |
+| *"Find where they talk about pricing."* | `search_content` | Semantic search over the meaning of the speech (pinned Nomic instrument); refused, not text-substituted, if the project has no current semantic index. Literal match with `search_type="text"`. |
 | *"Who is talking, and about what?"* | `get_speaker_timeline` | Speaker turns: who (a face identity bound to a voice, or an off-screen voice), whether they are on screen, whether it is a question, and the turn's key topics. Vertical renders automatically frame whoever is speaking. |
 
 <div align="center">

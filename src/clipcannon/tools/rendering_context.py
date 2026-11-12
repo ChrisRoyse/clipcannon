@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 
 from clipcannon.db.connection import get_connection
+from clipcannon.db.optional import require_missing_table
 from clipcannon.db.queries import fetch_all, fetch_one
 from clipcannon.tools.rendering_common import _db_path, _error, _validate_project
 
@@ -71,7 +73,8 @@ async def clipcannon_get_editing_context(
                     (project_id,),
                 )
                 counts[table] = int(row["cnt"]) if row else 0
-            except Exception:
+            except sqlite3.OperationalError as _exc:  # absent table only (#68)
+                require_missing_table(_exc)
                 counts[table] = 0
 
         # Top highlight score
@@ -152,7 +155,8 @@ async def clipcannon_get_editing_context(
                 "WHERE project_id = ? ORDER BY speaking_pct DESC",
                 (project_id,),
             )
-        except Exception:
+        except sqlite3.OperationalError as _exc:  # absent table only (#68)
+            require_missing_table(_exc)
             all_speakers = []
 
         # Narrative analysis (from Qwen3-8B) — table may not exist
@@ -172,7 +176,8 @@ async def clipcannon_get_editing_context(
                     "chapter_boundaries": raw.get("chapter_boundaries", []),
                     "narrative_summary": raw.get("narrative_summary", ""),
                 }
-        except Exception:
+        except sqlite3.OperationalError as _exc:  # absent table only (#68)
+            require_missing_table(_exc)
             narrative_data = None
 
         # Transcript preview — first 500 words
@@ -190,7 +195,8 @@ async def clipcannon_get_editing_context(
                 )
                 words = full_text.split()
                 transcript_preview = " ".join(words[:500])
-        except Exception:
+        except sqlite3.OperationalError as _exc:  # absent table only (#68)
+            require_missing_table(_exc)
             transcript_preview = ""
 
     finally:

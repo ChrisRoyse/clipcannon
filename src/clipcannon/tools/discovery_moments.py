@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 
 from clipcannon.db.connection import get_connection
+from clipcannon.db.optional import require_missing_table
 from clipcannon.db.queries import fetch_all, fetch_one
 from clipcannon.tools.discovery_common import (
     _db_path,
@@ -107,7 +109,8 @@ async def clipcannon_find_best_moments(
                 text_change_timestamps = [
                     int(r["timestamp_ms"]) for r in tce_rows
                 ]
-            except Exception:
+            except sqlite3.OperationalError as _exc:  # absent table only (#68)
+                require_missing_table(_exc)
                 # Table may not exist; proceed without
                 pass
 
@@ -170,7 +173,8 @@ async def clipcannon_find_best_moments(
                     # Boost score by peak emotion (energy 0-1, add up to 0.5)
                     emotion_boost = _emotion_peak_energy * 0.5
                     adjusted_score += emotion_boost
-            except Exception:
+            except sqlite3.OperationalError as _exc:  # absent table only (#68)
+                require_missing_table(_exc)
                 pass  # emotion_curve may not be populated
 
             # Enhancement 2: Speech-content alignment detection
@@ -196,7 +200,8 @@ async def clipcannon_find_best_moments(
                 )
                 if _has_visual_reference:
                     adjusted_score += 0.3  # speech-content alignment boost
-            except Exception:
+            except sqlite3.OperationalError as _exc:  # absent table only (#68)
+                require_missing_table(_exc)
                 pass  # transcript_segments may not be populated
 
             # Enhancement 3: Emphasis pause detection (word gaps > 300ms)
@@ -221,7 +226,8 @@ async def clipcannon_find_best_moments(
                     _emphasis_pauses = int(emphasis_count_row["cnt"])
                     emphasis_boost = min(0.3, _emphasis_pauses * 0.1)
                     adjusted_score += emphasis_boost
-            except Exception:
+            except sqlite3.OperationalError as _exc:  # absent table only (#68)
+                require_missing_table(_exc)
                 pass  # transcript_words may not be joinable
 
             scored_highlights.append({
@@ -254,7 +260,8 @@ async def clipcannon_find_best_moments(
                 na = json_mod.loads(str(na_row["analysis_json"]))
                 story_beats = na.get("story_beats", [])
                 chapter_boundaries = na.get("chapters", [])
-        except Exception:
+        except sqlite3.OperationalError as _exc:  # absent table only (#68)
+            require_missing_table(_exc)
             pass  # narrative_analysis table may not exist
 
         # Build moments from top candidates

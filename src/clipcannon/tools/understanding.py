@@ -8,12 +8,16 @@ and understanding_search.py.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from clipcannon.config import ClipCannonConfig
+from clipcannon.config import projects_dir as _cfg_projects_dir
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all, fetch_one
 from clipcannon.exceptions import ClipCannonError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +30,8 @@ def _error(code: str, message: str, details: dict[str, object] | None = None) ->
 
 
 def _projects_dir() -> Path:
-    """Resolve projects base directory from config or default."""
-    try:
-        config = ClipCannonConfig.load()
-        return config.resolve_path("directories.projects")
-    except ClipCannonError:
-        return Path.home() / ".clipcannon" / "projects"
+    """Resolve the configured projects directory (no fallback, see config.projects_dir)."""
+    return _cfg_projects_dir()
 
 
 def _db_path(project_id: str) -> Path:

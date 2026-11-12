@@ -8,7 +8,7 @@ import shutil
 import time
 from pathlib import Path
 
-from clipcannon.config import ClipCannonConfig
+from clipcannon.config import projects_dir as _cfg_projects_dir
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_one
 from clipcannon.db.schema import PIPELINE_STREAMS, init_project_directory
@@ -52,11 +52,7 @@ def _get_projects_dir() -> Path:
     Returns:
         Absolute path to the projects directory.
     """
-    try:
-        config = ClipCannonConfig.load()
-        return config.resolve_path("directories.projects")
-    except ClipCannonError:
-        return Path.home() / ".clipcannon" / "projects"
+    return _cfg_projects_dir()
 
 
 def _get_db_path(project_id: str) -> Path:

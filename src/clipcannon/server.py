@@ -19,6 +19,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, ImageContent, TextContent, Tool
 
 from clipcannon import __version__
+from clipcannon.error_contract import ensure_contract, exception_error, validate_arguments
 from clipcannon.tools import ALL_TOOL_DEFINITIONS, TOOL_DISPATCHERS
 
 logger = logging.getLogger(__name__)
@@ -82,7 +83,12 @@ def create_server() -> Server:
         """Return all registered tool definitions."""
         return ALL_TOOL_DEFINITIONS
 
-    @server.call_tool()
+    schemas = {t.name: t.inputSchema for t in ALL_TOOL_DEFINITIONS}
+
+    # validate_input=False: the SDK's own validation refuses with plain text and
+    # no code (#68). Arguments are validated below against the same inputSchema
+    # and refused as a typed {code, message, remediation} error instead.
+    @server.call_tool(validate_input=False)
     async def call_tool(
         name: str,
         arguments: dict[str, object] | None = None,
@@ -105,32 +111,24 @@ def create_server() -> Server:
         logger.info("Tool call: %s", name)
 
         dispatch_fn = TOOL_DISPATCHERS.get(name)
+        result: object
         if dispatch_fn is None:
-            error_result = {
+            result = {
                 "error": {
                     "code": "UNKNOWN_TOOL",
                     "message": f"Unknown tool: {name}",
                     "details": {"available_tools": [t.name for t in ALL_TOOL_DEFINITIONS]},
                 },
             }
-            return [
-                TextContent(
-                    type="text",
-                    text=json.dumps(error_result, indent=2, default=str),
-                )
-            ]
-
-        try:
-            result = await dispatch_fn(name, args)
-        except Exception as exc:
-            logger.exception("Tool %s failed", name)
-            result = {
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": f"Tool execution failed: {exc}",
-                    "details": {"tool": name},
-                },
-            }
+        elif (invalid := validate_arguments(schemas[name], args)) is not None:
+            result = invalid
+        else:
+            try:
+                result = await dispatch_fn(name, args)
+            except Exception as exc:  # boundary: converted to a typed refusal, never success
+                logger.exception("Tool %s failed", name)
+                result = exception_error(exc, name)
+        ensure_contract(result)
 
         contents: list[TextContent | ImageContent] = []
 

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 from clipcannon.db.connection import get_connection
+from clipcannon.db.optional import require_missing_table
 from clipcannon.db.queries import fetch_all, fetch_one
 from clipcannon.tools.rendering_common import _db_path, _error, _project_dir
 
@@ -129,7 +131,8 @@ async def clipcannon_get_scene_map(
                         (project_id, start_ms, end_ms),
                     )
                 ]
-            except Exception:
+            except sqlite3.OperationalError as _exc:  # absent table only (#68)
+                require_missing_table(_exc)
                 _text_changes = []
             try:
                 _emotion_entries = [
@@ -142,7 +145,8 @@ async def clipcannon_get_scene_map(
                         (project_id, end_ms, start_ms),
                     )
                 ]
-            except Exception:
+            except sqlite3.OperationalError as _exc:  # absent table only (#68)
+                require_missing_table(_exc)
                 _emotion_entries = []
     except Exception as exc:
         return _error(

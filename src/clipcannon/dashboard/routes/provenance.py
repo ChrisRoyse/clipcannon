@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
+from clipcannon.config import projects_dir as _cfg_projects_dir
 from clipcannon.exceptions import ProvenanceError
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/api/provenance", tags=["provenance"])
 PROJECTS_DIR = Path(
     os.environ.get(
         "CLIPCANNON_PROJECTS_DIR",
-        str(Path.home() / ".clipcannon" / "projects"),
+        str(_cfg_projects_dir()),
     )
 )
 

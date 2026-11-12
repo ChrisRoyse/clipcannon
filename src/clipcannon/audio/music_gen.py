@@ -89,14 +89,11 @@ def _validate_output(output_path: Path, requested_duration_s: float) -> int:
             actual_duration_s = frames / rate
             actual_duration_ms = int(actual_duration_s * 1000)
     except Exception as exc:
-        logger.warning(
-            "Cannot read WAV header from %s: %s. Estimating from file size.",
-            output_path, exc,
-        )
-        # ACE-Step v1.5 outputs 16-bit stereo 48kHz: 4 bytes per sample
-        estimated_samples = (file_size - 44) // 4  # 44-byte WAV header
-        actual_duration_ms = int((estimated_samples / 48000) * 1000)
-        actual_duration_s = actual_duration_ms / 1000.0
+        # No size-based estimate (#68): an unreadable header means the output
+        # is not a valid WAV, and its duration is unknown.
+        raise RuntimeError(
+            f"Generated audio at {output_path} has no readable WAV header: {exc}"
+        ) from exc
 
     tolerance = requested_duration_s * 0.10
     if abs(actual_duration_s - requested_duration_s) > max(tolerance, 1.0):

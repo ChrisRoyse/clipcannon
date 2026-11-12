@@ -132,25 +132,20 @@ class _LipSyncScoringMixin:
     def _score_sync(self, video_path: Path, audio_path: Path) -> float:
         """Score audio-visual sync quality using ffprobe-based heuristics.
 
-        If SyncNet is available, uses learned sync scoring.
-        Falls back to file-size heuristic (larger = more detail = better).
+        Uses SyncNet only. There is no proxy score (#68): file size is not a
+        measure of sync, so ranking candidates by it would present a guess
+        as a measurement. Missing SyncNet weights or a scoring failure raise.
         """
-        # Try SyncNet scoring
-        try:
-            syncnet_path = (
-                Path.home() / ".clipcannon" / "models" / "latentsync"
-                / "checkpoints" / "auxiliary" / "syncnet_v2.model"
+        syncnet_path = (
+            Path.home() / ".clipcannon" / "models" / "latentsync"
+            / "checkpoints" / "auxiliary" / "syncnet_v2.model"
+        )
+        if not syncnet_path.exists():
+            raise RuntimeError(
+                f"Best-of-N lip sync needs SyncNet weights at {syncnet_path}; "
+                "install the LatentSync auxiliary checkpoints or request n=1."
             )
-            if syncnet_path.exists():
-                return self._syncnet_score(video_path, audio_path, syncnet_path)
-        except Exception:
-            pass
-
-        # Fallback: file size as proxy (more detail = larger file at same CRF)
-        try:
-            return float(video_path.stat().st_size) / 1e6
-        except Exception:
-            return 0.0
+        return self._syncnet_score(video_path, audio_path, syncnet_path)
 
     def _syncnet_score(
         self, video_path: Path, audio_path: Path, syncnet_path: Path,

@@ -117,7 +117,7 @@ def ffprobe(path: Path) -> dict[str, Any]:
     """Stream/format facts read straight from the container bytes."""
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries",
-         "stream=codec_type,codec_name,width,height,duration,r_frame_rate:"
+         "stream=codec_type,codec_name,width,height,duration,r_frame_rate,nb_frames:"
          "format=duration,size", "-of", "json", str(path)],
         capture_output=True, text=True, check=True).stdout
     return json.loads(out)

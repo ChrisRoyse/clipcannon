@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 
 from clipcannon.db.connection import get_connection
+from clipcannon.db.optional import require_missing_table
 from clipcannon.db.queries import fetch_all, fetch_one
 from clipcannon.tools.discovery_common import _db_path, _error, _validate_project
 from clipcannon.tools.discovery_narrative import PROMISE_KEYWORDS
@@ -85,7 +87,8 @@ async def clipcannon_find_safe_cuts(
                         str(beats_row["beat_positions_ms"])
                     )
                 ]
-        except Exception:
+        except sqlite3.OperationalError as _exc:  # absent table only (#68)
+            require_missing_table(_exc)
             pass
 
         # 3. Pre-fetch scene boundaries
@@ -102,7 +105,8 @@ async def clipcannon_find_safe_cuts(
                 sb_set.add(int(sr["start_ms"]))
                 sb_set.add(int(sr["end_ms"]))
             scene_boundaries = sorted(sb_set)
-        except Exception:
+        except sqlite3.OperationalError as _exc:  # absent table only (#68)
+            require_missing_table(_exc)
             pass
 
         # 4. Pre-fetch text change events (no project_id column)
@@ -115,7 +119,8 @@ async def clipcannon_find_safe_cuts(
                 (),
             )
             text_change_timestamps = [int(r["timestamp_ms"]) for r in tce_rows]
-        except Exception:
+        except sqlite3.OperationalError as _exc:  # absent table only (#68)
+            require_missing_table(_exc)
             pass
 
         # 5. Process each silence gap
@@ -136,7 +141,8 @@ async def clipcannon_find_safe_cuts(
                     "WHERE end_ms <= ? ORDER BY end_ms DESC LIMIT 3",
                     (gap_start + 100,),
                 )
-            except Exception:
+            except sqlite3.OperationalError as _exc:  # absent table only (#68)
+                require_missing_table(_exc)
                 pass
 
             # --- Words after the gap ---
@@ -148,7 +154,8 @@ async def clipcannon_find_safe_cuts(
                     "WHERE start_ms >= ? ORDER BY start_ms ASC LIMIT 3",
                     (gap_end - 100,),
                 )
-            except Exception:
+            except sqlite3.OperationalError as _exc:  # absent table only (#68)
+                require_missing_table(_exc)
                 pass
 
             words_before_text = " ".join(
@@ -176,7 +183,8 @@ async def clipcannon_find_safe_cuts(
                         thought_complete = True
                     elif seg_text.lower().endswith("right"):
                         thought_complete = True
-            except Exception:
+            except sqlite3.OperationalError as _exc:  # absent table only (#68)
+                require_missing_table(_exc)
                 pass
 
             # --- Beat alignment ---
@@ -218,7 +226,8 @@ async def clipcannon_find_safe_cuts(
                 )
                 if emo_row and emo_row.get("energy") is not None:
                     energy = round(float(emo_row["energy"]), 3)
-            except Exception:
+            except sqlite3.OperationalError as _exc:  # absent table only (#68)
+                require_missing_table(_exc)
                 pass
 
             # --- Safety score ---

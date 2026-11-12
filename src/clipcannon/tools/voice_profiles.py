@@ -6,8 +6,7 @@ import logging
 import time
 from pathlib import Path
 
-from clipcannon.config import ClipCannonConfig
-from clipcannon.exceptions import ClipCannonError
+from clipcannon.config import projects_dir as _cfg_projects_dir
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +19,8 @@ def _error(
 
 
 def _projects_dir() -> Path:
-    """Resolve projects base directory from config or default."""
-    try:
-        config = ClipCannonConfig.load()
-        return config.resolve_path("directories.projects")
-    except ClipCannonError:
-        return Path.home() / ".clipcannon" / "projects"
+    """Resolve the configured projects directory (no fallback, see config.projects_dir)."""
+    return _cfg_projects_dir()
 
 
 def _voice_db_path() -> Path:
@@ -79,10 +74,8 @@ def resolve_voice_profile(voice_name: str) -> dict[str, object]:
     reference_audio = None
     training_projects = profile.get("training_projects", "[]")
     import json as _json
-    try:
-        proj_ids = _json.loads(training_projects) if isinstance(training_projects, str) else []
-    except Exception:
-        proj_ids = []
+    # A corrupt training_projects field raises (#68); it is not "no projects".
+    proj_ids = _json.loads(training_projects) if isinstance(training_projects, str) else []
 
     # Look for vocals.wav in any training project
     if proj_ids:
@@ -180,7 +173,7 @@ async def _handle_prepare_voice_data(
         if manifest is not None:
             prosody_manifest = str(manifest)
     except Exception as exc:
-        logger.debug("Prosody manifest export skipped: %s", exc)
+        raise RuntimeError(f"Prosody manifest export failed: {exc}") from exc
 
     elapsed = time.monotonic() - start_time
 

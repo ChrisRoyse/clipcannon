@@ -192,10 +192,12 @@ class ModelManager:
                 self.concurrent,
             )
         except Exception as exc:
-            self.cpu_only = True
-            self.device = "cpu"
-            self.precision = "fp32"
-            logger.warning("Failed to query GPU properties: %s. Falling back to CPU.", exc)
+            # CUDA is available but the device cannot be queried: refuse rather
+            # than silently running the GPU pipeline on CPU (#68).
+            raise GPUError(
+                f"CUDA is available but device {device} cannot be queried: {exc}",
+                details={"device": device},
+            ) from exc
 
     @property
     def loaded_model_names(self) -> list[str]:
@@ -219,8 +221,7 @@ class ModelManager:
 
             return torch.cuda.memory_allocated(_parse_device_index(self.device))
         except Exception as exc:
-            logger.debug("Failed to query VRAM usage: %s", exc)
-            return 0
+            raise GPUError(f"Cannot read VRAM usage on {self.device}: {exc}") from exc
 
     def _get_vram_free(self) -> int:
         """Get available VRAM in bytes.

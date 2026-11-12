@@ -108,10 +108,16 @@ def main() -> int:
     for kind in ("plain", "regions", "zoom", "track"):
         out = render(run, src, kind, 2.0)
         info = ffprobe(out)
-        v, a = float(stream(info, "video")["duration"]), float(stream(info, "audio")["duration"])
-        run.check(f"speed2_{kind}_durations", abs(v - span_s / 2) < 0.1 and abs(a - span_s / 2) < 0.1,
+        vs = stream(info, "video")
+        v, a = float(vs["duration"]), float(stream(info, "audio")["duration"])
+        frames, want_frames = int(vs["nb_frames"]), round(span_s / 2 * 30)
+        # Half a frame (1/60 s), not 0.1 s: a 2-frame overrun must fail (#68).
+        run.check(f"speed2_{kind}_durations",
+                  frames == want_frames and abs(v - span_s / 2) < 1 / 60
+                  and abs(a - span_s / 2) < 1 / 60,
                   before={"source_span_s": span_s, "speed": 2.0},
-                  after={"video_s": v, "audio_s": a, "expected_s": span_s / 2})
+                  after={"video_s": v, "audio_s": a, "video_frames": frames,
+                         "expected_frames": want_frames, "expected_s": span_s / 2})
 
     # Content timing: output t=1.0 at 2x shows source t = 0.5 + 2.0 = 2.5 s.
     plain = run.path("plain_x2.0.mp4")
@@ -146,7 +152,7 @@ def main() -> int:
                      "hevc_nvenc": normalize_codec_name("hevc_nvenc")})
     return run.finish(limitations=[
         "libx264 encode, not NVENC: encoder choice does not affect retiming or crop math",
-        "zoom path: duration only; its crop size is evaluated once by FFmpeg (open issue)"])
+        "zoom path: duration only here; zoom size/position is proven by fsv_zoom.py (#69)"])
 
 
 if __name__ == "__main__":

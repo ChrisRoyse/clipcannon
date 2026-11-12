@@ -231,15 +231,9 @@ async def run_reactions(
                 backend_name = "sensevoice_funasr"
                 logger.info("SenseVoice detected %d reactions", len(reactions))
             except Exception as sv_err:
-                logger.warning(
-                    "SenseVoice failed, using energy fallback: %s",
-                    sv_err,
-                )
-                reactions = await asyncio.to_thread(
-                    _detect_reactions_energy,
-                    audio,
-                    sample_rate,
-                )
+                # SenseVoice is installed and failed: refuse (#68) instead of
+                # answering with a different instrument (energy heuristic).
+                raise RuntimeError(f"SenseVoice reaction detection failed: {sv_err}") from sv_err
         else:
             logger.info(
                 "SenseVoice not available, using energy-based detection",

@@ -121,8 +121,11 @@ class WakeWordDetector:
             ).eval()
             logger.info("Speaker encoder loaded (CPU): %s", _SPEAKER_MODEL_ID)
         except Exception as e:
-            logger.warning("Speaker encoder unavailable: %s", e)
-            self._centroid = None
+            # Was: drop the enrolled centroid, so any voice could wake the agent (#68).
+            raise WakeWordError(
+                f"Speaker encoder {_SPEAKER_MODEL_ID} failed to load: {e}. Speaker "
+                "verification is enrolled for this agent and will not be silently disabled."
+            ) from e
 
     def _append_ring(self, audio: np.ndarray) -> None:
         """Append audio to ring buffer, shifting if full."""

@@ -12,8 +12,7 @@ import secrets
 import time
 from pathlib import Path
 
-from clipcannon.config import ClipCannonConfig
-from clipcannon.exceptions import ClipCannonError
+from clipcannon.config import projects_dir as _cfg_projects_dir
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +26,7 @@ def _error(
 
 def _projects_dir() -> Path:
     """Resolve projects base directory."""
-    try:
-        config = ClipCannonConfig.load()
-        return config.resolve_path("directories.projects")
-    except ClipCannonError:
-        return Path.home() / ".clipcannon" / "projects"
+    return _cfg_projects_dir()
 
 
 async def clipcannon_generate_video(

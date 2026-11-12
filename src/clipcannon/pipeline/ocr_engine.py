@@ -189,11 +189,10 @@ for idx, fp_str in enumerate(frame_list):
     frame_number = int(stem.split('_')[1])
     ts_ms = int((frame_number - 1) * 1000 / extraction_fps)
 
-    try:
-        img = Image.open(fp)
-        img_w, img_h = img.size
-    except Exception:
-        continue
+    # An unreadable frame fails the stage (#68); skipping it would store an
+    # OCR result that silently omits that instant.
+    img = Image.open(fp)
+    img_w, img_h = img.size
 
     temp_path = None
     ocr_input = str(fp)
@@ -215,8 +214,6 @@ for idx, fp_str in enumerate(frame_list):
         scores_list = page['rec_scores']
         polys_list = page.get('dt_polys', [])
 
-    except Exception:
-        continue
     finally:
         if temp_path:
             Path(temp_path).unlink(missing_ok=True)

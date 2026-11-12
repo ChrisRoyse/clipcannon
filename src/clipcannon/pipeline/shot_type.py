@@ -127,12 +127,10 @@ def _classify_shot_types(
             results.append((best_label, round(best_conf, 4)))
 
         except Exception as exc:
-            logger.warning(
-                "Shot type classification failed for %s: %s",
-                frame_path,
-                exc,
-            )
-            results.append(("medium", 0.0))
+            # No ("medium", 0.0) placeholder (#68).
+            raise RuntimeError(
+                f"Shot type classification failed for {frame_path}: {exc}"
+            ) from exc
 
     return results
 

@@ -74,31 +74,24 @@ class _AudioMixMixin:
             volume_db = float(row["volume_db"] or 0)
 
             if not file_path.exists():
-                logger.warning(
-                    "Render %s: audio asset missing: %s",
-                    render_id, file_path,
+                # The edit asks for this asset; rendering without it would
+                # deliver a different edit than requested (#68).
+                raise FileNotFoundError(
+                    f"Render {render_id}: audio asset {asset_type} missing: {file_path}"
                 )
-                continue
 
             if asset_type == "music":
                 # Render MIDI to WAV if needed (compose_music outputs .mid)
                 if file_path.suffix.lower() in (".mid", ".midi"):
-                    try:
-                        from clipcannon.audio.midi_render import render_midi_to_wav
-                        wav_path = temp_dir / f"{file_path.stem}_rendered.wav"
-                        await render_midi_to_wav(file_path, wav_path)
-                        if wav_path.exists():
-                            file_path = wav_path
-                            logger.info(
-                                "Render %s: MIDI rendered to WAV: %s",
-                                render_id, wav_path,
-                            )
-                    except Exception as exc:
-                        logger.warning(
-                            "Render %s: MIDI render failed (%s), "
-                            "continuing without music",
-                            render_id, exc,
+                    from clipcannon.audio.midi_render import render_midi_to_wav
+                    wav_path = temp_dir / f"{file_path.stem}_rendered.wav"
+                    await render_midi_to_wav(file_path, wav_path)
+                    if not wav_path.exists():
+                        raise RuntimeError(
+                            f"Render {render_id}: MIDI render produced no WAV for {file_path}"
                         )
+                    file_path = wav_path
+                    logger.info("Render %s: MIDI rendered to WAV: %s", render_id, wav_path)
                 music_path = file_path
                 music_volume_db = volume_db
             elif asset_type == "sfx":
@@ -163,12 +156,9 @@ class _AudioMixMixin:
                 "Render %s: audio mixed (%d layers, %dms)",
                 render_id, result.layers_mixed, result.duration_ms,
             )
-        except Exception:
-            logger.exception(
-                "Render %s: audio mixing failed, continuing without",
-                render_id,
-            )
-            return None
+        except Exception as exc:
+            # Was: render on without the requested music/SFX (#68).
+            raise RuntimeError(f"Render {render_id}: audio mixing failed: {exc}") from exc
         finally:
             source_audio.unlink(missing_ok=True)
 

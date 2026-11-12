@@ -167,7 +167,9 @@ async def _auto_music_midi(
     except ImportError:
         logger.warning("FluidSynth not available; storing MIDI only")
     except Exception as exc:
-        logger.warning("MIDI render failed, storing MIDI only: %s", exc)
+        # FluidSynth is installed and failed: refuse (#68) rather than store MIDI
+        # as if the rendered track had been produced.
+        raise RuntimeError(f"MIDI render failed for {midi_path}: {exc}") from exc
 
     store_asset_fn(  # type: ignore[operator]
         project_id=project_id, edit_id=edit_id, asset_id=asset_id,

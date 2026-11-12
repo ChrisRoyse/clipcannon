@@ -82,7 +82,7 @@ def _build_per_segment_canvas_cmd(
         # Build video chain for this segment based on its layout
         if seg.canvas is not None and seg.canvas.track is not None:
             _build_segment_track_chain(
-                filter_parts, seg, i, cw, ch, removals=removals,
+                filter_parts, seg, i, cw, ch, removals=removals, fps=profile.fps,
             )
         elif seg.canvas is not None and seg.canvas.zoom is not None:
             _build_segment_zoom_chain(

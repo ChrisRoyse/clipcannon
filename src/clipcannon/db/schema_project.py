@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
+from typing import TYPE_CHECKING
 
+from clipcannon.config import projects_dir as _cfg_projects_dir
 from clipcannon.db.connection import get_connection
 from clipcannon.db.schema_migrations import (
     SCHEMA_VERSION,
@@ -16,6 +17,9 @@ from clipcannon.db.schema_migrations import (
     migrate_to_v4,
 )
 from clipcannon.exceptions import DatabaseError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +52,7 @@ def create_project_db(project_id: str, base_dir: Path | None = None) -> Path:
         DatabaseError: If schema creation fails.
     """
     if base_dir is None:
-        base_dir = Path.home() / ".clipcannon" / "projects"
+        base_dir = _cfg_projects_dir()
 
     project_dir = base_dir / project_id
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -112,7 +116,7 @@ def init_project_directory(project_id: str, base_dir: Path | None = None) -> Pat
         DatabaseError: If database creation fails.
     """
     if base_dir is None:
-        base_dir = Path.home() / ".clipcannon" / "projects"
+        base_dir = _cfg_projects_dir()
 
     project_dir = base_dir / project_id
 

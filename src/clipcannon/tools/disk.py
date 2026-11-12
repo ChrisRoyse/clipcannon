@@ -9,12 +9,14 @@ from __future__ import annotations
 import contextlib
 import logging
 import shutil
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mcp.types import Tool
 
-from clipcannon.config import ClipCannonConfig
-from clipcannon.exceptions import ClipCannonError
+from clipcannon.config import projects_dir as _cfg_projects_dir
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +57,7 @@ def _get_projects_dir() -> Path:
     Returns:
         Absolute path to the projects directory.
     """
-    try:
-        config = ClipCannonConfig.load()
-        return config.resolve_path("directories.projects")
-    except ClipCannonError:
-        return Path.home() / ".clipcannon" / "projects"
+    return _cfg_projects_dir()
 
 
 def _classify_file(file_path: Path, project_dir: Path) -> str:

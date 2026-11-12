@@ -176,9 +176,8 @@ class ClipCannonAdapter:
                     )
                     final_path = enhanced_path
                 except Exception as e:
-                    logger.warning(
-                        "Enhancement failed, using raw: %s", e,
-                    )
+                    # Enhancement is configured on; raw audio is a different output (#68).
+                    raise TTSError(f"Speech enhancement failed: {e}") from e
 
             if not final_path.exists():
                 raise TTSError(

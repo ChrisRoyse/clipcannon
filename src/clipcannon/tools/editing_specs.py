@@ -325,7 +325,8 @@ def auto_generate_captions(
                 len(remapped_chunks), edit_id,
             )
     except Exception as exc:
-        logger.warning("Caption auto-generation failed for edit %s: %s", edit_id, exc)
+        # Captions were requested; an edit without them is not what was asked (#68).
+        raise RuntimeError(f"Caption auto-generation failed for edit {edit_id}: {exc}") from exc
 
 
 # ============================================================

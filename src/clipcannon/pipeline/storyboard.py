@@ -129,9 +129,8 @@ def _generate_grid(
                 Image.Resampling.LANCZOS,
             )
         except Exception as exc:
-            logger.warning("Failed to load frame %s for grid: %s", fp, exc)
-            # Create black cell for missing frames
-            cell_img = Image.new("RGB", (CELL_SIZE, CELL_SIZE), color=(32, 32, 32))
+            # No grey placeholder cell (#68): a storyboard must show real frames.
+            raise RuntimeError(f"Storyboard: cannot load frame {fp}: {exc}") from exc
 
         x_offset = col * CELL_SIZE
         y_offset = row * CELL_SIZE

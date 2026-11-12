@@ -16,6 +16,7 @@ from fastapi import APIRouter
 from fastapi.responses import FileResponse
 
 from clipcannon import __version__
+from clipcannon.config import projects_dir as _cfg_projects_dir
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ router = APIRouter(tags=["home"])
 PROJECTS_DIR = Path(
     os.environ.get(
         "CLIPCANNON_PROJECTS_DIR",
-        str(Path.home() / ".clipcannon" / "projects"),
+        str(_cfg_projects_dir()),
     )
 )
 
@@ -75,7 +76,9 @@ def _get_gpu_status() -> dict[str, str | bool | float | None]:
     except ImportError:
         pass
     except Exception as exc:
-        logger.debug("GPU status check failed: %s", exc)
+        # CUDA present but unreadable is an error, not "no GPU" (#68).
+        logger.error("GPU status check failed: %s", exc)
+        return {"available": None, "error": f"{type(exc).__name__}: {exc}"}
 
     return {
         "available": False,

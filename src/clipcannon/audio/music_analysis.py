@@ -66,15 +66,12 @@ _DEFAULT_BRIEF = MusicBrief(
 
 def _table_exists(conn: object, table_name: str) -> bool:
     """Check if a table exists in the database."""
-    try:
-        row = fetch_one(
-            conn,  # type: ignore[arg-type]
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-            (table_name,),
-        )
-        return row is not None
-    except Exception:
-        return False
+    row = fetch_one(
+        conn,  # type: ignore[arg-type]
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    )
+    return row is not None
 
 
 def _aggregate_emotions(
@@ -95,11 +92,8 @@ def _aggregate_emotions(
         return "neutral", 0.5, 0.5
 
     # Detect which columns exist
-    try:
-        col_info = fetch_all(conn, "PRAGMA table_info(emotion_curve)", ())  # type: ignore[arg-type]
-        col_names = {str(c["name"]) if isinstance(c, dict) else str(c[1]) for c in col_info}
-    except Exception:
-        col_names = set()
+    col_info = fetch_all(conn, "PRAGMA table_info(emotion_curve)", ())  # type: ignore[arg-type]
+    col_names = {str(c["name"]) if isinstance(c, dict) else str(c[1]) for c in col_info}
 
     has_dominant = "dominant_emotion" in col_names
 
@@ -178,11 +172,8 @@ def _determine_energy(
         return "medium"
 
     # Detect column name: real DB uses 'label', test schema uses 'pace_label'
-    try:
-        col_info = fetch_all(conn, "PRAGMA table_info(pacing)", ())  # type: ignore[arg-type]
-        col_names = {str(c["name"]) if isinstance(c, dict) else str(c[1]) for c in col_info}
-    except Exception:
-        col_names = set()
+    col_info = fetch_all(conn, "PRAGMA table_info(pacing)", ())  # type: ignore[arg-type]
+    col_names = {str(c["name"]) if isinstance(c, dict) else str(c[1]) for c in col_info}
 
     label_col = "label" if "label" in col_names else "pace_label"
 
@@ -237,11 +228,8 @@ def _suggest_tempo(
     # Try beat_sections for real tempo data
     if _table_exists(conn, "beat_sections"):
         # Detect column: real DB uses 'tempo_bpm', test schema uses 'avg_bpm'
-        try:
-            col_info = fetch_all(conn, "PRAGMA table_info(beat_sections)", ())  # type: ignore[arg-type]
-            col_names = {str(c["name"]) if isinstance(c, dict) else str(c[1]) for c in col_info}
-        except Exception:
-            col_names = set()
+        col_info = fetch_all(conn, "PRAGMA table_info(beat_sections)", ())  # type: ignore[arg-type]
+        col_names = {str(c["name"]) if isinstance(c, dict) else str(c[1]) for c in col_info}
         bpm_col = "tempo_bpm" if "tempo_bpm" in col_names else "avg_bpm"
 
         rows = fetch_all(

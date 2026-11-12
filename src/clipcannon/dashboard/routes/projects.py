@@ -13,6 +13,8 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
+from clipcannon.config import projects_dir as _cfg_projects_dir
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -20,7 +22,7 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 PROJECTS_DIR = Path(
     os.environ.get(
         "CLIPCANNON_PROJECTS_DIR",
-        str(Path.home() / ".clipcannon" / "projects"),
+        str(_cfg_projects_dir()),
     )
 )
 
@@ -76,8 +78,10 @@ def _query_project_metadata(db_path: Path, project_id: str) -> dict[str, object]
         finally:
             conn.close()
     except Exception as exc:
-        logger.debug("Failed to query project %s: %s", project_id, exc)
-        return None
+        # An unreadable project DB is shown as an error, not hidden (#68).
+        logger.error("Failed to query project %s: %s", project_id, exc)
+        return {"project_id": project_id, "status": "error",
+                "error": f"{type(exc).__name__}: {exc}"}
 
 
 def _query_pipeline_status(db_path: Path, project_id: str) -> dict[str, object]:
@@ -106,7 +110,10 @@ def _query_pipeline_status(db_path: Path, project_id: str) -> dict[str, object]:
         finally:
             conn.close()
     except Exception as exc:
-        logger.debug("Failed to query pipeline status for %s: %s", project_id, exc)
+        # Unknown progress is not 0 % progress (#68).
+        logger.error("Failed to query pipeline status for %s: %s", project_id, exc)
+        return {"error": f"{type(exc).__name__}: {exc}", "completed_stages": None,
+                "progress_pct": None}
 
     progress = len(completed_stages) / len(PIPELINE_STAGES) * 100 if PIPELINE_STAGES else 0
 

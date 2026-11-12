@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute
 from clipcannon.exceptions import PipelineError
+from clipcannon.pipeline.nomic_native import IDENTITY, SemanticInstrumentError
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.pipeline.semantic_embed_store import (
     EMBEDDING_DIM,
@@ -92,21 +93,15 @@ async def run_semantic_embed(
         # Update transcript_segments with sentiment
         conn2 = get_connection(db_path, enable_vec=False, dict_rows=True)
         try:
-            # Ensure sentiment columns exist (for pre-existing DBs)
-            try:
+            # Add sentiment columns on pre-existing DBs (checked, not swallowed)
+            cols = {r["name"] for r in conn2.execute(
+                "PRAGMA table_info(transcript_segments)").fetchall()}
+            if "sentiment" not in cols:
+                conn2.execute("ALTER TABLE transcript_segments ADD COLUMN sentiment TEXT")
+            if "sentiment_score" not in cols:
                 conn2.execute(
-                    "ALTER TABLE transcript_segments ADD COLUMN sentiment TEXT",
-                )
-            except Exception:
-                pass  # Column already exists
-            try:
-                conn2.execute(
-                    "ALTER TABLE transcript_segments ADD COLUMN sentiment_score REAL",
-                )
-            except Exception:
-                pass  # Column already exists
-
-            for seg, sent in zip(segments, sentiments):
+                    "ALTER TABLE transcript_segments ADD COLUMN sentiment_score REAL")
+            for seg, sent in zip(segments, sentiments, strict=True):
                 execute(
                     conn2,
                     "UPDATE transcript_segments SET sentiment = ?, sentiment_score = ? "
@@ -114,22 +109,17 @@ async def run_semantic_embed(
                     (sent["label"], sent["score"], int(seg["segment_id"])),
                 )
             conn2.commit()
-        except Exception as exc:
-            logger.warning("Sentiment update failed: %s", exc)
         finally:
             conn2.close()
 
-        # Prepare texts with search prefix
         texts = [SEARCH_PREFIX + str(seg.get("text", "")) for seg in segments]
-
-        # Compute embeddings
         try:
             embeddings = await asyncio.to_thread(_compute_embeddings, texts)
-        except ImportError as imp_err:
+        except SemanticInstrumentError as exc:
             return StageResult(
                 success=False,
                 operation=OPERATION,
-                error_message=f"sentence-transformers not available: {imp_err}",
+                error_message=f"{exc.code}: {exc} Remediation: {exc.remediation}",
             )
 
         # Cluster into topics
@@ -171,11 +161,12 @@ async def run_semantic_embed(
                 record_count=len(segments),
             ),
             model_info=ModelInfo(
-                name="nomic-embed-text",
-                version="v1.5",
+                name=IDENTITY.model_id,
+                version=IDENTITY.revision,
                 parameters={
                     "embedding_dim": EMBEDDING_DIM,
                     "distance_threshold": DISTANCE_THRESHOLD,
+                    **IDENTITY.as_params(),
                 },
             ),
             execution_info=ExecutionInfo(duration_ms=elapsed_ms),

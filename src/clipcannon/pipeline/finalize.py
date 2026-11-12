@@ -83,8 +83,6 @@ def _check_table_has_data(
         if row and isinstance(row, dict):
             return int(row.get("cnt", 0)) > 0
         return False
-    except Exception:
-        return False
     finally:
         conn.close()
 

@@ -86,7 +86,8 @@ def select_best_reference(
                 best_secs = secs
                 best_path = clip
         except Exception as exc:
-            logger.debug("Failed to score %s: %s", clip.name, exc)
+            # Ranking over a silently reduced set is not "best of N" (#68).
+            raise RuntimeError(f"SECS scoring failed for {clip}: {exc}") from exc
 
     if best_path is None:
         raise ValueError(f"No valid reference clips from {len(candidate_clips)} candidates")

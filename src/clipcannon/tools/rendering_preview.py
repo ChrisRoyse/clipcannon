@@ -126,8 +126,8 @@ async def clipcannon_preview_layout(
         image_payload: dict[str, str] | None = {
             "data": image_b64, "mimeType": "image/jpeg",
         }
-    except Exception:
-        image_payload = None
+    except OSError as exc:
+        return _error("PREVIEW_FAILED", f"Preview written but unreadable: {preview_path}: {exc}")
 
     result: dict[str, object] = {
         "project_id": project_id,

@@ -234,5 +234,5 @@ def _detect_faces_insightface(frame_path: Path) -> list[FaceDetection]:
         return faces
 
     except Exception as exc:
-        logger.warning("InsightFace face detection failed: %s", exc)
-        return []
+        # "No faces" and "detector failed" are different facts (#68).
+        raise RuntimeError(f"InsightFace face detection failed on {frame_path}: {exc}") from exc

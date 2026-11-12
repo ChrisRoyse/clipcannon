@@ -1,22 +1,44 @@
 """Content search MCP tool for ClipCannon.
 
-Provides semantic (vector KNN) and text (SQL LIKE) search across
-transcript segments in a project database.
+Semantic (vector KNN over the pinned Nomic instrument) and text (SQL LIKE)
+search across transcript segments. The two are different instruments: a
+semantic request is never answered with text matches (#68). If the semantic
+index or instrument is missing, the call is refused with a typed error.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import struct
 from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import fetch_all, fetch_one
+from clipcannon.pipeline.nomic_native import (
+    IDENTITY,
+    QUERY_PREFIX,
+    SemanticInstrumentError,
+    get_encoder,
+)
 from clipcannon.tools.understanding import _db_path, _error, _validate_project
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_REINDEX = (
+    "Re-run the semantic_embed stage for this project (clipcannon_ingest), which "
+    "embeds every transcript segment with the pinned instrument; or call again "
+    "with search_type='text' if a literal text match is what you want."
+)
+
+
+def _refuse(code: str, message: str, remediation: str, **details: object) -> dict[str, object]:
+    err = _error(code, message, dict(details))
+    err["error"]["remediation"] = remediation  # type: ignore[index]
+    return err
 
 
 async def clipcannon_search_content(
@@ -25,19 +47,7 @@ async def clipcannon_search_content(
     limit: int = 10,
     search_type: str = "semantic",
 ) -> dict[str, object]:
-    """Search video content by text or semantic similarity.
-
-    Falls back to SQL LIKE search if vector search is unavailable.
-
-    Args:
-        project_id: Project identifier.
-        query: Search query string.
-        limit: Maximum results to return.
-        search_type: "semantic" or "text".
-
-    Returns:
-        Search results with matching segments.
-    """
+    """Search video content by semantic similarity or literal text."""
     if search_type not in ("semantic", "text"):
         return _error(
             "INVALID_PARAMETER",
@@ -49,54 +59,62 @@ async def clipcannon_search_content(
         return err
 
     db = _db_path(project_id)
-    results: list[dict[str, object]] = []
-    actual_type = search_type
-
     if search_type == "semantic":
+        refusal = _check_index(db, project_id)
+        if refusal is not None:
+            return refusal
         try:
-            results = await _semantic_search(db, project_id, query, limit)
-        except Exception as vec_err:
-            logger.warning("Semantic search unavailable, using text: %s", vec_err)
-            actual_type = "text"
-            results = await _text_search(db, project_id, query, limit)
+            results = _semantic_search(db, query, limit)
+        except SemanticInstrumentError as exc:
+            return _refuse(exc.code, str(exc), exc.remediation)
     else:
-        results = await _text_search(db, project_id, query, limit)
+        results = _text_search(db, project_id, query, limit)
 
     return {
         "project_id": project_id,
         "query": query,
-        "search_type": actual_type,
+        "search_type": search_type,
         "result_count": len(results),
         "results": results,
+        **({"instrument": IDENTITY.as_dict()} if search_type == "semantic" else {}),
     }
 
 
-async def _semantic_search(
-    db_path: Path,
-    project_id: str,
-    query: str,
-    limit: int,
-) -> list[dict[str, object]]:
-    """KNN semantic search via sqlite-vec and Nomic embeddings."""
-    import struct
+def _check_index(db_path: Path, project_id: str) -> dict[str, object] | None:
+    """Refuse unless the stored vectors exist and came from the pinned instrument."""
+    conn = get_connection(db_path, enable_vec=True, dict_rows=True)
+    try:
+        row = fetch_one(conn, "SELECT COUNT(*) AS n FROM vec_semantic WHERE project_id = ?",
+                        (project_id,))
+        prov = fetch_one(
+            conn,
+            "SELECT model_parameters FROM provenance WHERE project_id = ? "
+            "AND stage = 'nomic_embed' ORDER BY timestamp_utc DESC LIMIT 1",
+            (project_id,),
+        )
+    finally:
+        conn.close()
+    if not row or int(row["n"]) == 0:
+        return _refuse("SEMANTIC_INDEX_MISSING",
+                       f"Project {project_id} has no semantic vectors (vec_semantic is empty).",
+                       _REINDEX)
+    params = json.loads(prov["model_parameters"]) if prov and prov["model_parameters"] else {}
+    stored = IDENTITY.from_params(params) if isinstance(params, dict) else None
+    if stored != IDENTITY.as_dict():
+        return _refuse(
+            "SEMANTIC_INDEX_STALE",
+            "The stored vectors were not produced by the pinned semantic instrument; "
+            "comparing a query against them would mix two instruments.",
+            _REINDEX,
+            stored_instrument=stored, pinned_instrument=IDENTITY.as_dict(),
+        )
+    return None
 
-    import numpy as np
-    from sentence_transformers import SentenceTransformer
 
-    model = SentenceTransformer(
-        "nomic-ai/nomic-embed-text-v1.5",
-        trust_remote_code=True,
-    )
-    query_embedding = model.encode(
-        [f"search_query: {query}"],
-        show_progress_bar=False,
-    )
-    emb = np.array(query_embedding[0], dtype=np.float32)
-    norm = np.linalg.norm(emb)
-    if norm > 1e-10:
-        emb = emb / norm
+def _semantic_search(db_path: Path, query: str, limit: int) -> list[dict[str, object]]:
+    """KNN semantic search via sqlite-vec and the pinned Nomic encoder."""
+    emb = get_encoder().encode([QUERY_PREFIX + query])[0]
     query_bytes = struct.pack(f"{len(emb)}f", *emb.tolist())
-
     conn = get_connection(db_path, enable_vec=True, dict_rows=True)
     try:
         rows = fetch_all(
@@ -126,33 +144,30 @@ async def _semantic_search(
         return results
     finally:
         conn.close()
-        del model
 
 
-async def _text_search(
+def _text_search(
     db_path: Path,
     project_id: str,
     query: str,
     limit: int,
 ) -> list[dict[str, object]]:
-    """Fallback text search using SQL LIKE."""
+    """Literal text search using SQL LIKE (only when search_type='text')."""
     conn = get_connection(db_path, enable_vec=False, dict_rows=True)
     try:
-        pattern = f"%{query}%"
         rows = fetch_all(
             conn,
             "SELECT segment_id, start_ms, end_ms, text, speaker_id "
             "FROM transcript_segments "
             "WHERE project_id = ? AND text LIKE ? "
             "ORDER BY start_ms LIMIT ?",
-            (project_id, pattern, limit),
+            (project_id, f"%{query}%", limit),
         )
         return [
             {
                 "segment_id": r["segment_id"],
                 "timestamp_ms": r["start_ms"],
                 "text": r["text"],
-                "similarity": 1.0,
                 "speaker_id": r.get("speaker_id"),
             }
             for r in rows

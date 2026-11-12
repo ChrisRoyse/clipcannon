@@ -20,11 +20,11 @@ class ContextManager:
                 self._tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
                 logger.info("Loaded tokenizer from %s", tokenizer_path)
             except Exception as exc:
-                logger.warning(
-                    "Failed to load tokenizer from '%s': %s. "
-                    "Falling back to char-based estimation.",
-                    tokenizer_path, exc,
-                )
+                # A configured tokenizer that fails is an error; char counts are
+                # not token counts (#68). No path configured = explicit estimation.
+                raise RuntimeError(
+                    f"Failed to load tokenizer from '{tokenizer_path}': {exc}"
+                ) from exc
 
     def _count_tokens(self, text: str) -> int:
         if not text:

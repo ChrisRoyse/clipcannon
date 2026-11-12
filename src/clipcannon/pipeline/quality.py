@@ -160,21 +160,13 @@ def _run_pyiqa_scoring(
                 tensor = transform(img).unsqueeze(0).to(device)
                 batch_tensors.append(tensor)
             except Exception as exc:
-                logger.warning("Failed to load frame %s: %s", fp, exc)
-                batch_tensors.append(None)
+                raise RuntimeError(f"Quality: cannot load frame {fp}: {exc}") from exc
 
         for tensor in batch_tensors:
-            if tensor is None:
-                quality_scores.append(50.0)  # Default for failed frames
-                continue
-
-            try:
-                with torch.no_grad():
-                    brisque_raw = metric(tensor).item()
-                quality_scores.append(_brisque_to_quality(brisque_raw))
-            except Exception as exc:
-                logger.warning("BRISQUE scoring failed: %s", exc)
-                quality_scores.append(50.0)
+            # No 50.0 placeholder (#68): a failed score fails the stage.
+            with torch.no_grad():
+                brisque_raw = metric(tensor).item()
+            quality_scores.append(_brisque_to_quality(brisque_raw))
 
         # Progress logging every 100 frames
         scored_so_far = len(quality_scores)
@@ -246,8 +238,7 @@ def _run_laplacian_fallback(frame_paths: list[Path]) -> list[float]:
             quality_scores.append(score)
 
         except Exception as exc:
-            logger.warning("Laplacian scoring failed for %s: %s", fp, exc)
-            quality_scores.append(50.0)
+            raise RuntimeError(f"Laplacian scoring failed for {fp}: {exc}") from exc
 
         # Progress logging every 100 frames
         scored_so_far = idx + 1

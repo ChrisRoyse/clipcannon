@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import base64
+import sqlite3
 from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
+from clipcannon.db.optional import require_missing_table
 from clipcannon.db.queries import fetch_all, fetch_one
 from clipcannon.tools.understanding import _db_path, _error, _project_dir, _validate_project
 
@@ -21,7 +23,8 @@ def _safe_fetch_all(
     """Fetch all rows, returning empty list if the table doesn't exist."""
     try:
         return [dict(r) for r in fetch_all(conn, sql, params)]  # type: ignore[arg-type]
-    except Exception:
+    except sqlite3.OperationalError as _exc:  # absent table only (#68)
+        require_missing_table(_exc)
         return []
 
 _FRAME_INTERVAL_MS = 500  # 2fps => one frame every 500ms
@@ -164,8 +167,8 @@ async def clipcannon_get_frame(
     try:
         image_b64 = base64.b64encode(frame_path.read_bytes()).decode("ascii")
         image_payload = {"data": image_b64, "mimeType": "image/jpeg"}
-    except Exception:
-        image_payload = None
+    except OSError as exc:
+        return _error("FRAME_UNREADABLE", f"Frame {frame_path} cannot be read: {exc}")
 
     result: dict[str, object] = {
         "project_id": project_id,

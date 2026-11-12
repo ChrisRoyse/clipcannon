@@ -334,9 +334,15 @@ async def _handle_generate_video(arguments: dict) -> dict:
             if guard_enabled:
                 try:
                     guard_result = await asyncio.to_thread(_guard_check_video, person, output_path)
-                except Exception as e:  # report, don't hide, a guard that couldn't run
+                except Exception as e:  # a guard that could not run is a refusal (#68)
                     logger.error("Constellation guard failed to run: %s", e)
-                    guard_result = {"status": "error", "passed": False, "error": str(e)}
+                    return _error(
+                        "IDENTITY_GUARD_UNAVAILABLE",
+                        f"Identity guard could not run: {e}. The video was kept at "
+                        f"{output_path} but is unverified.",
+                        {**response, "remediation": "Fix the guard error and retry, or "
+                         "call with the guard disabled to accept an unverified clip."},
+                    )
                 response["identity_guard"] = guard_result
                 if guard_result.get("status") == "checked" and not guard_result["passed"]:
                     return _error(

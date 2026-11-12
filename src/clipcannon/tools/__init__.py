@@ -163,9 +163,11 @@ UNDERSTANDING_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
         name="clipcannon_search_content",
         description=(
-            "Search video content by semantic similarity or text match. "
-            "Returns matching segments with timestamps and scores. "
-            "Falls back to text search if vector model unavailable."
+            "Search video content by semantic similarity (pinned Nomic instrument) "
+            "or literal text match. Semantic results carry a similarity score and "
+            "the instrument identity. A semantic search on a project without a "
+            "current semantic index is refused (SEMANTIC_INDEX_MISSING / "
+            "SEMANTIC_INDEX_STALE); it is never answered with text matches."
         ),
         inputSchema={
             "type": "object",
@@ -176,6 +178,8 @@ UNDERSTANDING_TOOL_DEFINITIONS: list[Tool] = [
                     "type": "integer",
                     "description": "Max results (default: 10)",
                     "default": 10,
+                    "minimum": 1,
+                    "maximum": 200,
                 },
                 "search_type": {
                     "type": "string",

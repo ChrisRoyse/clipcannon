@@ -250,3 +250,17 @@ def _segment_pts(seg: SegmentSpec) -> str:
     if seg.speed != 1.0:
         return f"(PTS-STARTPTS)/{seg.speed}"
     return "PTS-STARTPTS"
+
+
+def _speed_resample(seg: SegmentSpec, fps: int) -> str:
+    """Filter suffix that puts a retimed segment back on the output frame grid.
+
+    After setpts/speed the frames carry timestamps spaced 1/(fps*speed); left
+    to the encoder's rate conversion, a 4 s span at 2x came out 62 frames
+    (2.067 s) against 2.000 s of audio (#68, measured). Resampling to ``fps``
+    and trimming to the exact retimed duration gives span/speed seconds.
+    """
+    if seg.speed == 1.0:
+        return ""
+    dur = (seg.source_end_ms - seg.source_start_ms) / 1000.0 / seg.speed
+    return f",fps={fps},trim=duration={dur:.6f}"

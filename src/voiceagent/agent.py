@@ -226,11 +226,9 @@ class VoiceAgent(_ModelLifecycleMixin):
             self._wake_word = WakeWordDetector()
             logger.info("Wake word detector ready (say 'Hey Jarvis' to activate)")
         except Exception as e:
-            logger.warning(
-                "Wake word unavailable: %s. "
-                "Will activate immediately on any speech.",
-                e,
-            )
+            # Was: activate on any speech (#68). An always-listening agent with
+            # no wake word is a different, unrequested behaviour.
+            raise RuntimeError(f"Wake word detector unavailable: {e}") from e
 
         # Init local audio transport
         from voiceagent.transport.local_audio import LocalAudioTransport
