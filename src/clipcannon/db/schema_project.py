@@ -15,6 +15,7 @@ from clipcannon.db.schema_migrations import (
     migrate_to_v2,
     migrate_to_v3,
     migrate_to_v4,
+    migrate_to_v5,
 )
 from clipcannon.exceptions import DatabaseError
 
@@ -95,6 +96,9 @@ def create_project_db(project_id: str, base_dir: Path | None = None) -> Path:
 
     # Apply v4 migration (MouthMemory tables)
     migrate_to_v4(db_path)
+
+    # Apply v5 migration (per-instrument quality and reaction columns)
+    migrate_to_v5(db_path)
 
     return db_path
 

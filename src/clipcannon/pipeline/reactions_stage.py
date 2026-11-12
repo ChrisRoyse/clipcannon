@@ -10,11 +10,14 @@ from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import batch_insert, fetch_all
+from clipcannon.db.schema_migrations import migrate_to_v5
 from clipcannon.exceptions import PipelineError
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.pipeline.reactions_detect import (
+    ENERGY,
     ENERGY_REACTION_THRESHOLD,
     OPERATION,
+    SENSEVOICE,
     STAGE,
     STRIDE_S,
     WINDOW_S,
@@ -113,10 +116,9 @@ def _merge_overlapping_reactions(
         if str(r["type"]) == str(current["type"]) and int(r["start_ms"]) <= int(current["end_ms"]):
             current["end_ms"] = max(int(current["end_ms"]), int(r["end_ms"]))
             current["duration_ms"] = int(current["end_ms"]) - int(current["start_ms"])
-            current["confidence"] = max(
-                float(current.get("confidence", 0)),
-                float(r.get("confidence", 0)),
-            )
+            # Same instrument per run: both None (SenseVoice) or both scored.
+            confs = [c for c in (current.get("confidence"), r.get("confidence")) if c is not None]
+            current["confidence"] = max(float(c) for c in confs) if confs else None
         else:
             merged.append(current)
             current = dict(r)
@@ -129,35 +131,37 @@ def _insert_reactions(
     db_path: Path,
     project_id: str,
     reactions: list[dict[str, object]],
+    instrument: str,
 ) -> int:
-    """Insert reactions into the database.
+    """Replace the project's reactions with this run's, tagged by instrument.
 
-    Args:
-        db_path: Path to the project database.
-        project_id: Project identifier.
-        reactions: List of reaction dicts.
+    Deletes and inserts in one transaction, so a project never holds rows
+    from two runs (or two instruments).
 
     Returns:
         Number of reactions inserted.
     """
-    if not reactions:
-        return 0
-
+    migrate_to_v5(db_path)
     conn = get_connection(db_path, enable_vec=False, dict_rows=False)
     try:
+        conn.execute("DELETE FROM reactions WHERE project_id = ?", (project_id,))
         rows: list[tuple[object, ...]] = [
             (
                 project_id,
                 int(r["start_ms"]),
                 int(r["end_ms"]),
                 str(r["type"]),
-                float(r.get("confidence", 0.0)),
-                int(r.get("duration_ms", 0)),
-                str(r.get("intensity", "moderate")),
+                None if r.get("confidence") is None else float(r["confidence"]),  # type: ignore[arg-type]
+                int(r["end_ms"]) - int(r["start_ms"]),  # type: ignore[arg-type]
+                r.get("intensity"),
                 str(r.get("context_transcript", ""))[:200],
+                instrument,
             )
             for r in reactions
         ]
+        if not rows:
+            conn.commit()
+            return 0
         batch_insert(
             conn,
             "reactions",
@@ -170,6 +174,7 @@ def _insert_reactions(
                 "duration_ms",
                 "intensity",
                 "context_transcript",
+                "instrument",
             ],
             rows,
         )
@@ -194,8 +199,8 @@ async def run_reactions(
 ) -> StageResult:
     """Execute the reaction detection pipeline stage.
 
-    Tries SenseVoice (FunASR) first, then falls back to energy-based
-    reaction detection for laughter and applause events.
+    SenseVoice (FunASR) when installed, otherwise the energy/spectral
+    heuristic; each row records which instrument produced it.
 
     Args:
         project_id: Project identifier.
@@ -218,31 +223,19 @@ async def run_reactions(
             len(audio) / sample_rate,
         )
 
-        backend_name = "energy_fallback"
-
-        # Try FunASR SenseVoice
+        # Instrument chosen by installation; an installed SenseVoice that
+        # fails fails the stage (#68), it never switches to energy.
         if _check_sensevoice_funasr():
+            backend_name = SENSEVOICE
             try:
-                reactions = await asyncio.to_thread(
-                    _detect_reactions_funasr,
-                    audio,
-                    sample_rate,
-                )
-                backend_name = "sensevoice_funasr"
-                logger.info("SenseVoice detected %d reactions", len(reactions))
+                reactions = await asyncio.to_thread(_detect_reactions_funasr, audio, sample_rate)
             except Exception as sv_err:
-                # SenseVoice is installed and failed: refuse (#68) instead of
-                # answering with a different instrument (energy heuristic).
                 raise RuntimeError(f"SenseVoice reaction detection failed: {sv_err}") from sv_err
         else:
-            logger.info(
-                "SenseVoice not available, using energy-based detection",
-            )
-            reactions = await asyncio.to_thread(
-                _detect_reactions_energy,
-                audio,
-                sample_rate,
-            )
+            backend_name = ENERGY
+            logger.info("FunASR not installed: detecting reactions with %s", ENERGY)
+            reactions = await asyncio.to_thread(_detect_reactions_energy, audio, sample_rate)
+        logger.info("%s detected %d reactions", backend_name, len(reactions))
 
         # Merge overlapping reactions
         reactions = _merge_overlapping_reactions(reactions)
@@ -261,6 +254,7 @@ async def run_reactions(
             db_path,
             project_id,
             reactions,
+            backend_name,
         )
 
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -293,7 +287,12 @@ async def run_reactions(
                 parameters={
                     "window_s": WINDOW_S,
                     "stride_s": STRIDE_S,
-                    "energy_threshold": ENERGY_REACTION_THRESHOLD,
+                    "instrument": backend_name,
+                    **(
+                        {"energy_threshold": ENERGY_REACTION_THRESHOLD}
+                        if backend_name == ENERGY
+                        else {}
+                    ),
                 },
             ),
             execution_info=ExecutionInfo(duration_ms=elapsed_ms),

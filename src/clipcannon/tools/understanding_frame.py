@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from clipcannon.db.connection import get_connection
 from clipcannon.db.optional import require_missing_table
 from clipcannon.db.queries import fetch_all, fetch_one
+from clipcannon.db.schema_migrations import migrate_to_v5
 from clipcannon.tools.understanding import _db_path, _error, _project_dir, _validate_project
 
 if TYPE_CHECKING:
@@ -47,6 +48,7 @@ def _find_nearest_frame(frames_dir: Path, timestamp_ms: int) -> tuple[Path | Non
 
 def _get_moment_context(db: Path, project_id: str, ts: int) -> dict[str, object]:
     """Get transcript/emotion/topic/shot/quality/pacing/OCR/profanity at a moment."""
+    migrate_to_v5(db)
     conn = get_connection(db, enable_vec=False, dict_rows=True)
     try:
         _at = "project_id = ? AND start_ms <= ? AND end_ms >= ?"
@@ -69,7 +71,8 @@ def _get_moment_context(db: Path, project_id: str, ts: int) -> dict[str, object]
         scene = fetch_one(
             conn,
             "SELECT shot_type, shot_type_confidence,"
-            " quality_avg, quality_classification"
+            " quality_avg, quality_classification, quality_instrument,"
+            " sharpness_avg"
             f" FROM scenes WHERE {_at} LIMIT 1",
             _p,
         )
@@ -98,7 +101,11 @@ def _get_moment_context(db: Path, project_id: str, ts: int) -> dict[str, object]
         "shot_type": str(scene.get("shot_type", "")) if scene else None,
         "shot_type_confidence": scene.get("shot_type_confidence") if scene else None,
         "quality": scene.get("quality_avg") if scene else None,
-        "quality_classification": (str(scene.get("quality_classification", "")) if scene else None),
+        "quality_classification": scene.get("quality_classification") if scene else None,
+        # Which instrument filled the scene: brisque -> quality*, laplacian_variance
+        # -> sharpness (raw Laplacian variance, not a 0-100 score).
+        "quality_instrument": scene.get("quality_instrument") if scene else None,
+        "sharpness": scene.get("sharpness_avg") if scene else None,
         "pacing": dict(pace) if pace else None,
         "on_screen_text": str(ost.get("texts", "")) if ost else None,
         "profanity": (

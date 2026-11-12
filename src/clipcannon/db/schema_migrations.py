@@ -215,6 +215,52 @@ def migrate_to_v4(db_path: str | Path) -> bool:
         conn.close()
 
 
+SCHEMA_VERSION_5 = 5
+
+# v5: one column per instrument (#68 follow-up). BRISQUE keeps quality_*,
+# Laplacian variance gets sharpness_*, and rows name their instrument.
+_V5_COLUMNS = {
+    "scenes": (
+        ("quality_instrument", "TEXT"),
+        ("sharpness_avg", "REAL"),
+        ("sharpness_min", "REAL"),
+    ),
+    "reactions": (("instrument", "TEXT"),),
+}
+
+
+def migrate_to_v5(db_path: str | Path) -> bool:
+    """Add the per-instrument columns. Idempotent; prior versions first.
+
+    Raises:
+        DatabaseError: If the migration fails.
+    """
+    current_version = get_schema_version(db_path)
+    if current_version is not None and current_version >= SCHEMA_VERSION_5:
+        return False
+    if current_version is None or current_version < SCHEMA_VERSION_4:
+        migrate_to_v4(db_path)
+
+    conn = get_connection(db_path, enable_vec=False, dict_rows=False)
+    try:
+        for table, columns in _V5_COLUMNS.items():
+            have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            for name, sql_type in columns:
+                if name not in have:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
+        _record_schema_version(conn, SCHEMA_VERSION_5)
+        conn.commit()
+        logger.info("Migrated database to schema version %d: %s", SCHEMA_VERSION_5, db_path)
+        return True
+    except Exception as exc:
+        raise DatabaseError(
+            f"Failed to migrate database to schema v5: {exc}",
+            details={"path": str(db_path), "error": str(exc)},
+        ) from exc
+    finally:
+        conn.close()
+
+
 def get_schema_version(db_path: str | Path) -> int | None:
     """Read the current schema version from a database.
 

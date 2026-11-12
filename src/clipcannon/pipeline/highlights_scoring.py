@@ -136,7 +136,7 @@ def _narrative_completeness(
 
 
 def _visual_variety_score(
-    scenes: list[dict[str, int | float]],
+    scenes: list[dict[str, int | float | None]],
     win_start: int,
     win_end: int,
 ) -> float:
@@ -164,29 +164,24 @@ def _visual_variety_score(
 
 
 def _avg_visual_quality(
-    scenes: list[dict[str, int | float]],
+    scenes: list[dict[str, int | float | None]],
     win_start: int,
     win_end: int,
 ) -> float:
-    """Average visual quality from scenes in the window.
+    """Average BRISQUE quality (0-1) of the window's scenes.
 
-    Args:
-        scenes: Scene data.
-        win_start: Window start ms.
-        win_end: Window end ms.
-
-    Returns:
-        Average quality or 0.5 default.
+    Returns 0.0 when no scene in the window has a BRISQUE reading: the
+    term contributes nothing rather than a placeholder (it was 0.5).
     """
     values: list[float] = []
     for s in scenes:
         if int(s["start_ms"]) >= win_end:
             break
-        if int(s["end_ms"]) <= win_start:
+        if int(s["end_ms"]) <= win_start or s["quality"] is None:
             continue
-        values.append(float(s["quality_avg"]))
+        values.append(float(s["quality"]))
     if not values:
-        return 0.5
+        return 0.0
     return sum(values) / len(values)
 
 
@@ -294,7 +289,7 @@ def _score_candidates(
     emotions: list[dict[str, int | float]],
     reactions: list[dict[str, int]],
     topics: list[dict[str, int | float]],
-    scenes: list[dict[str, int | float]],
+    scenes: list[dict[str, int | float | None]],
     segments: list[dict[str, int | str | None]],
     max_highlights: int,
 ) -> list[dict[str, int | float | str]]:

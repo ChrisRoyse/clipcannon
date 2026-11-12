@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS scenes (
     quality_min REAL,
     quality_classification TEXT,
     quality_issues TEXT,
+    quality_instrument TEXT,
+    sharpness_avg REAL,
+    sharpness_min REAL,
     FOREIGN KEY (project_id) REFERENCES project(project_id)
 );
 
@@ -149,6 +152,7 @@ CREATE TABLE IF NOT EXISTS reactions (
     duration_ms INTEGER,
     intensity TEXT,
     context_transcript TEXT,
+    instrument TEXT,
     FOREIGN KEY (project_id) REFERENCES project(project_id)
 );
 

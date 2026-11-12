@@ -21,6 +21,7 @@ from clipcannon.db.schema_migrations import (  # noqa: F401
     SCHEMA_VERSION_2,
     SCHEMA_VERSION_3,
     SCHEMA_VERSION_4,
+    SCHEMA_VERSION_5,
     _create_core_tables,
     _create_vector_tables,
     _record_schema_version,
@@ -28,6 +29,7 @@ from clipcannon.db.schema_migrations import (  # noqa: F401
     migrate_to_v2,
     migrate_to_v3,
     migrate_to_v4,
+    migrate_to_v5,
 )
 from clipcannon.db.schema_project import (  # noqa: F401
     PROJECT_SUBDIRS,

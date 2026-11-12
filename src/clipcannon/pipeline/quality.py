@@ -1,16 +1,23 @@
 """Quality assessment pipeline stage for ClipCannon.
 
-Uses pyiqa BRISQUE scoring for GPU-accelerated image quality assessment.
-Falls back to Laplacian variance blur detection when pyiqa is unavailable.
+Two instruments, never written to the same column:
 
-BRISQUE is an inverse quality metric (lower = better). We convert to
-a 0-100 scale where 100 = best quality using:
-    quality_score = max(0, min(100, 100 - brisque_raw))
+- ``brisque`` (pyiqa, when installed): ``scenes.quality_avg/_min`` on a
+  0-100 scale (100 - BRISQUE raw, higher = better), plus
+  ``quality_classification`` from BRISQUE-calibrated thresholds.
+- ``laplacian_variance`` (when pyiqa is not installed): raw variance of the
+  4-neighbour Laplacian of 512 px luma in ``scenes.sharpness_avg/_min``.
+  It is a blur measure, not a quality score, so no classification.
+
+Every scored scene names its instrument in ``scenes.quality_instrument``;
+the stage clears both column sets first so a re-run never leaves readings
+from two instruments on one project.
 """
 
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import logging
 import time
@@ -18,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all
+from clipcannon.db.schema_migrations import migrate_to_v5
 from clipcannon.pipeline.frame_utils import frame_timestamp_ms
 from clipcannon.pipeline.orchestrator import StageResult
 from clipcannon.provenance import (
@@ -39,13 +47,21 @@ logger = logging.getLogger(__name__)
 OPERATION = "quality_assessment"
 STAGE = "brisque"
 
-# Quality classification thresholds
+BRISQUE = "brisque"
+LAPLACIAN = "laplacian_variance"
+
+# Quality classification thresholds (BRISQUE 0-100 scale only)
 GOOD_THRESHOLD = 60.0
 ACCEPTABLE_THRESHOLD = 40.0
-BLUR_THRESHOLD = 30.0
 
-# Camera shake detection: if std dev of consecutive quality > this value
-SHAKE_VARIANCE_THRESHOLD = 20.0
+# Issue thresholds per instrument, each on its own scale:
+# (heavy_blur below, camera_shake when mean consecutive diff exceeds).
+# Laplacian blur 300 is what the old /10 mapping applied (30 -> 300). Its raw
+# variance is unbounded, so frame-to-frame diffs say nothing about shake: None.
+ISSUE_THRESHOLDS: dict[str, tuple[float, float | None]] = {
+    BRISQUE: (30.0, 20.0),
+    LAPLACIAN: (300.0, None),
+}
 
 
 def _brisque_to_quality(brisque_raw: float) -> float:
@@ -78,35 +94,102 @@ def _classify_quality(score: float) -> str:
     return "poor"
 
 
-def _detect_issues(
-    scores: list[float],
-) -> list[str]:
-    """Detect quality issues from a sequence of scores.
-
-    Args:
-        scores: List of quality scores for frames in a scene.
-
-    Returns:
-        List of issue strings.
-    """
+def _detect_issues(scores: list[float], instrument: str) -> list[str]:
+    """Detect blur/shake issues using the instrument's own thresholds."""
     issues: list[str] = []
-
     if not scores:
         return issues
-
-    # Check for heavy blur
-    min_score = min(scores)
-    if min_score < BLUR_THRESHOLD:
+    blur_below, shake_above = ISSUE_THRESHOLDS[instrument]
+    if min(scores) < blur_below:
         issues.append("heavy_blur")
-
-    # Check for camera shake (high variance between consecutive frames)
-    if len(scores) >= 3:
+    if shake_above is not None and len(scores) >= 3:
         diffs = [abs(scores[i] - scores[i - 1]) for i in range(1, len(scores))]
-        avg_diff = sum(diffs) / len(diffs) if diffs else 0.0
-        if avg_diff > SHAKE_VARIANCE_THRESHOLD:
+        if sum(diffs) / len(diffs) > shake_above:
             issues.append("camera_shake")
-
     return issues
+
+
+def _select_instrument() -> tuple[str, str]:
+    """Pick the instrument by installation, before running anything.
+
+    Deciding up front means an ImportError raised *inside* a BRISQUE run
+    (torch, torchvision) fails the stage instead of switching instruments.
+    """
+    if importlib.util.find_spec("pyiqa") is not None:
+        import pyiqa  # type: ignore[import-untyped]
+
+        return BRISQUE, f"pyiqa-{getattr(pyiqa, '__version__', 'unknown')}"
+    return LAPLACIAN, "4-neighbour-512px-luma"
+
+
+def _write_scene_scores(
+    db_path: Path,
+    project_id: str,
+    instrument: str,
+    frame_scores: dict[int, float],
+) -> int:
+    """Clear both instruments' columns, then write this run's readings.
+
+    Returns:
+        Number of scenes that received a reading.
+
+    Raises:
+        RuntimeError: If scenes exist but no frame fell inside any of them.
+    """
+    migrate_to_v5(db_path)
+    conn = get_connection(db_path, enable_vec=False, dict_rows=True)
+    try:
+        scenes = fetch_all(
+            conn,
+            "SELECT scene_id, start_ms, end_ms FROM scenes WHERE project_id = ? ORDER BY start_ms",
+            (project_id,),
+        )
+        execute(
+            conn,
+            "UPDATE scenes SET quality_avg = NULL, quality_min = NULL,"
+            " quality_classification = NULL, quality_issues = NULL,"
+            " quality_instrument = NULL, sharpness_avg = NULL, sharpness_min = NULL"
+            " WHERE project_id = ?",
+            (project_id,),
+        )
+        scored = 0
+        for scene in scenes:
+            start_ms, end_ms = int(scene["start_ms"]), int(scene["end_ms"])  # type: ignore[arg-type]
+            vals = [s for ts, s in sorted(frame_scores.items()) if start_ms <= ts <= end_ms]
+            if not vals:
+                continue
+            avg, low = round(sum(vals) / len(vals), 2), round(min(vals), 2)
+            issues = _detect_issues(vals, instrument)
+            issues_json = json.dumps(issues) if issues else None
+            if instrument == BRISQUE:
+                sql = (
+                    "UPDATE scenes SET quality_avg = ?, quality_min = ?,"
+                    " quality_classification = ?, quality_issues = ?,"
+                    " quality_instrument = ? WHERE scene_id = ?"
+                )
+                params: tuple[object, ...] = (
+                    avg, low, _classify_quality(avg), issues_json, instrument, scene["scene_id"],
+                )
+            else:
+                sql = (
+                    "UPDATE scenes SET sharpness_avg = ?, sharpness_min = ?,"
+                    " quality_issues = ?, quality_instrument = ? WHERE scene_id = ?"
+                )
+                params = (avg, low, issues_json, instrument, scene["scene_id"])
+            execute(conn, sql, params)
+            scored += 1
+        if scenes and scored == 0:
+            raise RuntimeError(
+                f"{len(scenes)} scenes but no scored frame fell inside any scene; "
+                "frame timestamps and scene ranges disagree"
+            )
+        conn.commit()
+        return scored
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _run_pyiqa_scoring(
@@ -190,19 +273,19 @@ def _run_pyiqa_scoring(
     return quality_scores
 
 
-def _run_laplacian_fallback(frame_paths: list[Path]) -> list[float]:
-    """Fallback quality scoring using Laplacian variance for blur detection.
+def _run_laplacian_scoring(frame_paths: list[Path]) -> list[float]:
+    """Laplacian variance (blur measure) per frame.
 
     Args:
         frame_paths: Paths to frame files.
 
     Returns:
-        List of quality scores (0-100 scale) for each frame.
+        Raw Laplacian variance of each frame's 512 px luma.
     """
     import numpy as np
     from PIL import Image
 
-    logger.info("Using Laplacian variance fallback for quality assessment")
+    logger.info("pyiqa not installed: measuring sharpness (Laplacian variance), not BRISQUE")
 
     quality_scores: list[float] = []
     total_frames = len(frame_paths)
@@ -230,12 +313,9 @@ def _run_laplacian_fallback(frame_paths: list[Path]) -> list[float]:
                 for dj in range(3):
                     laplacian += padded[di : di + h, dj : dj + w] * kernel[di, dj]
 
-            variance = float(np.var(laplacian))
-
-            # Map variance to 0-100 quality score
-            # Typical range: blurry=0-100, sharp=500+
-            score = max(0.0, min(100.0, variance / 10.0))
-            quality_scores.append(score)
+            # Raw variance, unclamped: blurry ~0-100, sharp 500+. Not a
+            # 0-100 quality score, so it is stored in sharpness_* only.
+            quality_scores.append(float(np.var(laplacian)))
 
         except Exception as exc:
             raise RuntimeError(f"Laplacian scoring failed for {fp}: {exc}") from exc
@@ -261,9 +341,8 @@ async def run_quality(
 ) -> StageResult:
     """Execute quality assessment on all frames and update scene records.
 
-    Uses pyiqa BRISQUE if available, falls back to Laplacian variance.
-    Updates each scene with quality_avg, quality_min, quality_classification,
-    and quality_issues.
+    BRISQUE when pyiqa is installed (scenes.quality_*), otherwise Laplacian
+    variance (scenes.sharpness_*); see the module docstring.
 
     Args:
         project_id: Project identifier.
@@ -295,88 +374,29 @@ async def run_quality(
             len(frame_paths),
         )
 
-        # Try pyiqa first, fall back to Laplacian
-        model_name = "brisque"
-        model_version = "pyiqa"
+        model_name, model_version = _select_instrument()
+        if model_name == BRISQUE:
+            quality_scores = await asyncio.to_thread(_run_pyiqa_scoring, frame_paths, device)
+        else:
+            quality_scores = await asyncio.to_thread(_run_laplacian_scoring, frame_paths)
 
-        try:
-            quality_scores = await asyncio.to_thread(
-                _run_pyiqa_scoring,
-                frame_paths,
-                device,
-            )
-            logger.info("Quality scoring completed with pyiqa BRISQUE")
-        except ImportError:
-            logger.warning("pyiqa not available, using Laplacian fallback")
-            quality_scores = await asyncio.to_thread(
-                _run_laplacian_fallback,
-                frame_paths,
-            )
-            model_name = "laplacian_variance"
-            model_version = "fallback"
-
-        # Build frame -> quality mapping
-        frame_quality: dict[int, float] = {}
-        for fp, score in zip(frame_paths, quality_scores, strict=False):
-            ts_ms = frame_timestamp_ms(fp, extraction_fps)
-            frame_quality[ts_ms] = score
-
-        # Fetch scenes and update with quality metrics
-        conn = get_connection(db_path, enable_vec=False, dict_rows=True)
-        try:
-            scenes = fetch_all(
-                conn,
-                "SELECT scene_id, start_ms, end_ms FROM scenes "
-                "WHERE project_id = ? ORDER BY start_ms",
-                (project_id,),
-            )
-
-            if not scenes:
-                logger.warning("No scenes found to update with quality scores")
-            else:
-                for scene in scenes:
-                    scene_id = int(scene["scene_id"])  # type: ignore[arg-type]
-                    start_ms = int(scene["start_ms"])  # type: ignore[arg-type]
-                    end_ms = int(scene["end_ms"])  # type: ignore[arg-type]
-
-                    # Collect quality scores for frames in this scene
-                    scene_scores: list[float] = [
-                        score for ts, score in frame_quality.items() if start_ms <= ts <= end_ms
-                    ]
-
-                    if not scene_scores:
-                        continue
-
-                    q_avg = sum(scene_scores) / len(scene_scores)
-                    q_min = min(scene_scores)
-                    classification = _classify_quality(q_avg)
-                    issues = _detect_issues(scene_scores)
-
-                    execute(
-                        conn,
-                        "UPDATE scenes SET quality_avg = ?, quality_min = ?, "
-                        "quality_classification = ?, quality_issues = ? "
-                        "WHERE scene_id = ?",
-                        (
-                            round(q_avg, 2),
-                            round(q_min, 2),
-                            classification,
-                            json.dumps(issues) if issues else None,
-                            scene_id,
-                        ),
-                    )
-
-                conn.commit()
-                logger.info("Updated %d scenes with quality metrics", len(scenes))
-        finally:
-            conn.close()
+        frame_quality = {
+            frame_timestamp_ms(fp, extraction_fps): score
+            for fp, score in zip(frame_paths, quality_scores, strict=True)
+        }
+        scenes_scored = await asyncio.to_thread(
+            _write_scene_scores, db_path, project_id, model_name, frame_quality
+        )
+        logger.info("Wrote %s readings to %d scenes", model_name, scenes_scored)
 
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
         avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0.0
+        columns = "quality_*" if model_name == BRISQUE else "sharpness_*"
+        verdict = f" ({_classify_quality(avg_quality)})" if model_name == BRISQUE else ""
 
         content_hash = sha256_string(
-            f"quality:frames={len(quality_scores)},avg={avg_quality:.2f}",
+            f"quality:{model_name}:frames={len(quality_scores)},avg={avg_quality:.2f}",
         )
 
         record_id = record_provenance(
@@ -399,14 +419,17 @@ async def run_quality(
                 version=model_version,
                 parameters={
                     "frames_scored": len(quality_scores),
-                    "avg_quality": round(avg_quality, 2),
+                    "scenes_scored": scenes_scored,
+                    "columns": columns,
+                    "frame_avg": round(avg_quality, 2),
                 },
             ),
             execution_info=ExecutionInfo(duration_ms=elapsed_ms),
             parent_record_id=None,
             description=(
-                f"Quality assessment: {len(quality_scores)} frames, "
-                f"avg={avg_quality:.1f} ({_classify_quality(avg_quality)})"
+                f"Quality assessment [{model_name} -> scenes.{columns}]: "
+                f"{len(quality_scores)} frames, {scenes_scored} scenes, "
+                f"avg={avg_quality:.1f}{verdict}"
             ),
         )
 

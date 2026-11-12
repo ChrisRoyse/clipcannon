@@ -18,6 +18,7 @@ from clipcannon.config import projects_dir as _cfg_projects_dir
 from clipcannon.db import fetch_all, fetch_one, get_connection
 from clipcannon.db.optional import require_missing_table
 from clipcannon.db.queries import table_exists
+from clipcannon.db.schema_migrations import migrate_to_v5
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,9 @@ async def get_timeline(project_id: str) -> dict[str, object]:
             "error": "Project not found",
         }
 
+    # The scenes select names v5 columns; _safe_fetch_all tolerates "no such
+    # column", so an unmigrated DB would silently return no scenes.
+    migrate_to_v5(db_path)
     conn = get_connection(db_path, enable_vec=False, dict_rows=True)
     try:
         scenes = _safe_fetch_all(
@@ -100,7 +104,7 @@ async def get_timeline(project_id: str) -> dict[str, object]:
             SELECT scene_id, start_ms, end_ms, key_frame_path,
                    key_frame_timestamp_ms, visual_similarity_avg,
                    dominant_colors, shot_type, shot_type_confidence,
-                   quality_avg
+                   quality_avg, quality_instrument, sharpness_avg
             FROM scenes
             WHERE project_id = ?
             ORDER BY start_ms

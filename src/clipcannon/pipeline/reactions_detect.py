@@ -1,4 +1,8 @@
-"""Audio loading and reaction detection (SenseVoice and energy fallback)."""
+"""Audio loading and reaction detection: two instruments, tagged per row.
+
+``sensevoice_funasr`` (when FunASR is installed) emits event tags with no
+confidence. ``energy_spectral`` (otherwise) scores RMS/spectral heuristics.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +19,8 @@ TARGET_SR = 16000
 WINDOW_S = 3.0
 STRIDE_S = 1.5
 ENERGY_REACTION_THRESHOLD = 0.15
+SENSEVOICE = "sensevoice_funasr"
+ENERGY = "energy_spectral"
 
 
 def _load_audio(audio_path: Path) -> tuple[np.ndarray, int]:
@@ -58,13 +64,14 @@ def _load_audio(audio_path: Path) -> tuple[np.ndarray, int]:
 
 
 def _check_sensevoice_funasr() -> bool:
-    """Check if FunASR SenseVoice is available."""
-    try:
-        from funasr import AutoModel as FunASRModel  # noqa: F401
+    """Whether FunASR is installed (checked by spec, not by a swallowed import).
 
-        return True
-    except ImportError:
-        return False
+    An installed FunASR that fails to import or run fails the stage; it
+    does not switch the stage to the energy instrument.
+    """
+    import importlib.util
+
+    return importlib.util.find_spec("funasr") is not None
 
 
 def _detect_reactions_funasr(
@@ -87,6 +94,8 @@ def _detect_reactions_funasr(
     stride_samples = int(STRIDE_S * sample_rate)
 
     reactions: list[dict[str, object]] = []
+    # SenseVoice emits event tags without a score: confidence is None, not a
+    # constant. intensity is likewise unmeasured.
 
     pos = 0
     while pos + window_samples <= len(audio):
@@ -106,9 +115,9 @@ def _detect_reactions_funasr(
                         "start_ms": start_ms,
                         "end_ms": end_ms,
                         "type": "laughter",
-                        "confidence": 0.8,
+                        "confidence": None,
                         "duration_ms": end_ms - start_ms,
-                        "intensity": "moderate",
+                        "intensity": None,
                     }
                 )
             if "<applause>" in text_lower or "applause" in text_lower:
@@ -117,9 +126,9 @@ def _detect_reactions_funasr(
                         "start_ms": start_ms,
                         "end_ms": end_ms,
                         "type": "applause",
-                        "confidence": 0.8,
+                        "confidence": None,
                         "duration_ms": end_ms - start_ms,
-                        "intensity": "moderate",
+                        "intensity": None,
                     }
                 )
 

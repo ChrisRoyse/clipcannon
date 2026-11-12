@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import fetch_all, fetch_one
+from clipcannon.db.schema_migrations import migrate_to_v5
 from clipcannon.tools.understanding import _db_path, _error, _validate_project
 from clipcannon.tools.understanding_frame import _safe_fetch_all
 
@@ -58,6 +59,7 @@ async def clipcannon_get_segment_detail(
         return _error("INVALID_PARAMETER", "end_ms must be greater than start_ms")
 
     db = _db_path(project_id)
+    migrate_to_v5(db)
     conn = get_connection(db, enable_vec=False, dict_rows=True)
     try:
         # Time-range overlap condition used by most queries
@@ -114,7 +116,7 @@ async def clipcannon_get_segment_detail(
         reactions = fetch_all(
             conn,
             "SELECT start_ms, end_ms, type, confidence,"
-            " intensity, context_transcript"
+            " intensity, context_transcript, instrument"
             f" FROM reactions WHERE {rq}"
             " ORDER BY start_ms",
             rp,
@@ -172,7 +174,8 @@ async def clipcannon_get_segment_detail(
         scenes = fetch_all(
             conn,
             "SELECT start_ms, end_ms, quality_avg, quality_min,"
-            " quality_classification, quality_issues, shot_type,"
+            " quality_classification, quality_issues, quality_instrument,"
+            " sharpness_avg, sharpness_min, shot_type,"
             " shot_type_confidence, crop_recommendation"
             f" FROM scenes WHERE {rq}"
             " ORDER BY start_ms",

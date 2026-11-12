@@ -25,7 +25,7 @@ from kit import Run, sha256_file
 from clipcannon.audio.music_gen import _validate_output
 from clipcannon.dashboard.routes.projects import _query_project_metadata
 from clipcannon.db.optional import require_missing_table
-from clipcannon.pipeline.quality import _run_laplacian_fallback
+from clipcannon.pipeline.quality import _run_laplacian_scoring
 from clipcannon.pipeline.storyboard import _generate_grid
 
 FRAMES = Path.home() / ".clipcannon" / "projects" / "proj_31a990b2" / "frames"
@@ -54,8 +54,8 @@ def main() -> int:
         bad.write_bytes(good.read_bytes()[:200])  # truncated JPEG
 
         # 1. Quality: good frame scores; broken frame refuses (was: 50.0 placeholder).
-        scores = _run_laplacian_fallback([good])
-        err = raises(lambda: _run_laplacian_fallback([good, bad]))
+        scores = _run_laplacian_scoring([good])
+        err = raises(lambda: _run_laplacian_scoring([good, bad]))
         run.check("quality_refuses_unreadable_frame", len(scores) == 1 and err is not None,
                   before={"old_behaviour": "score 50.0 for the broken frame"},
                   after={"good_score": scores, "broken_error": err})

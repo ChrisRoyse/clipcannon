@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import fetch_all, fetch_one
+from clipcannon.db.schema_migrations import migrate_to_v5
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -131,29 +132,31 @@ def _load_topics(
 def _load_scenes(
     db_path: Path,
     project_id: str,
-) -> list[dict[str, int | float]]:
-    """Load scene data with quality.
+) -> list[dict[str, int | float | None]]:
+    """Load scenes with their BRISQUE quality on a 0-1 scale.
 
-    Args:
-        db_path: Path to the project database.
-        project_id: Project identifier.
+    Only rows whose ``quality_instrument`` is ``brisque`` carry a quality;
+    Laplacian sharpness (``sharpness_*``) and untagged legacy values are a
+    different measurement and give ``None`` (no evidence), never 0.5.
 
     Returns:
-        List of scene dicts with start_ms, end_ms, quality_avg.
+        List of scene dicts with start_ms, end_ms, quality (0-1 or None).
     """
+    migrate_to_v5(db_path)
     conn = get_connection(db_path, enable_vec=False, dict_rows=True)
     try:
         rows = fetch_all(
             conn,
-            "SELECT start_ms, end_ms, quality_avg FROM scenes "
-            "WHERE project_id = ? ORDER BY start_ms",
+            "SELECT start_ms, end_ms,"
+            " CASE WHEN quality_instrument = 'brisque' THEN quality_avg END AS quality"
+            " FROM scenes WHERE project_id = ? ORDER BY start_ms",
             (project_id,),
         )
         return [
             {
                 "start_ms": int(r["start_ms"]),
                 "end_ms": int(r["end_ms"]),
-                "quality_avg": float(r["quality_avg"]) if r.get("quality_avg") is not None else 0.5,
+                "quality": None if r["quality"] is None else float(r["quality"]) / 100.0,
             }
             for r in rows
         ]
