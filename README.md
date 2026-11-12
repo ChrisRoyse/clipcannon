@@ -6,11 +6,11 @@
 
 **Your AI agent can read, write, and reason. ClipCannon lets it *watch* and *listen*.**
 
-A local MCP server that measures the frames, words, voices, emotions, and beats of a video through a panel of frozen AI instruments, then hands your agent **61 tools** to find the meaning, cut the edit, clone the voice, and render the result. All on your own GPU.
+A local MCP server that measures the frames, words, voices, emotions, and beats of a video through a panel of frozen AI instruments, then hands your agent **57 tools** to find the meaning, cut the edit, clone the voice, and render the result. All on your own GPU.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/protocol-MCP-7C3AED?style=for-the-badge)](https://modelcontextprotocol.io)
-[![MCP tools](https://img.shields.io/badge/MCP_tools-61-0ea5e9?style=for-the-badge)](#-the-61-tools)
+[![MCP tools](https://img.shields.io/badge/MCP_tools-57-0ea5e9?style=for-the-badge)](#-the-57-tools)
 [![Pipeline](https://img.shields.io/badge/analysis%20stages-24-22c55e?style=for-the-badge)](#-the-24-stage-pipeline)
 [![License: BSL 1.1](https://img.shields.io/badge/license-BSL%201.1-orange.svg?style=for-the-badge)](LICENSE)
 
@@ -19,7 +19,7 @@ A local MCP server that measures the frames, words, voices, emotions, and beats 
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Chris%20Royse-0A66C2?style=flat-square&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/christopher-royse-b624b596/)
 [![Website](https://img.shields.io/badge/web-clipcannon.com-111827?style=flat-square)](https://www.clipcannon.com)
 
-[Why](#-ai-agents-are-blind-to-video) · [How it sees](#-seven-senses-for-one-moment) · [Meaning](#-meaning-lives-between-the-senses) · [What the agent gets](#-what-your-agent-actually-sees) · [Constellations](#-teleological-constellations-identity-you-can-verify) · [Quick start](#-quick-start) · [Tools](#-the-61-tools) · [Results](#-measured-results) · [Research](#-research)
+[Why](#-ai-agents-are-blind-to-video) · [How it sees](#-seven-senses-for-one-moment) · [Meaning](#-meaning-lives-between-the-senses) · [What the agent gets](#-what-your-agent-actually-sees) · [Constellations](#-teleological-constellations-identity-you-can-verify) · [Quick start](#-quick-start) · [Tools](#-the-57-tools) · [Results](#-measured-results) · [Research](#-research)
 
 </div>
 
@@ -163,7 +163,7 @@ ClipCannon is a **body, not a brain**. It doesn't make editorial decisions. It m
 
 So every time a better model ships, **ClipCannon gets better with no change to the code.** The measurements stay the same; what improves is how well the reasoner composes them. A model that can hold a two-hour scene map in its head, cross-reference emotional peaks against narrative beats, and plan a 10-clip series with callbacks will turn the same tools into much better edits.
 
-Today's agents already cut usable highlight reels. Tomorrow's will produce work you'd expect from a skilled human editor, running on the same 61 tools.
+Today's agents already cut usable highlight reels. Tomorrow's will produce work you'd expect from a skilled human editor, running on the same 57 tools.
 
 ---
 
@@ -361,7 +361,7 @@ claude mcp add clipcannon -- clipcannon
 
 ```bash
 cd config && docker compose up -d
-# Dashboard: http://localhost:3200   License server: http://localhost:3100
+# Dashboard: http://localhost:3200
 ```
 
 **Voice agent ("Jarvis"):**
@@ -426,7 +426,7 @@ action items, and a 3-minute highlight clip of the most important moments.
 
 ---
 
-## 🧰 The 61 tools
+## 🧰 The 57 tools
 
 Every tool is prefixed `clipcannon_`.
 
@@ -443,7 +443,6 @@ Every tool is prefixed `clipcannon_`.
 | **Video generation** | 1 | `generate_video` |
 | **Constellation** | 4 | `list_constellations` · `list_skills` · `expression_sequence` · `clone_video` |
 | **Speakers** | 3 | `get_speakers` · `get_speaker_timeline` · `label_person` |
-| **Billing** | 4 | `credits_balance` · `credits_history` · `credits_estimate` · `spending_limit` |
 | **Disk** | 2 | `disk_status` · `disk_cleanup` |
 | **Config** | 3 | `config_get` · `config_set` · `config_list` |
 
@@ -494,7 +493,7 @@ The same panel-of-frozen-senses approach also trained a [Shakespeare-style LoRA 
               └─────────────┬──────────────┘
                             │ MCP (stdio)
               ┌─────────────▼──────────────┐
-              │  ClipCannon MCP server     │  61 tools
+              │  ClipCannon MCP server     │  57 tools
               └─────────────┬──────────────┘
        ┌────────────────────┼─────────────────────┐
 ┌──────▼───────┐    ┌───────▼────────┐    ┌───────▼────────┐
@@ -547,7 +546,6 @@ src/
   clipcannon/      MCP server, 24-stage pipeline, editing, rendering, audio, voice, provenance, dashboard
   phoenix/         GPU-native avatar engine: render, expression, behavior, video constellations
   voiceagent/      real-time voice assistant and meeting bot (Meet, Teams, Zoom)
-  license_server/  credit billing service
   chrome_extension/ companion extension for the Google Meet bot
 scripts/           model download, GPU validation, bot launchers
 benchmarks/        voice benchmark scripts and raw results

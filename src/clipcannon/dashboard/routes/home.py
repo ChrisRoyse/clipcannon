@@ -1,6 +1,6 @@
 """Home page routes for the ClipCannon dashboard.
 
-Provides the root endpoint with system overview including credit balance,
+Provides the root endpoint with system overview including
 GPU status, recent projects, and system health.
 """
 
@@ -154,7 +154,7 @@ async def api_overview() -> dict[str, object]:
     """Get system overview data as JSON.
 
     Returns:
-        Dictionary with credit balance, GPU status, projects, and health.
+        Dictionary with GPU status, projects, and health.
     """
     return _get_system_overview()
 

@@ -2,7 +2,6 @@
 
 Renders a short (2-5 second) preview of an edit at low quality
 for rapid validation before committing to a full render.
-No credits charged for previews.
 """
 from __future__ import annotations
 

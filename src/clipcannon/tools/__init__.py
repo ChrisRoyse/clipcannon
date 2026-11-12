@@ -13,10 +13,6 @@ from clipcannon.tools.audio import (
     AUDIO_TOOL_DEFINITIONS,
     dispatch_audio_tool,
 )
-from clipcannon.tools.billing_tools import (
-    BILLING_TOOL_DEFINITIONS,
-    dispatch_billing_tool,
-)
 from clipcannon.tools.config_tools import (
     CONFIG_TOOL_DEFINITIONS,
     dispatch_config_tool,
@@ -247,7 +243,6 @@ for _defs, _dispatch in [
     (DISK_TOOL_DEFINITIONS, dispatch_disk_tool),
     (CONFIG_TOOL_DEFINITIONS, dispatch_config_tool),
     (UNDERSTANDING_TOOL_DEFINITIONS, dispatch_understanding_tool),
-    (BILLING_TOOL_DEFINITIONS, dispatch_billing_tool),
     # Phase 2 modules
     (EDITING_TOOL_DEFINITIONS, dispatch_editing_tool),
     (RENDERING_TOOL_DEFINITIONS, dispatch_rendering_tool),
@@ -272,7 +267,6 @@ ALL_TOOL_DEFINITIONS = (
     + DISK_TOOL_DEFINITIONS
     + CONFIG_TOOL_DEFINITIONS
     + UNDERSTANDING_TOOL_DEFINITIONS
-    + BILLING_TOOL_DEFINITIONS
     # Phase 2
     + EDITING_TOOL_DEFINITIONS
     + RENDERING_TOOL_DEFINITIONS
@@ -291,7 +285,6 @@ __all__ = [
     "ALL_TOOL_DEFINITIONS",
     "AUDIO_TOOL_DEFINITIONS",
     "AVATAR_TOOL_DEFINITIONS",
-    "BILLING_TOOL_DEFINITIONS",
     "DISCOVERY_TOOL_DEFINITIONS",
     "EDITING_TOOL_DEFINITIONS",
     "GENERATE_TOOL_DEFINITIONS",
@@ -303,7 +296,6 @@ __all__ = [
     "dispatch_constellation_tool",
     "dispatch_audio_tool",
     "dispatch_avatar_tool",
-    "dispatch_billing_tool",
     "dispatch_discovery_tool",
     "dispatch_editing_tool",
     "dispatch_generate_tool",

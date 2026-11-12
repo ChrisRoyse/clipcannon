@@ -14,7 +14,7 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
             "Render an edit to a platform-ready video file. "
             "Executes the full rendering pipeline: source validation, "
             "caption burn-in, smart crop, FFmpeg encoding, thumbnail "
-            "generation, and provenance recording. Charges 2 credits."
+            "generation, and provenance recording."
         ),
         inputSchema={
             "type": "object",
@@ -66,7 +66,7 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
             "overlay. Returns bounding boxes of detected content "
             "regions (text, UI panels, images) and PIP webcam "
             "position. Use before editing to understand frame "
-            "layout. ~125ms per frame. No credits charged. "
+            "layout. ~125ms per frame. "
             "Pass render_id to analyze a rendered output instead "
             "of the source video."
         ),
@@ -97,7 +97,7 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
         name="clipcannon_preview_clip",
         description=(
             "Render a short (2-5 second) low-quality preview of an edit at a specific time range. "
-            "No credits charged. Uses 540p resolution and fast encoding for quick validation. "
+            "Uses 540p resolution and fast encoding for quick validation. "
             "Pass render_id to preview a rendered output instead of the source video."
         ),
         inputSchema={
@@ -146,8 +146,7 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
             "Generate a single preview frame showing what a canvas "
             "layout looks like at a specific timestamp. Returns a "
             "JPEG image path in ~300ms. Use this to validate region "
-            "coordinates before committing to a full video render. "
-            "No credits charged."
+            "coordinates before committing to a full video render."
         ),
         inputSchema={
             "type": "object",
@@ -255,7 +254,7 @@ RENDERING_TOOL_DEFINITIONS: list[Tool] = [
         description=(
             "Preview a single segment from an edit at low quality (540p) "
             "for quick validation. Returns the preview video path and a "
-            "midpoint frame image. No credits charged. segment_index is "
+            "midpoint frame image. segment_index is "
             "1-based (matching segment numbering in the edit)."
         ),
         inputSchema={

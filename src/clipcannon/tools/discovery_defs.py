@@ -22,7 +22,7 @@ DISCOVERY_TOOL_DEFINITIONS: list[Tool] = [
             "engaged_explanation / screen_walkthrough / calm_narration). "
             "Purpose-aware scoring: 'hook' prefers early segments "
             "with faces, 'cta' prefers late segments, 'tutorial_step' "
-            "prefers text-change events. No credits charged."
+            "prefers text-change events."
         ),
         inputSchema={
             "type": "object",
@@ -69,7 +69,7 @@ DISCOVERY_TOOL_DEFINITIONS: list[Tool] = [
             "convergence: 'perfect' when 3+ signals align (silence + "
             "beat + sentence), 'excellent' for 2 signals, 'good' for "
             "single signals. Convergence points include all contributing "
-            "signal types. No credits charged."
+            "signal types."
         ),
         inputSchema={
             "type": "object",
@@ -103,7 +103,7 @@ DISCOVERY_TOOL_DEFINITIONS: list[Tool] = [
             "what content is being skipped in gaps between segments, "
             "and warns about broken promise-payoff patterns. ALWAYS "
             "call this before create_edit when using non-contiguous "
-            "segments. No credits charged."
+            "segments."
         ),
         inputSchema={
             "type": "object",
@@ -145,7 +145,7 @@ DISCOVERY_TOOL_DEFINITIONS: list[Tool] = [
             "by safety score (safest first). Use these timestamps "
             "directly as segment boundaries in create_edit — the "
             "padding is already calculated. ALWAYS use this tool "
-            "instead of manually picking timestamps. No credits charged."
+            "instead of manually picking timestamps."
         ),
         inputSchema={
             "type": "object",

@@ -1,8 +1,7 @@
 """Rendering MCP tools for ClipCannon.
 
 Provides tools for rendering edits to video files, checking render
-status, and batch rendering multiple edits concurrently. Each render
-charges 2 credits via the license server.
+status, and batch rendering multiple edits concurrently.
 """
 
 from __future__ import annotations
@@ -18,7 +17,6 @@ import logging
 import time
 from pathlib import Path
 
-from clipcannon.billing.license_client import LicenseClient
 from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_all, fetch_one
@@ -45,7 +43,6 @@ from clipcannon.tools.rendering_preview import (
     clipcannon_preview_segment,
 )
 from clipcannon.tools.rendering_render import (
-    _RENDER_CREDITS,
     clipcannon_analyze_frame,
     clipcannon_inspect_render,
     clipcannon_render,

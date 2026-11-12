@@ -12,9 +12,7 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
       - CLIPCANNON_DEV_MODE=true
       - HF_TOKEN=${HF_TOKEN:-}
-      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:-}
     ports:
-      - "3100:3100"   # License server
       - "3200:3200"   # Dashboard
     volumes:
       - clipcannon-data:/root/.clipcannon

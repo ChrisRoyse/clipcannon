@@ -6,7 +6,6 @@ import logging
 import time
 from pathlib import Path
 
-from clipcannon.billing.license_client import LicenseClient
 from clipcannon.config import ClipCannonConfig
 from clipcannon.db.connection import get_connection
 from clipcannon.db.queries import execute, fetch_one
@@ -24,10 +23,6 @@ from clipcannon.tools.rendering_common import (
 logger = logging.getLogger(__name__)
 
 
-# Credits charged per render operation
-_RENDER_CREDITS = 2
-
-
 # ============================================================
 # TOOL 1: clipcannon_render
 # ============================================================
@@ -38,7 +33,7 @@ async def clipcannon_render(
 ) -> dict[str, object]:
     """Render an edit to a video file.
 
-    Loads the EDL, charges credits, executes the render pipeline,
+    Loads the EDL, executes the render pipeline,
     and returns the result with output path and metadata.
 
     Args:
@@ -92,31 +87,6 @@ async def clipcannon_render(
         conn.commit()
     finally:
         conn.close()
-
-    # Charge credits
-    license_client = LicenseClient()
-    try:
-        charge_result = await license_client.charge(
-            operation="render",
-            credits=_RENDER_CREDITS,
-            project_id=project_id,
-        )
-        if not charge_result.success:
-            logger.warning(
-                "Credit charge failed for render %s/%s: %s",
-                project_id,
-                edit_id,
-                charge_result.error,
-            )
-    except Exception as exc:
-        logger.warning(
-            "License server unavailable for render %s/%s: %s",
-            project_id,
-            edit_id,
-            exc,
-        )
-    finally:
-        await license_client.close()
 
     # Execute render
     try:
@@ -186,7 +156,6 @@ async def clipcannon_render(
         "render_duration_ms": result.render_duration_ms,
         "thumbnail_path": str(result.thumbnail_path) if result.thumbnail_path else None,
         "output_sha256": result.output_sha256,
-        "credits_charged": _RENDER_CREDITS,
         "elapsed_ms": elapsed_ms,
     }
 

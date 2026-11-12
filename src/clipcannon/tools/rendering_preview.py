@@ -217,7 +217,6 @@ async def clipcannon_preview_segment(
 
     Renders ONE segment at 540p using fast software encoding for
     quick validation. Extracts a midpoint frame for visual inspection.
-    No credits charged.
 
     Args:
         project_id: Project identifier.
@@ -351,7 +350,6 @@ async def clipcannon_preview_segment(
             "output_duration_ms": segment_duration_ms,
         },
         "resolution": f"{preview_profile.width}x{preview_profile.height}",
-        "credits_charged": 0,
         "elapsed_ms": elapsed_ms,
     }
 

@@ -2,8 +2,7 @@
 
 Provides tools for finding the best moments, querying scenes at
 specific timestamps, and locating natural cut points in long-form
-video content. These are read-only analytical tools that do not
-charge credits.
+video content. These are read-only analytical tools.
 """
 
 from __future__ import annotations

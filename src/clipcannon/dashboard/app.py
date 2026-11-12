@@ -1,7 +1,7 @@
 """ClipCannon dashboard web application.
 
 FastAPI application serving the dashboard UI on port 3200. Provides
-JSON API endpoints for credits, projects, provenance, and system health,
+JSON API endpoints for projects, provenance, and system health,
 along with a static HTML frontend.
 """
 
@@ -117,7 +117,6 @@ def create_app() -> FastAPI:
         }
 
     # Register route modules
-    from clipcannon.dashboard.routes.credits import router as credits_router
     from clipcannon.dashboard.routes.editing import router as editing_router
     from clipcannon.dashboard.routes.home import router as home_router
     from clipcannon.dashboard.routes.projects import router as projects_router
@@ -126,7 +125,6 @@ def create_app() -> FastAPI:
     from clipcannon.dashboard.routes.timeline import router as timeline_router
 
     app.include_router(home_router)
-    app.include_router(credits_router)
     app.include_router(projects_router)
     app.include_router(provenance_router)
     app.include_router(timeline_router)

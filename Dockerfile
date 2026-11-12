@@ -49,15 +49,14 @@ RUN cp config/default_config.json /root/.clipcannon/config.json
 
 # Expose ports
 # 3366 - MCP server (stdio, not a network port)
-# 3100 - License server
 # 3200 - Dashboard
-EXPOSE 3100 3200
+EXPOSE 3200
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:3200/health || exit 1
 
-# Default: run all 3 services
+# Entrypoint script: starts the dashboard
 COPY scripts/docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh || true
 

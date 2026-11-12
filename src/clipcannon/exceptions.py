@@ -56,14 +56,6 @@ class PipelineError(ClipCannonError):
         self.operation = operation
 
 
-class BillingError(ClipCannonError):
-    """Raised when a billing or credit operation fails.
-
-    Covers credit checks, charges, refunds, HMAC validation,
-    and communication with the license server or Stripe.
-    """
-
-
 class ProvenanceError(ClipCannonError):
     """Raised when provenance chain operations fail.
 

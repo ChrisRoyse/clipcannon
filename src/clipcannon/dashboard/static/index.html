@@ -53,20 +53,6 @@
             gap: 20px;
         }
 
-        .balance-badge {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 6px 14px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            font-size: 14px;
-            font-weight: 500;
-        }
-
-        .balance-amount { color: var(--accent); font-weight: 700; }
-
         .status-dot {
             width: 8px;
             height: 8px;
@@ -292,40 +278,6 @@
         .provenance-input input::placeholder { color: var(--text-muted); }
         .provenance-input input:focus { outline: none; border-color: var(--accent); }
 
-        .packages-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 12px;
-            margin-top: 12px;
-        }
-
-        .package-card {
-            padding: 16px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            text-align: center;
-        }
-
-        .package-name {
-            font-weight: 600;
-            font-size: 14px;
-            text-transform: capitalize;
-            margin-bottom: 8px;
-        }
-
-        .package-credits {
-            font-size: 24px;
-            font-weight: 700;
-            color: var(--accent);
-        }
-
-        .package-price {
-            font-size: 13px;
-            color: var(--text-secondary);
-            margin-top: 4px;
-        }
-
         .tab-bar {
             display: flex;
             gap: 0;
@@ -356,9 +308,6 @@
     <div class="header">
         <div class="logo">Clip<span>Cannon</span></div>
         <div class="header-right">
-            <div class="balance-badge">
-                Credits: <span class="balance-amount" id="header-balance">--</span>
-            </div>
             <div>
                 <span class="status-dot" id="health-dot"></span>
                 <span id="health-text" style="font-size:12px;color:var(--text-secondary)">checking...</span>
@@ -370,31 +319,12 @@
         <div class="tab-bar">
             <div class="tab active" data-tab="overview">Overview</div>
             <div class="tab" data-tab="projects">Projects</div>
-            <div class="tab" data-tab="credits">Credits</div>
             <div class="tab" data-tab="provenance">Provenance</div>
         </div>
 
         <!-- OVERVIEW TAB -->
         <div id="tab-overview" class="tab-content active">
             <div class="grid">
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Credit Balance</span>
-                    </div>
-                    <div class="stat-value" id="credit-balance">--</div>
-                    <div class="stat-label">credits remaining</div>
-                    <div style="margin-top:12px">
-                        <div class="stat-row">
-                            <span class="stat-row-label">Spent this month</span>
-                            <span class="stat-row-value" id="credit-spent">--</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-row-label">Monthly limit</span>
-                            <span class="stat-row-value" id="credit-limit">--</span>
-                        </div>
-                    </div>
-                </div>
-
                 <div class="card">
                     <div class="card-header">
                         <span class="card-title">GPU Status</span>
@@ -437,39 +367,6 @@
             </div>
         </div>
 
-        <!-- CREDITS TAB -->
-        <div id="tab-credits" class="tab-content">
-            <div class="grid">
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Balance</span>
-                    </div>
-                    <div class="stat-value" id="credits-detail-balance">--</div>
-                    <div class="stat-label">credits remaining</div>
-                </div>
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-title">Credit Rates</span>
-                    </div>
-                    <div id="credit-rates"></div>
-                </div>
-            </div>
-            <div class="card">
-                <div class="card-header">
-                    <span class="card-title">Available Packages</span>
-                </div>
-                <div id="credit-packages" class="packages-grid"></div>
-            </div>
-            <div class="card" style="margin-top:20px">
-                <div class="card-header">
-                    <span class="card-title">Transaction History</span>
-                </div>
-                <div id="credit-history">
-                    <div class="loading">Loading history...</div>
-                </div>
-            </div>
-        </div>
-
         <!-- PROVENANCE TAB -->
         <div id="tab-provenance" class="tab-content">
             <div class="card">
@@ -501,7 +398,6 @@
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             tab.classList.add('active');
             document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
-            if (tab.dataset.tab === 'credits') loadCreditsTab();
             if (tab.dataset.tab === 'projects') loadAllProjects();
         });
     });
@@ -586,67 +482,6 @@
             (d.recent_projects ? d.recent_projects.length : 0) + ' projects';
     }
 
-    // Credits
-    async function loadCredits() {
-        const d = await api('/api/credits/balance');
-        if (!d) return;
-
-        const bal = d.balance >= 0 ? d.balance : '--';
-        document.getElementById('header-balance').textContent = bal;
-        document.getElementById('credit-balance').textContent = bal;
-        document.getElementById('credit-spent').textContent = d.spending_this_month || 0;
-        document.getElementById('credit-limit').textContent = d.spending_limit || 200;
-
-        if (d.balance < 0) {
-            document.getElementById('credit-balance').style.color = 'var(--text-muted)';
-        }
-    }
-
-    async function loadCreditsTab() {
-        const bal = await api('/api/credits/balance');
-        if (bal) {
-            document.getElementById('credits-detail-balance').textContent =
-                bal.balance >= 0 ? bal.balance : '--';
-        }
-
-        const pkg = await api('/api/credits/packages');
-        if (pkg) {
-            const ratesEl = document.getElementById('credit-rates');
-            let ratesHtml = '';
-            for (const [op, cost] of Object.entries(pkg.credit_rates || {})) {
-                ratesHtml += `<div class="stat-row">
-                    <span class="stat-row-label">${op}</span>
-                    <span class="stat-row-value">${cost} credits</span>
-                </div>`;
-            }
-            ratesEl.innerHTML = ratesHtml;
-
-            const pkgEl = document.getElementById('credit-packages');
-            pkgEl.innerHTML = (pkg.packages || []).map(p => `
-                <div class="package-card">
-                    <div class="package-name">${p.name}</div>
-                    <div class="package-credits">${p.credits}</div>
-                    <div class="package-price">${p.price_display}</div>
-                </div>`).join('');
-        }
-
-        const hist = await api('/api/credits/history');
-        const histEl = document.getElementById('credit-history');
-        if (hist && hist.transactions && hist.transactions.length > 0) {
-            histEl.innerHTML = `<table>
-                <thead><tr><th>ID</th><th>Operation</th><th>Credits</th><th>Project</th><th>Date</th></tr></thead>
-                <tbody>${hist.transactions.map(t => `<tr>
-                    <td style="font-family:monospace;font-size:11px">${t.transaction_id.substring(0,12)}</td>
-                    <td>${t.operation}</td>
-                    <td>${t.credits}</td>
-                    <td>${t.project_id || '-'}</td>
-                    <td>${t.created_at || '-'}</td>
-                </tr>`).join('')}</tbody></table>`;
-        } else {
-            histEl.innerHTML = '<div class="empty-state"><p>No transactions yet.</p></div>';
-        }
-    }
-
     // Projects
     function renderProjectTable(elId, projects, compact) {
         const el = document.getElementById(elId);
@@ -724,7 +559,6 @@
     // Init
     checkHealth();
     loadOverview();
-    loadCredits();
     </script>
 </body>
 </html>

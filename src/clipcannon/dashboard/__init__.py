@@ -1,7 +1,7 @@
 """Dashboard web UI for ClipCannon.
 
 Provides a FastAPI-based web dashboard with JSON API endpoints
-for credits, projects, provenance, and system health. Serves a
+for projects, provenance, and system health. Serves a
 static HTML frontend on port 3200.
 """
 
