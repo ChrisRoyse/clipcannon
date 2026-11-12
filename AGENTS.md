@@ -59,5 +59,5 @@ issue #66 (Context). It inherits the engineering doctrine of `ChrisRoyse/Poly` #
 - **Process hygiene.** Stop only PIDs you launched and recorded; never a name-based sweep
   (`pkill -f python`). GPU: check `nvidia-smi` before a GPU job; one heavy GPU job at a time.
 - **Secrets** never enter the repo, an issue, a log or a report: names only (`HF_TOKEN`,
-  `STRIPE_*`). The pre-commit hook refuses key material and token patterns. Never commit
+  `HUGGINGFACE_TOKEN`). The pre-commit hook refuses key material and token patterns. Never commit
   `.env`. Install the guards once per checkout: `bash scripts/install_git_guards.sh`.
