@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# ClipCannon repository-integrity gate (AGENTS.md). Install once per checkout:
+#   bash scripts/install_git_guards.sh
+set -euo pipefail
+
+fail() {
+  printf '{"ok":false,"code":"%s","message":"%s","remediation":"%s"}\n' "$1" "$2" "$3" >&2
+  exit 1
+}
+
+if ! diff_check="$(git diff --cached --check 2>&1)"; then
+  printf '%s\n' "$diff_check" >&2
+  fail CLIPCANNON_STAGED_DIFF_INVALID "staged changes contain conflict markers or whitespace errors" "fix the lines listed above"
+fi
+
+[[ -z "$(git ls-files -u)" ]] || fail CLIPCANNON_UNMERGED_INDEX "the index has unresolved merge stages" "resolve the merge first"
+
+mapfile -t remotes < <(git remote)
+if [[ "${#remotes[@]}" -ne 1 || "${remotes[0]}" != "origin" ]]; then
+  fail CLIPCANNON_REMOTE_SET_INVALID "the only permitted remote is origin -> ChrisRoyse/clipcannon" "remove other remotes"
+fi
+is_repo_url() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    https://github.com/chrisroyse/clipcannon|https://github.com/chrisroyse/clipcannon.git|\
+    git@github.com:chrisroyse/clipcannon|git@github.com:chrisroyse/clipcannon.git|\
+    ssh://git@github.com/chrisroyse/clipcannon|ssh://git@github.com/chrisroyse/clipcannon.git) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+while IFS= read -r url; do
+  is_repo_url "$url" || fail CLIPCANNON_WRONG_ORIGIN "origin url '$url' is not ChrisRoyse/clipcannon" "git remote set-url origin https://github.com/ChrisRoyse/clipcannon.git"
+done < <(git remote get-url --all origin; git remote get-url --push --all origin)
+
+mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACMR)
+for f in "${staged[@]}"; do
+  # FSV replaces tests and CI (AGENTS.md): neither may come back.
+  case "$f" in
+    .github/workflows/*|.gitlab-ci.yml|.circleci/*|azure-pipelines.yml|Jenkinsfile)
+      fail CLIPCANNON_CI_FORBIDDEN "$f adds a CI/CD pipeline" "verify with an FSV probe in scripts/fsv/ instead" ;;
+    tests/*|*/tests/*|test_*.py|*/test_*.py|*_test.py|conftest.py|*/conftest.py|pytest.ini|tox.ini)
+      fail CLIPCANNON_TESTS_FORBIDDEN "$f adds a test file" "verify with an FSV probe in scripts/fsv/ instead" ;;
+    .env|.env.*|*/.env|*/.env.*)
+      [[ "$f" == *.example ]] || fail CLIPCANNON_SECRET_IN_COMMIT "$f is an env file" "unstage it; commit names only" ;;
+  esac
+  case "$f" in *.pub|*.png|*.jpg|*.jpeg|*.gif|*.webp|*.mp4|*.wav|*.npz|*.ckpt|*.model) continue ;; esac
+  content="$(git show ":$f" 2>/dev/null || true)"
+  if grep -qE -- '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----' <<<"$content"; then
+    fail CLIPCANNON_SECRET_IN_COMMIT "private key material staged in $f" "unstage it; commit names only"
+  fi
+  if grep -qE '(hf_[A-Za-z0-9]{30,}|gh[pousr]_[A-Za-z0-9]{30,}|sk_(live|test)_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})' <<<"$content"; then
+    fail CLIPCANNON_SECRET_IN_COMMIT "an API token pattern is staged in $f" "unstage it; commit names only"
+  fi
+  case "$f" in
+    *.py|*.sh|*.js|*.ts|*.ps1)
+      lines="$(wc -l <<<"$content")"
+      if (( lines > 500 )); then
+        fail CLIPCANNON_FILE_TOO_LONG "$f has $lines lines; the ceiling is 500" "split it by responsibility behind a facade"
+      fi ;;
+  esac
+done
+
+exit 0

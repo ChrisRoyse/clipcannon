@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Last-mile boundary: git passes the real push destination as argument 2.
+set -euo pipefail
+
+destination="${2:-}"
+case "$(printf '%s' "$destination" | tr '[:upper:]' '[:lower:]')" in
+  https://github.com/chrisroyse/clipcannon|https://github.com/chrisroyse/clipcannon.git|\
+  git@github.com:chrisroyse/clipcannon|git@github.com:chrisroyse/clipcannon.git|\
+  ssh://git@github.com/chrisroyse/clipcannon|ssh://git@github.com/chrisroyse/clipcannon.git)
+    exit 0 ;;
+esac
+printf '{"ok":false,"code":"CLIPCANNON_PUSH_DESTINATION_FORBIDDEN","message":"push via %s targets %s; only ChrisRoyse/clipcannon is permitted","remediation":"push to origin"}\n' \
+  "${1:-<url>}" "$destination" >&2
+exit 1

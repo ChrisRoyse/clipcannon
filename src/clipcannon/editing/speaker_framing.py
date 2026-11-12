@@ -27,6 +27,8 @@ from clipcannon.editing.edl import TrackedFraming, TrackedPiece
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from clipcannon.editing.edl import EditDecisionList
+
 STEP_MS = 100
 FACE_FRAC = 0.28          # target face height as a fraction of the window height
 MAX_ZOOM = 1.6            # never crop smaller than 1/1.6 of the source height
@@ -37,6 +39,21 @@ EASE = 0.30               # per-frame approach rate toward the desired position
 SPEAKER_CARRY_MS = 2000   # keep the last speaker through short pauses
 SPEAKER_LOOKAHEAD_MS = 1500  # in a pause, frame whoever speaks next (editor's cut)
 RDP_TOL_PX = 3.0
+
+
+class SpeakerTrackingMissingError(RuntimeError):
+    """Speaker framing was requested but the speaker_tracking stage has no data."""
+
+    code = "SPEAKER_TRACKING_MISSING"
+
+    def __init__(self, project_id: str) -> None:
+        super().__init__(
+            f"Speaker framing was requested (crop mode auto + face_tracking) but project "
+            f"{project_id} has no speaker_tracking data. Remediation: run the pipeline "
+            "stage 'speaker_tracking', or set crop.face_tracking=false / give the "
+            "segments explicit framing.")
+        self.remediation = ("run stage speaker_tracking, or set crop.face_tracking=false, "
+                            "or pass explicit framing")
 
 
 @dataclass
@@ -62,16 +79,34 @@ class _Det:
         return (self.y1 + self.y2) / 2
 
 
+def wants_speaker_framing(edl: EditDecisionList) -> bool:
+    """True when the EDL asks the renderer to follow the active speaker."""
+    return (edl.crop.mode == "auto" and bool(edl.crop.face_tracking)
+            and edl.crop.layout == "crop" and any(s.canvas is None for s in edl.segments))
+
+
+def require_speaker_tracking(db_path: Path, project_id: str) -> None:
+    """Raise SpeakerTrackingMissingError unless the stage has stored shots for the project."""
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        n = con.execute("SELECT COUNT(*) FROM face_shots WHERE project_id=?",
+                        (project_id,)).fetchone()[0]
+    except sqlite3.OperationalError:
+        n = 0
+    finally:
+        con.close()
+    if not n:
+        raise SpeakerTrackingMissingError(project_id)
+
+
 def _load(db_path: Path, project_id: str, s: int, e: int) -> tuple[
         list[tuple[int, int, int]], dict[int, list[_Det]], list[tuple[int, int, int | None]]]:
+    require_speaker_tracking(db_path, project_id)
     con = sqlite3.connect(str(db_path))
     try:
-        try:
-            shots = con.execute(
-                "SELECT shot_id, start_ms, end_ms FROM face_shots WHERE project_id=? "
-                "AND end_ms > ? AND start_ms < ? ORDER BY start_ms", (project_id, s, e)).fetchall()
-        except sqlite3.OperationalError:
-            return [], {}, []
+        shots = con.execute(
+            "SELECT shot_id, start_ms, end_ms FROM face_shots WHERE project_id=? "
+            "AND end_ms > ? AND start_ms < ? ORDER BY start_ms", (project_id, s, e)).fetchall()
         person = dict(con.execute(
             "SELECT track_id, person_id FROM face_tracks WHERE project_id=?", (project_id,)))
         dets: dict[int, list[_Det]] = {}
@@ -148,7 +183,12 @@ def compute_tracked_framing(
     db_path: Path, project_id: str, src_start_ms: int, src_end_ms: int,
     *, source_size: tuple[int, int], canvas_size: tuple[int, int],
 ) -> TrackedFraming | None:
-    """Speaker-following framing for one source range, or None if no face data."""
+    """Speaker-following framing for one source range.
+
+    Returns None only when the stage ran but no face is visible in this range
+    (nothing to follow; the caller records that). Raises SpeakerTrackingMissingError
+    when the stage never ran for the project.
+    """
     shots, dets, segs = _load(db_path, project_id, src_start_ms, src_end_ms)
     if not shots or not dets:
         return None

@@ -8,7 +8,7 @@ current EDL and the FeedbackPlan JSON schema to the client's model
 once with the validation error if the reply does not conform.
 
 No model is loaded on the server; nothing runs when the client does not
-support sampling (the caller then falls back to the regex parser).
+support sampling (the caller then refuses with FEEDBACK_PLANNER_UNAVAILABLE).
 """
 from __future__ import annotations
 

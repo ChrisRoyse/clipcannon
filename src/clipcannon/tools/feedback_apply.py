@@ -2,11 +2,12 @@
 
 1. ``operations`` supplied by the caller (the agent already produced typed ops;
    nothing to parse).
-2. Free-text ``feedback`` parsed by the client's model via MCP sampling.
-3. Free-text ``feedback`` parsed by the regex fallback (multi-intent).
+2. Free-text ``feedback`` planned by the client's model via MCP sampling.
 
+There is no keyword fallback: when no planner is available, or it declines or
+answers invalidly, the call fails closed with a typed code and changes nothing.
 Whatever the source, the plan is validated by pydantic before it can touch
-the EDL, and the response records which parser produced it.
+the EDL, and the response records which planner produced it.
 """
 from __future__ import annotations
 
@@ -15,7 +16,6 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from clipcannon.editing.feedback_ops import FeedbackPlan
-from clipcannon.tools.feedback import regex_plan
 from clipcannon.tools.feedback_sampling import plan_via_sampling
 
 if TYPE_CHECKING:
@@ -60,19 +60,31 @@ async def resolve_plan(
     if plan is not None:
         return plan, "sampling", diagnostics
 
-    plan = regex_plan(text, edl)
-    if plan is not None:
-        return plan, "regex", diagnostics
-
+    details = {**diagnostics, "remediation": _REMEDIATION}
+    if not sampling_info.get("available"):
+        raise PlanError(
+            "FEEDBACK_PLANNER_UNAVAILABLE",
+            "Free-text feedback is planned by the client's model through MCP sampling, "
+            f"which is unavailable here ({sampling_info.get('reason')}). Nothing was changed.",
+            details,
+        )
+    if "declined" in sampling_info:
+        raise PlanError(
+            "FEEDBACK_NOT_EXPRESSIBLE",
+            "The planner found no edit operation for this feedback: "
+            f"{sampling_info['declined']!r}. Nothing was changed.",
+            details,
+        )
     raise PlanError(
-        "LOW_CONFIDENCE",
-        f"Could not turn feedback into edit operations: {text!r}",
-        {
-            **diagnostics,
-            "hint": (
-                "Pass typed 'operations' instead of free text, e.g. "
-                '[{"op": "captions", "font_size_delta": 16, "position": "center"}, '
-                '{"op": "framing", "segment_ids": [2], "focus_x": 0.3}]'
-            ),
-        },
+        "FEEDBACK_PLAN_INVALID",
+        f"The planner's reply did not validate after {sampling_info.get('attempts')} "
+        "attempts. Nothing was changed.",
+        details,
     )
+
+
+_REMEDIATION = (
+    "Pass typed 'operations' (schema in this tool's definition), e.g. "
+    '[{"op": "captions", "font_size_delta": 16, "position": "center"}, '
+    '{"op": "framing", "segment_ids": [2], "focus_x": 0.3}]'
+)

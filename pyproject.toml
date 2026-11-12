@@ -88,8 +88,8 @@ phase3 = [
 ]
 
 dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23.0",
+    # Supporting lint gate only. There is no test suite and no CI: verification
+    # is Full State Verification with probes in scripts/fsv/ (AGENTS.md).
     "ruff>=0.4.0",
 ]
 
@@ -152,17 +152,9 @@ select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "SIM", "TCH"]
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["ANN", "E501"]
+"scripts/fsv/**" = ["ANN", "E501"]
 # These package roots intentionally set HF offline env vars before importing any
 # ML library (issue #59), so module-level imports legitimately follow code.
 "src/phoenix/__init__.py" = ["E402"]
 "src/clipcannon/__init__.py" = ["E402"]
 "src/voiceagent/__init__.py" = ["E402"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-asyncio_mode = "auto"
-pythonpath = ["src"]
-markers = [
-    "integration: requires real models/GPU/audio; skips cleanly if unavailable (never false-passes)",
-]

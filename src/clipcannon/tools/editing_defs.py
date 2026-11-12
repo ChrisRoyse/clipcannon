@@ -395,8 +395,9 @@ EDITING_TOOL_DEFINITIONS: list[Tool] = [
             "frame, color, overlay, motion); several may be combined and all are "
             "validated before anything changes. Alternatively pass free-text "
             "'feedback': it is translated into the same operations by the "
-            "client's model via MCP sampling when the client supports it, "
-            "otherwise by a keyword fallback. Returns which parser was used, the "
+            "client's model via MCP sampling; without sampling the call is "
+            "refused (FEEDBACK_PLANNER_UNAVAILABLE) and nothing changes, so pass "
+            "'operations' instead. Returns which planner was used, the "
             "validated plan, the modify_edit result, and any follow-up tool "
             "calls (color/overlay/motion) to make."
         ),

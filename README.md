@@ -271,7 +271,7 @@ One call sets the emotional state, and the controller turns it into frame-by-fra
 - **Voice agent ("Jarvis"):** a fully local conversational assistant with wake-word activation, streaming faster-whisper ASR, Silero VAD, a local Qwen3 LLM, and cloned-voice TTS.
 
 > [!NOTE]
-> **Status.** The voice result is measured. The constellation guard, expression hierarchy, and meeting pipeline are built and unit-tested (the guard alone has 22 tests). The guard now checks every `clone_video` output. Wiring it into the real-time meeting renderer and measuring end-to-end identity on talking-head video are next. Getting here took **17 approaches over six days**, from Gaussian splatting to CogVideoX to Hallo3. The white paper documents every one, including the 16 that failed.
+> **Status.** The voice result is measured. The constellation guard, expression hierarchy, and meeting pipeline are built. The guard now checks every `clone_video` output. Wiring it into the real-time meeting renderer and measuring end-to-end identity on talking-head video are next. Getting here took **17 approaches over six days**, from Gaussian splatting to CogVideoX to Hallo3. The white paper documents every one, including the 16 that failed.
 
 > [!IMPORTANT]
 > Clone only voices and faces you have the right to use. The research subject gave written consent, and the subject-specific voice and face artifacts are withheld on consent and dual-use grounds.
@@ -323,7 +323,7 @@ Please:
 3. Download the models once with scripts/download_models.py
 4. Add ClipCannon as an MCP server
 5. Verify the GPU is detected and the models load
-6. Run the test suite
+6. Run the FSV probes in scripts/fsv/ and read their evidence back
 ```
 
 ### Manual install
@@ -335,7 +335,7 @@ cd clipcannon
 pip install -e .              # core: tools, editing, rendering
 pip install -e ".[ml]"        # analysis pipeline, embeddings, voice
 pip install -e ".[phase2]"    # AI audio, advanced voice, avatar
-pip install -e ".[dev]"       # tests and linting
+pip install -e ".[dev]"       # ruff (lint)
 
 export HUGGINGFACE_TOKEN=hf_your_token_here
 HF_HUB_OFFLINE=0 python scripts/download_models.py   # one-time fetch of the core analysis models
@@ -551,7 +551,7 @@ src/
   chrome_extension/ companion extension for the Google Meet bot
 scripts/           model download, GPU validation, bot launchers
 benchmarks/        voice benchmark scripts and raw results
-tests/             1,300+ tests
+scripts/fsv/       Full State Verification probes (no test suite, no CI)
 config/            Docker Compose and default config
 ```
 
@@ -582,7 +582,7 @@ gpu.max_vram_usage_gb         = 24
 
 **Mac / Apple Silicon?** Not yet. The stack depends on CUDA, PyTorch CUDA, and NVENC.
 
-**How long does analysis take?** Roughly 2–3 minutes for a 5-minute video and 15–20 minutes for an hour on an RTX 4090. The DAG runs stages in parallel, so faster GPUs finish sooner.
+**How long does analysis take?** Projected, not re-measured since stages were added: roughly 2–3 minutes for a 5-minute video and 15–20 minutes for an hour on an RTX 4090. Measured on an RTX 5090: the `speaker_tracking` stage alone takes about 27 minutes on a 61-minute video.
 
 **Is my data sent anywhere?** No. Runtime is offline by default; the only network access is the one-time model download you run on purpose.
 
@@ -590,14 +590,16 @@ gpu.max_vram_usage_gb         = 24
 
 ---
 
-## 🧪 Testing
+## 🔎 Verification
+
+There is no test suite and no CI. Every change is proven with Full State Verification: run the real path, read the stored result back independently (sqlite3, ffprobe, decoded frames, hashes), and audit at least three boundaries, including refusals that must change nothing. Probes live in `scripts/fsv/` and write evidence to `~/.clipcannon/evidence/fsv/<issue>/<run>/`. The rules are in [`AGENTS.md`](AGENTS.md) and the pinned Doctrine issue.
 
 ```bash
-pytest                      # full suite
-pytest tests/phoenix/       # avatar engine (GPU)
-pytest tests/voiceagent/    # voice agent
-pytest tests/integration/   # needs GPU + a test video
-ruff check src/
+python scripts/fsv/fsv_render_paths.py
+python scripts/fsv/fsv_speaker_state.py --project <project_id>
+python scripts/fsv/fsv_feedback_ops.py --project <project_id>
+python scripts/fsv/fsv_framing_refusal.py --project <project_id>
+ruff check src/    # supporting lint gate, not acceptance
 ```
 
 **Formats:** mp4, mov, mkv, webm, avi, ts, mts in; platform-optimized mp4 (h264/h265) out.
@@ -619,9 +621,9 @@ ClipCannon is one of several systems built on the same idea: **meaning is measur
 
 ## 🤝 Contributing
 
-1. Fork the repo and create a branch (`git checkout -b feature/my-feature`)
-2. Add tests for new behavior
-3. Make sure `pytest` passes and `ruff check src/` is clean
+1. Read [`AGENTS.md`](AGENTS.md) and the pinned Doctrine issue
+2. Install the git guards once: `bash scripts/install_git_guards.sh`
+3. Prove the change with Full State Verification and post the evidence on the owning issue
 4. Open a pull request
 
 ---
