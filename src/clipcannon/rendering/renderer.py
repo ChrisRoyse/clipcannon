@@ -108,6 +108,27 @@ def _probe_duration_ms(video_path: Path) -> int:
     return round(duration * 1000)
 
 
+def _probe_size(video_path: Path) -> tuple[int, int]:
+    """(width, height) of the first video stream, via ffprobe."""
+    import json
+    import subprocess
+
+    result = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-select_streams", "v:0", "-show_entries",
+         "stream=width,height", "-of", "json", str(video_path)],
+        capture_output=True, text=True, timeout=30,
+    )
+    try:
+        s = json.loads(result.stdout)["streams"][0]
+        return int(s["width"]), int(s["height"])
+    except (json.JSONDecodeError, KeyError, IndexError, ValueError) as exc:
+        raise PipelineError(
+            f"ffprobe could not read the frame size of {video_path}: {exc}",
+            stage_name="rendering", operation="probe_size",
+            details={"stderr": result.stderr[:500]},
+        ) from exc
+
+
 def _scale_ass_file(
     ass_path: Path,
     scale: float,
@@ -319,6 +340,7 @@ class RenderEngine:
             output_path = render_dir / "output.mp4"
 
             ass_path = self._write_captions(edl, profile, render_dir, render_id)
+            self._apply_speaker_framing(edl, profile, db_path, source_path, render_id)
             crop_region = self._compute_crop(edl, profile)
 
             # Build and execute FFmpeg — segmented rendering to prevent OOM
@@ -562,6 +584,42 @@ class RenderEngine:
     # ----------------------------------------------------------------
     # Crop computation
     # ----------------------------------------------------------------
+    def _apply_speaker_framing(
+        self,
+        edl: EditDecisionList,
+        profile: EncodingProfile,
+        db_path: Path,
+        source_path: Path,
+        render_id: str,
+    ) -> None:
+        """Attach speaker-following framing to segments that want face tracking.
+
+        Applies to crop mode "auto" with face_tracking and the plain "crop"
+        layout, for segments without an explicit canvas (an agent's manual
+        framing always wins). Needs the speaker_tracking stage's tables; if
+        they are absent the segment keeps the static centre crop.
+        """
+        if not (edl.crop.mode == "auto" and edl.crop.face_tracking
+                and edl.crop.layout == "crop"):
+            return
+        from clipcannon.editing.edl import SegmentCanvasSpec
+        from clipcannon.editing.speaker_framing import compute_tracked_framing
+
+        source_size = _probe_size(source_path)
+        for seg in edl.segments:
+            if seg.canvas is not None:
+                continue
+            framing = compute_tracked_framing(
+                db_path, edl.project_id, seg.source_start_ms, seg.source_end_ms,
+                source_size=source_size, canvas_size=(profile.width, profile.height),
+            )
+            if framing is not None:
+                seg.canvas = SegmentCanvasSpec(track=framing)
+                logger.info(
+                    "Render %s: segment %d speaker framing, %d shot piece(s), speakers %s",
+                    render_id, seg.segment_id, len(framing.pieces), framing.speakers,
+                )
+
     def _compute_crop(
         self,
         edl: EditDecisionList,

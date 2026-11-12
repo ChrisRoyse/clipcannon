@@ -6,12 +6,12 @@
 
 **Your AI agent can read, write, and reason. ClipCannon lets it *watch* and *listen*.**
 
-A local MCP server that measures the frames, words, voices, emotions, and beats of a video through a panel of frozen AI instruments, then hands your agent **58 tools** to find the meaning, cut the edit, clone the voice, and render the result. All on your own GPU.
+A local MCP server that measures the frames, words, voices, emotions, and beats of a video through a panel of frozen AI instruments, then hands your agent **61 tools** to find the meaning, cut the edit, clone the voice, and render the result. All on your own GPU.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/protocol-MCP-7C3AED?style=for-the-badge)](https://modelcontextprotocol.io)
-[![MCP tools](https://img.shields.io/badge/MCP%20tools-58-0ea5e9?style=for-the-badge)](#-the-58-tools)
-[![Pipeline](https://img.shields.io/badge/analysis%20stages-23-22c55e?style=for-the-badge)](#-the-23-stage-pipeline)
+[![MCP tools](https://img.shields.io/badge/MCP_tools-61-0ea5e9?style=for-the-badge)](#-the-61-tools)
+[![Pipeline](https://img.shields.io/badge/analysis%20stages-24-22c55e?style=for-the-badge)](#-the-24-stage-pipeline)
 [![License: BSL 1.1](https://img.shields.io/badge/license-BSL%201.1-orange.svg?style=for-the-badge)](LICENSE)
 
 [![YouTube](https://img.shields.io/badge/YouTube-@Leapableai-FF0000?style=flat-square&logo=youtube&logoColor=white)](https://www.youtube.com/@Leapableai)
@@ -19,7 +19,7 @@ A local MCP server that measures the frames, words, voices, emotions, and beats 
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Chris%20Royse-0A66C2?style=flat-square&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/christopher-royse-b624b596/)
 [![Website](https://img.shields.io/badge/web-clipcannon.com-111827?style=flat-square)](https://www.clipcannon.com)
 
-[Why](#-ai-agents-are-blind-to-video) · [How it sees](#-seven-senses-for-one-moment) · [Meaning](#-meaning-lives-between-the-senses) · [What the agent gets](#-what-your-agent-actually-sees) · [Constellations](#-teleological-constellations-identity-you-can-verify) · [Quick start](#-quick-start) · [Tools](#-the-58-tools) · [Results](#-measured-results) · [Research](#-research)
+[Why](#-ai-agents-are-blind-to-video) · [How it sees](#-seven-senses-for-one-moment) · [Meaning](#-meaning-lives-between-the-senses) · [What the agent gets](#-what-your-agent-actually-sees) · [Constellations](#-teleological-constellations-identity-you-can-verify) · [Quick start](#-quick-start) · [Tools](#-the-61-tools) · [Results](#-measured-results) · [Research](#-research)
 
 </div>
 
@@ -39,7 +39,7 @@ Editors don't cut on words. They cut on the breath before the punchline, the mom
 <img src="assets/readme/blind.jpg" alt="Left: a blindfolded robot facing a gray mosaic of pixels. Right: a robot with glowing eyes watching a speaker, overlaid with face brackets and voice waveforms" width="100%" />
 </div>
 
-**ClipCannon is the missing sense organ.** You give it a video. It runs a 23-stage analysis pipeline on your GPU and turns the footage into a structured, searchable, measured record: who is speaking, what they are saying, how they are saying it, what is on screen, where the scenes change, where the laughs land, where the cuts are safe. Then it exposes that record to your agent through the [Model Context Protocol](https://modelcontextprotocol.io), along with the tools to act on it: edit, caption, crop, score, voice, render.
+**ClipCannon is the missing sense organ.** You give it a video. It runs a 24-stage analysis pipeline on your GPU and turns the footage into a structured, searchable, measured record: who is speaking, what they are saying, how they are saying it, what is on screen, where the scenes change, where the laughs land, where the cuts are safe. Then it exposes that record to your agent through the [Model Context Protocol](https://modelcontextprotocol.io), along with the tools to act on it: edit, caption, crop, score, voice, render.
 
 The agent stops guessing from a transcript and starts **reasoning over the actual reality of the footage**.
 
@@ -131,6 +131,7 @@ ClipCannon doesn't dump raw tensors on your model. Every tool returns **compact,
 | *"Will this edit make sense?"* | `get_narrative_flow` | What is said at every boundary, what a gap skips, and warnings like a **promise with no payoff**. |
 | *"What's happening at 3:42?"* | `get_frame` | The frame plus everything around it: transcript, speaker, emotion, topic, shot type, quality, pacing, on-screen text. |
 | *"Find where they talk about pricing."* | `search_content` | Semantic search over the meaning of the speech, falling back to text search. |
+| *"Who is talking, and about what?"* | `get_speaker_timeline` | Speaker turns: who (a face identity bound to a voice, or an off-screen voice), whether they are on screen, whether it is a question, and the turn's key topics. Vertical renders automatically frame whoever is speaking. |
 
 <div align="center">
 <img src="assets/readme/agentloop.jpg" alt="An AI at an editing console surrounded by a loop of storyboard, timeline, rendered phone video and an inspection lens" width="100%" />
@@ -162,11 +163,11 @@ ClipCannon is a **body, not a brain**. It doesn't make editorial decisions. It m
 
 So every time a better model ships, **ClipCannon gets better with no change to the code.** The measurements stay the same; what improves is how well the reasoner composes them. A model that can hold a two-hour scene map in its head, cross-reference emotional peaks against narrative beats, and plan a 10-clip series with callbacks will turn the same tools into much better edits.
 
-Today's agents already cut usable highlight reels. Tomorrow's will produce work you'd expect from a skilled human editor, running on the same 58 tools.
+Today's agents already cut usable highlight reels. Tomorrow's will produce work you'd expect from a skilled human editor, running on the same 61 tools.
 
 ---
 
-## 🏭 The 23-stage pipeline
+## 🏭 The 24-stage pipeline
 
 <div align="center">
 <img src="assets/readme/pipeline.jpg" alt="A film reel feeding a branching network of glowing processing nodes that converge into a database" width="100%" />
@@ -181,6 +182,7 @@ One call to `clipcannon_ingest` runs a dependency-resolved DAG. Stages run in pa
 | **Hearing** | `source_separation` (HTDemucs) · `speaker_embed` (WavLM) · `emotion_embed` · `prosody_analysis` · `reactions` (laughter, applause) · `acoustic` (beats, music vs. speech) |
 | **Understanding** | `semantic_embed` (Nomic) · `narrative_llm` (Qwen3-8B: story beats, open loops, chapters) · `profanity` · `chronemic` (timing and pacing) |
 | **Synthesis** | `highlights` (fuses emotion, reactions, semantics, visuals, quality, speaker, and pacing) |
+| **Who is speaking** | `speaker_tracking` (face tracks with insightface, active-speaker detection with Light-ASD, ECAPA voice clusters bound to faces, per-turn topics) |
 
 ---
 
@@ -424,7 +426,7 @@ action items, and a 3-minute highlight clip of the most important moments.
 
 ---
 
-## 🧰 The 58 tools
+## 🧰 The 61 tools
 
 Every tool is prefixed `clipcannon_`.
 
@@ -440,6 +442,7 @@ Every tool is prefixed `clipcannon_`.
 | **Avatar** | 2 | `lip_sync` · `extract_webcam` |
 | **Video generation** | 1 | `generate_video` |
 | **Constellation** | 4 | `list_constellations` · `list_skills` · `expression_sequence` · `clone_video` |
+| **Speakers** | 3 | `get_speakers` · `get_speaker_timeline` · `label_person` |
 | **Billing** | 4 | `credits_balance` · `credits_history` · `credits_estimate` · `spending_limit` |
 | **Disk** | 2 | `disk_status` · `disk_cleanup` |
 | **Config** | 3 | `config_get` · `config_set` · `config_list` |
@@ -491,12 +494,12 @@ The same panel-of-frozen-senses approach also trained a [Shakespeare-style LoRA 
               └─────────────┬──────────────┘
                             │ MCP (stdio)
               ┌─────────────▼──────────────┐
-              │  ClipCannon MCP server     │  58 tools
+              │  ClipCannon MCP server     │  61 tools
               └─────────────┬──────────────┘
        ┌────────────────────┼─────────────────────┐
 ┌──────▼───────┐    ┌───────▼────────┐    ┌───────▼────────┐
 │ Analysis     │    │ Editing +      │    │ Voice / Avatar │
-│ 23-stage DAG │    │ Rendering      │    │                │
+│ 24-stage DAG │    │ Rendering      │    │                │
 │ SigLIP       │    │ EDL engine     │    │ Qwen3-TTS      │
 │ Nomic Embed  │    │ ASS captions   │    │ LatentSync     │
 │ wav2vec2     │    │ smart crop     │    │ Phoenix (CuPy) │
@@ -541,7 +544,7 @@ The same panel-of-frozen-senses approach also trained a [Shakespeare-style LoRA 
 
 ```text
 src/
-  clipcannon/      MCP server, 23-stage pipeline, editing, rendering, audio, voice, provenance, dashboard
+  clipcannon/      MCP server, 24-stage pipeline, editing, rendering, audio, voice, provenance, dashboard
   phoenix/         GPU-native avatar engine: render, expression, behavior, video constellations
   voiceagent/      real-time voice assistant and meeting bot (Meet, Teams, Zoom)
   license_server/  credit billing service
