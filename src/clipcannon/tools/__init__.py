@@ -80,6 +80,10 @@ from clipcannon.tools.constellation import (
 from clipcannon.tools.constellation_defs import (
     CONSTELLATION_TOOL_DEFINITIONS,
 )
+from clipcannon.tools.speakers import (
+    SPEAKER_TOOL_DEFINITIONS,
+    dispatch_speaker_tool,
+)
 
 # ---------------------------------------------------------------
 # Understanding tool definitions (4 tools)
@@ -255,6 +259,8 @@ for _defs, _dispatch in [
     (GENERATE_TOOL_DEFINITIONS, dispatch_generate_tool),
     # Phase 4: Clone constellation
     (CONSTELLATION_TOOL_DEFINITIONS, dispatch_constellation_tool),
+    # Speaker tracking: who is speaking, where, about what
+    (SPEAKER_TOOL_DEFINITIONS, dispatch_speaker_tool),
 ]:
     for _tool_def in _defs:
         TOOL_DISPATCHERS[_tool_def.name] = _dispatch
@@ -278,6 +284,7 @@ ALL_TOOL_DEFINITIONS = (
     + GENERATE_TOOL_DEFINITIONS
     # Phase 4
     + CONSTELLATION_TOOL_DEFINITIONS
+    + SPEAKER_TOOL_DEFINITIONS
 )
 
 __all__ = [

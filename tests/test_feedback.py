@@ -611,8 +611,9 @@ class TestApplyFeedbackIntegration:
             },
         )
         assert "error" not in feedback_result, f"Feedback failed: {feedback_result}"
-        assert feedback_result["parsed_intent"]["intent_type"] == "speed_adjust"
-        assert feedback_result["parsed_intent"]["confidence"] >= 0.7
+        assert feedback_result["parser"] == "regex"
+        assert feedback_result["plan"]["ops"][0]["op"] == "speed"
+        assert feedback_result["plan"]["ops"][0]["delta"] < 0  # "too fast" -> slower
 
         # Step 3: Verify the speed was actually changed in the EDL
         modify_result = feedback_result["modify_result"]
@@ -702,7 +703,9 @@ class TestApplyFeedbackIntegration:
             },
         )
         assert "error" not in feedback_result, f"Feedback failed: {feedback_result}"
-        assert feedback_result["parsed_intent"]["intent_type"] == "caption_resize"
+        # No MCP session in this test -> sampling unavailable -> regex fallback.
+        assert feedback_result["parser"] == "regex"
+        assert feedback_result["plan"]["ops"][0]["op"] == "captions"
 
         # Verify font size increased
         projects_dir = tmp_path / "projects"
@@ -716,4 +719,6 @@ class TestApplyFeedbackIntegration:
 
         import json
         edl_data = json.loads(row["edl_json"])
-        assert edl_data["captions"]["font_size"] == 56  # 48 + 8
+        assert edl_data["captions"]["font_size"] == 64  # 48 + 16 (regex fallback step)
+        # The resize must keep the caption chunks (it used to wipe them).
+        assert edl_data["captions"]["chunks"], "caption chunks were dropped"

@@ -315,10 +315,7 @@ def _build_multi_segment_cmd(
         # Video chain for this segment
         # Combine PTS reset + speed into one expression to avoid
         # an intermediate PTS rounding step.
-        if seg.speed != 1.0:
-            pts_expr = f"(PTS-STARTPTS)/{seg.speed}"
-        else:
-            pts_expr = "PTS-STARTPTS"
+        pts_expr = _segment_pts(seg)
 
         vchain = (
             f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
@@ -983,7 +980,11 @@ def _build_per_segment_canvas_cmd(
 
     for i, seg in enumerate(segments):
         # Build video chain for this segment based on its layout
-        if seg.canvas is not None and seg.canvas.zoom is not None:
+        if seg.canvas is not None and seg.canvas.track is not None:
+            _build_segment_track_chain(
+                filter_parts, seg, i, cw, ch, removals=removals,
+            )
+        elif seg.canvas is not None and seg.canvas.zoom is not None:
             _build_segment_zoom_chain(
                 filter_parts, seg, i, profile, cw, ch,
                 removals=removals,
@@ -1098,6 +1099,17 @@ def _build_per_segment_canvas_cmd(
     return cmd
 
 
+def _segment_pts(seg: SegmentSpec) -> str:
+    """setpts expression that restarts the segment at 0 and applies its speed.
+
+    The audio side applies atempo=speed, so the video must be retimed by the
+    same factor or the two drift apart (and the segment's duration is wrong).
+    """
+    if seg.speed != 1.0:
+        return f"(PTS-STARTPTS)/{seg.speed}"
+    return "PTS-STARTPTS"
+
+
 def _build_region_scale(region: CanvasRegion) -> str:
     """Build FFmpeg scale filter for a canvas region respecting fit_mode.
 
@@ -1169,10 +1181,10 @@ def _build_segment_canvas_chain(
 
     delogo_chain = _build_delogo_chain(removals)
 
-    # 1. Trim source (with delogo if removals present)
+    # 1. Trim source (with delogo if removals present), retimed by speed
     filters.append(
         f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-        f"setpts=PTS-STARTPTS{delogo_chain}[seg{idx}_src]"
+        f"setpts={_segment_pts(seg)}{delogo_chain}[seg{idx}_src]"
     )
 
     # 2+3. Background + split into copies for regions
@@ -1277,10 +1289,11 @@ def _build_segment_zoom_chain(
 
     delogo_chain = _build_delogo_chain(removals)
 
-    # Trim and reset PTS so t starts at 0
+    # Trim, reset PTS so t starts at 0, and apply speed so t runs in output
+    # time (the easing below spans seg_dur_s, which is already speed-scaled)
     filters.append(
         f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-        f"setpts=PTS-STARTPTS{delogo_chain}[seg{idx}_src]"
+        f"setpts={_segment_pts(seg)}{delogo_chain}[seg{idx}_src]"
     )
 
     # Build easing progress expression
@@ -1327,6 +1340,67 @@ def _build_segment_zoom_chain(
         filters.append(f"[seg{idx}_src]{crop_scale}[v{idx}]")
 
 
+def _piecewise_expr(keyframes: list[tuple[float, int]]) -> str:
+    """FFmpeg expression of t: linear interpolation through (t, value) points.
+
+    Commas are escaped for use inside a quoted filter option.
+    """
+    if len(keyframes) == 1:
+        return str(keyframes[0][1])
+    expr = str(keyframes[-1][1])
+    for (t0, v0), (t1, v1) in reversed(list(zip(keyframes, keyframes[1:], strict=False))):
+        if t1 <= t0:
+            continue
+        seg = f"{v0}+({v1 - v0})*(t-{t0:.3f})/{t1 - t0:.3f}" if v1 != v0 else str(v0)
+        expr = f"if(lt(t\\,{t1:.3f})\\,{seg}\\,{expr})"
+    return expr
+
+
+def _build_segment_track_chain(
+    filters: list[str],
+    seg: SegmentSpec,
+    idx: int,
+    cw: int,
+    ch: int,
+    removals: list | None = None,
+) -> None:
+    """Speaker-following framing: one crop path per shot piece, concatenated.
+
+    FFmpeg's crop evaluates w/h once but x/y per frame, so each piece has a
+    fixed window (constant zoom within a shot) and a time-varying position.
+    """
+    track = seg.canvas.track  # type: ignore[union-attr]
+    delogo_chain = _build_delogo_chain(removals)
+    labels: list[str] = []
+    for k, piece in enumerate(track.pieces):
+        a, b = piece.start_ms / 1000.0, piece.end_ms / 1000.0
+        xs = [((t - piece.start_ms) / 1000.0, x) for t, x, _ in piece.keyframes]
+        ys = [((t - piece.start_ms) / 1000.0, y) for t, _, y in piece.keyframes]
+        label = f"seg{idx}_p{k}"
+        filters.append(
+            f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS{delogo_chain},"
+            f"crop=w={piece.width}:h={piece.height}"
+            f":x='{_piecewise_expr(xs)}':y='{_piecewise_expr(ys)}',"
+            f"scale={cw}:{ch}:flags=lanczos,setsar=1[{label}]"
+        )
+        labels.append(label)
+    speed = f",setpts=PTS/{seg.speed}" if seg.speed != 1.0 else ""
+    joined = f"seg{idx}_tracked"
+    if len(labels) == 1:
+        filters.append(f"[{labels[0]}]null{speed}[{joined}]")
+    else:
+        filters.append(
+            "".join(f"[{lb}]" for lb in labels)
+            + f"concat=n={len(labels)}:v=1:a=0{speed}[{joined}]"
+        )
+    if seg.color is not None:
+        final = _apply_color_grading(filters, joined, f"v{idx}", seg.color)
+        if final != f"v{idx}":
+            filters.append(f"[{final}]null[v{idx}]")
+    else:
+        filters.append(f"[{joined}]null[v{idx}]")
+
+
 def _build_segment_plain_chain(
     filters: list[str],
     seg: SegmentSpec,
@@ -1349,7 +1423,7 @@ def _build_segment_plain_chain(
 
     trim_scale = (
         f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-        f"setpts=PTS-STARTPTS{delogo_chain},"
+        f"setpts={_segment_pts(seg)}{delogo_chain},"
         f"scale={profile.width}:{profile.height},setsar=1"
     )
 

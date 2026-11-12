@@ -8,6 +8,38 @@ from __future__ import annotations
 
 from mcp.types import Tool
 
+from clipcannon.editing.feedback_ops import plan_json_schema
+
+
+def _apply_feedback_schema() -> dict[str, object]:
+    """Input schema for apply_feedback, embedding the typed operation schema."""
+    plan = plan_json_schema()
+    return {
+        "type": "object",
+        "properties": {
+            "project_id": {"type": "string", "description": "Project identifier"},
+            "edit_id": {"type": "string", "description": "Edit identifier"},
+            "operations": {
+                **plan["properties"]["ops"],
+                "description": (
+                    "Typed edit operations to apply together. Segment ids refer "
+                    "to this edit; framing focus_x/focus_y are normalized SOURCE "
+                    "frame coordinates of the subject to keep centered."
+                ),
+            },
+            "feedback": {
+                "type": "string",
+                "description": (
+                    "Free-text feedback, used when 'operations' is not given "
+                    "(e.g. 'bigger captions and slow down the second clip')."
+                ),
+            },
+        },
+        "required": ["project_id", "edit_id"],
+        "$defs": plan.get("$defs", {}),
+    }
+
+
 EDITING_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
         name="clipcannon_create_edit",
@@ -357,30 +389,18 @@ EDITING_TOOL_DEFINITIONS: list[Tool] = [
     Tool(
         name="clipcannon_apply_feedback",
         description=(
-            "Apply natural language feedback to an edit. Parses the feedback "
-            "text into structured EDL changes and applies them via modify_edit. "
-            "Returns the parsed intent and the modification result. "
-            "Supports: transition fixes, speed adjustments, caption resizing, "
-            "audio level changes, color grading, zoom/motion, and more."
+            "Revise an edit. PREFERRED: pass 'operations', a list of typed edit "
+            "operations (captions size/position/style, trim, speed, transition, "
+            "remove_segments, audio, framing to keep a subject in the vertical "
+            "frame, color, overlay, motion); several may be combined and all are "
+            "validated before anything changes. Alternatively pass free-text "
+            "'feedback': it is translated into the same operations by the "
+            "client's model via MCP sampling when the client supports it, "
+            "otherwise by a keyword fallback. Returns which parser was used, the "
+            "validated plan, the modify_edit result, and any follow-up tool "
+            "calls (color/overlay/motion) to make."
         ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "type": "string",
-                    "description": "Project identifier",
-                },
-                "edit_id": {
-                    "type": "string",
-                    "description": "Edit identifier",
-                },
-                "feedback": {
-                    "type": "string",
-                    "description": "Natural language feedback about the video edit",
-                },
-            },
-            "required": ["project_id", "edit_id", "feedback"],
-        },
+        inputSchema=_apply_feedback_schema(),
     ),
     Tool(
         name="clipcannon_branch_edit",

@@ -19,6 +19,36 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Encoder names (what FFmpeg was asked to use) -> bitstream codec names (what
+# ffprobe reports in codec_name). Hardware encoders such as h264_nvenc write a
+# plain h264 stream, so comparing encoder to codec literally is a false alarm.
+_CODEC_ALIASES: dict[str, str] = {
+    "h264": "h264", "avc": "h264", "libx264": "h264", "libopenh264": "h264",
+    "h265": "hevc", "hevc": "hevc", "libx265": "hevc",
+    "av1": "av1", "libaom-av1": "av1", "libsvtav1": "av1", "librav1e": "av1",
+    "vp9": "vp9", "libvpx-vp9": "vp9",
+    "vp8": "vp8", "libvpx": "vp8",
+    "prores": "prores", "prores_ks": "prores", "prores_aw": "prores",
+}
+_HW_ENCODER_SUFFIXES: tuple[str, ...] = (
+    "_nvenc", "_qsv", "_vaapi", "_amf", "_videotoolbox", "_v4l2m2m", "_mf",
+    "_omx", "_vulkan",
+)
+
+
+def normalize_codec_name(name: str) -> str:
+    """Map an FFmpeg encoder name or codec name to its bitstream codec name.
+
+    ``h264_nvenc`` -> ``h264``, ``libx265`` -> ``hevc``, ``av1_qsv`` -> ``av1``.
+    Unknown names are returned lower-cased and otherwise unchanged.
+    """
+    n = name.strip().lower()
+    for suffix in _HW_ENCODER_SUFFIXES:
+        if n.endswith(suffix):
+            n = n[: -len(suffix)]
+            break
+    return _CODEC_ALIASES.get(n, n)
+
 
 @dataclass
 class InspectionResult:
@@ -250,19 +280,17 @@ async def inspect_render(
     # Check: codec matches
     if expected_codec is not None:
         actual_codec = str(metadata.get("codec", ""))
-        # h264 = libx264, h265 = libx265
-        codec_aliases = {
-            "h264": "h264", "libx264": "h264",
-            "h265": "hevc", "libx265": "hevc",
-        }
-        norm_expected = codec_aliases.get(expected_codec, expected_codec)
-        norm_actual = codec_aliases.get(actual_codec, actual_codec)
+        # The renders table stores the *encoder* (e.g. h264_nvenc); ffprobe
+        # reports the *codec* (h264). Compare normalized bitstream codecs.
+        norm_expected = normalize_codec_name(expected_codec)
+        norm_actual = normalize_codec_name(actual_codec)
         passed = norm_expected == norm_actual
         checks.append({
             "check": "codec_match",
             "passed": passed,
             "expected": expected_codec,
             "actual": actual_codec,
+            "compared_as": norm_expected,
         })
         if not passed:
             all_passed = False

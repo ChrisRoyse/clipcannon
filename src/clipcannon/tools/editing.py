@@ -415,7 +415,9 @@ async def clipcannon_modify_edit(
             {"errors": validation_errors},  # type: ignore[dict-item]
         )
 
-    if segments_changed and current_edl.captions.enabled:
+    # Regenerate caption chunks when the timeline changed, or when a captions
+    # update arrived without chunks (otherwise captions would silently vanish).
+    if current_edl.captions.enabled and (segments_changed or not current_edl.captions.chunks):
         auto_generate_captions(current_edl, db, project_id, current_edl.segments, edit_id)
 
     # Classify changes to produce a render hint
@@ -960,26 +962,29 @@ async def clipcannon_revert_edit(
 async def clipcannon_apply_feedback(
     project_id: str,
     edit_id: str,
-    feedback: str,
+    feedback: str | None = None,
+    operations: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    """Apply natural language feedback to an edit.
+    """Apply feedback to an edit as typed, validated operations.
 
-    Parses feedback text into a structured intent, converts to EDL
-    changes, and applies via modify_edit. Returns the parsed intent
-    and modification result.
+    The plan comes from ``operations`` when given; otherwise ``feedback`` is
+    parsed by the client's model (MCP sampling) and, failing that, by the
+    regex fallback. The plan is converted to merged EDL changes and applied
+    via modify_edit.
 
     Args:
         project_id: Project identifier.
         edit_id: Edit identifier.
-        feedback: Natural language feedback about the video edit.
+        feedback: Free-text feedback about the edit.
+        operations: Typed operations (see FeedbackPlan) to apply directly.
 
     Returns:
-        Dict with parsed_intent, changes_applied, and modify_result.
+        Dict with parser, plan, changes_applied, modify_result and
+        special_actions (follow-up tool calls for color/overlay/motion).
     """
-    from clipcannon.tools.feedback import (
-        intent_to_changes,
-        parse_feedback,
-    )
+    from clipcannon.editing.feedback_ops import OpError, ops_to_changes
+    from clipcannon.rendering.profiles import get_profile
+    from clipcannon.tools.feedback_apply import PlanError, resolve_plan
 
     err = validate_project(project_id, required_status="ready")
     if err is not None:
@@ -1020,68 +1025,65 @@ async def clipcannon_apply_feedback(
             {"edit_id": edit_id},
         )
 
-    # Parse the feedback into a structured intent
-    intent = parse_feedback(feedback, edl)
+    try:
+        plan, parser, diagnostics = await resolve_plan(edl, feedback, operations)
+    except PlanError as exc:
+        return error_response(exc.code, str(exc), exc.details)
 
-    intent_dump = intent.model_dump()
-
-    # Check confidence threshold
-    if intent.confidence < 0.3:
+    source_size = _project_source_size(project_id)
+    profile = get_profile(edl.render_settings.profile)
+    try:
+        changes, special_actions = ops_to_changes(
+            plan, edl, source_size=source_size,
+            canvas_size=(profile.width, profile.height),
+        )
+    except OpError as exc:
         return error_response(
-            "LOW_CONFIDENCE",
-            f"Could not confidently parse feedback: {feedback!r}",
-            {
-                "parsed_intent": intent_dump,
-                "confidence": intent.confidence,
-                "hint": "Try being more specific, e.g. 'the cut at 0:15 is too abrupt'",
-            },
+            "INVALID_OPERATION", str(exc),
+            {"parser": parser, "plan": plan.model_dump()},
         )
 
-    # Convert intent to changes dict
-    changes = intent_to_changes(intent, edl)
-    if not changes:
-        return error_response(
-            "NO_CHANGES",
-            "Feedback was parsed but produced no applicable changes.",
-            {"parsed_intent": intent_dump},
-        )
-
-    # Filter out internal-only keys (prefixed with _) for modify_edit
-    modify_changes = {k: v for k, v in changes.items() if not k.startswith("_")}
-
-    # Apply changes via modify_edit if there are standard changes
     modify_result: dict[str, object] = {}
-    if modify_changes:
+    if changes:
         modify_result = await clipcannon_modify_edit(
-            project_id=project_id,
-            edit_id=edit_id,
-            changes=modify_changes,
+            project_id=project_id, edit_id=edit_id, changes=changes,
+        )
+        if isinstance(modify_result, dict) and "error" in modify_result:
+            return modify_result
+    elif not special_actions:
+        return error_response(
+            "NO_CHANGES", "Feedback was parsed but produced no applicable changes.",
+            {"parser": parser, "plan": plan.model_dump()},
         )
 
-    # Collect any special actions that need separate tool calls
-    special_actions: list[dict[str, object]] = []
-    if "_color" in changes:
-        special_actions.append({
-            "action": "color_adjust",
-            "parameters": changes["_color"],
-        })
-    if "_overlay" in changes:
-        special_actions.append({
-            "action": "add_overlay",
-            "parameters": changes["_overlay"],
-        })
-    if "_motion_targets" in changes:
-        special_actions.append({
-            "action": "add_motion",
-            "parameters": changes["_motion_targets"],
-        })
+    for action in special_actions:
+        action["parameters"] = {"project_id": project_id, "edit_id": edit_id,
+                                **action["parameters"]}
 
     return {
-        "parsed_intent": intent_dump,
-        "changes_applied": changes,
+        "parser": parser,
+        "plan": plan.model_dump(),
+        "changed_fields": sorted(changes),
         "modify_result": modify_result,
-        "special_actions": special_actions if special_actions else None,
+        "special_actions": special_actions or None,
+        **({"diagnostics": diagnostics} if diagnostics else {}),
     }
+
+
+def _project_source_size(project_id: str) -> tuple[int, int]:
+    """Source video (width, height) from the project row; 1920x1080 if unknown."""
+    conn = get_connection(db_path(project_id), enable_vec=False, dict_rows=True)
+    try:
+        row = fetch_one(
+            conn, "SELECT resolution FROM project WHERE project_id = ?", (project_id,),
+        )
+    finally:
+        conn.close()
+    try:
+        w, h = str((row or {}).get("resolution", "")).lower().split("x")
+        return int(w), int(h)
+    except ValueError:
+        return 1920, 1080
 
 
 # ============================================================
@@ -1415,10 +1417,13 @@ async def dispatch_editing_tool(
             int(arguments["version_number"]),
         )
     if name == "clipcannon_apply_feedback":
+        ops = arguments.get("operations")
+        fb = arguments.get("feedback")
         return await clipcannon_apply_feedback(
             str(arguments["project_id"]),
             str(arguments["edit_id"]),
-            str(arguments["feedback"]),
+            feedback=str(fb) if fb is not None else None,
+            operations=ops if isinstance(ops, list) else None,
         )
     if name == "clipcannon_branch_edit":
         return await clipcannon_branch_edit(

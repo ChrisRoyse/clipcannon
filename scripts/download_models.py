@@ -140,6 +140,59 @@ def download_latentsync() -> bool:
     return True
 
 
+LIGHT_ASD_URL = (
+    "https://raw.githubusercontent.com/Junhua-Liao/Light-ASD/"
+    "ed38c232de5efe0261dbd68627c0ade7cdfe14eb/weight/pretrain_AVA_CVPR.model"
+)
+LIGHT_ASD_SHA256 = "d44bc3ea7baa8e0946fa3921311714a630ed8b90a1928fab0dbe30d918909317"
+
+
+def download_speaker_tracking() -> bool:
+    """Models for the speaker_tracking stage.
+
+    * insightface buffalo_l (face detection, 106-pt landmarks, ArcFace) -> ~/.insightface
+    * Light-ASD AVA weights (MIT, pinned commit + sha256) -> ~/.clipcannon/models/light-asd
+    * speechbrain/spkrec-ecapa-voxceleb (speaker embeddings) -> HuggingFace cache
+    """
+    import hashlib
+    import urllib.request
+
+    ok = True
+    try:
+        from insightface.app import FaceAnalysis
+
+        FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"]).prepare(ctx_id=-1)
+        print("  [insightface buffalo_l] ready.")
+    except Exception as exc:
+        print(f"  [insightface buffalo_l] ERROR: {exc}")
+        ok = False
+
+    target = MODELS_DIR / "light-asd" / "pretrain_AVA_CVPR.model"
+    try:
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            print("  [light-asd] Downloading pretrain_AVA_CVPR.model (~4 MB)...")
+            urllib.request.urlretrieve(LIGHT_ASD_URL, target)  # noqa: S310 (pinned https)
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        if digest != LIGHT_ASD_SHA256:
+            target.unlink()
+            raise RuntimeError(f"sha256 mismatch ({digest}); file removed")
+        print("  [light-asd] ready (sha256 verified).")
+    except Exception as exc:
+        print(f"  [light-asd] ERROR: {exc}")
+        ok = False
+
+    try:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(repo_id="speechbrain/spkrec-ecapa-voxceleb")
+        print("  [ecapa-voxceleb] ready.")
+    except Exception as exc:
+        print(f"  [ecapa-voxceleb] ERROR: {exc}")
+        ok = False
+    return ok
+
+
 def main() -> None:
     """Download all models."""
     total_gb = get_total_size()
@@ -187,7 +240,14 @@ def main() -> None:
         failed += 1
     print()
 
-    total_count = len(MODELS) + 1  # +1 for LatentSync
+    print("--- Speaker tracking (faces, active speaker, voices) ---")
+    if download_speaker_tracking():
+        succeeded += 1
+    else:
+        failed += 1
+    print()
+
+    total_count = len(MODELS) + 2  # +1 LatentSync, +1 speaker tracking
     print("=" * 60)
     print(f"  Downloaded: {succeeded}/{total_count}")
     if failed:

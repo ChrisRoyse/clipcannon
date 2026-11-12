@@ -28,6 +28,7 @@ from clipcannon.pipeline.semantic_embed import run_semantic_embed
 from clipcannon.pipeline.shot_type import run_shot_type
 from clipcannon.pipeline.source_separation import run_source_separation
 from clipcannon.pipeline.speaker_embed import run_speaker_embed
+from clipcannon.pipeline.speaker_tracking import run_speaker_tracking
 from clipcannon.pipeline.storyboard import run_storyboard
 from clipcannon.pipeline.transcribe import run_transcribe
 from clipcannon.pipeline.vfr_normalize import run_vfr_normalize
@@ -149,12 +150,20 @@ _STAGES: list[PipelineStage] = [
         run=run_highlights, timeout_s=120,
     ),
     PipelineStage(
+        # Face tracks + active speaker (Light-ASD) + voice binding -> who is
+        # speaking, where they are on screen, and what each turn is about.
+        # ~0.6x realtime on an RTX 5090, so it gets a long timeout.
+        name="speaker_tracking", operation="speaker_tracking", required=False,
+        depends_on=["transcribe"], run=run_speaker_tracking, timeout_s=7200,
+    ),
+    PipelineStage(
         name="finalize", operation="finalize", required=True,
         depends_on=[
             "transcribe", "visual_embed", "ocr", "quality",
             "shot_type", "storyboard", "semantic_embed", "narrative_llm",
             "speaker_embed", "emotion_embed", "reactions", "acoustic",
             "profanity", "chronemic", "highlights", "prosody_analysis",
+            "speaker_tracking",
         ],
         run=run_finalize, timeout_s=120,
     ),

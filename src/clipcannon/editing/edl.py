@@ -112,6 +112,29 @@ class ZoomSpec(BaseModel):
     easing: Literal["linear", "ease_in", "ease_out", "ease_in_out"] = "ease_in_out"
 
 
+class TrackedPiece(BaseModel):
+    """One shot's worth of tracked framing: fixed window, moving position.
+
+    ``keyframes`` are (source_ms, x, y) of the window's top-left corner;
+    positions between keyframes are linearly interpolated.
+    """
+
+    start_ms: int = Field(ge=0, description="Source start (ms)")
+    end_ms: int = Field(ge=0, description="Source end (ms)")
+    width: int = Field(ge=2, description="Crop window width (source px)")
+    height: int = Field(ge=2, description="Crop window height (source px)")
+    keyframes: list[tuple[int, int, int]] = Field(min_length=1)
+
+
+class TrackedFraming(BaseModel):
+    """Speaker-following framing for a segment, one piece per shot."""
+
+    pieces: list[TrackedPiece] = Field(min_length=1)
+    speakers: list[str] = Field(
+        default_factory=list, description="Person keys framed while speaking (audit)",
+    )
+
+
 class SegmentCanvasSpec(BaseModel):
     """Per-segment canvas override.
 
@@ -136,6 +159,11 @@ class SegmentCanvasSpec(BaseModel):
         default=None,
         description="Animated zoom for this segment. "
         "Mutually exclusive with regions[].",
+    )
+    track: TrackedFraming | None = Field(
+        default=None,
+        description="Speaker-following framing (computed from speaker tracking). "
+        "Mutually exclusive with regions[] and zoom.",
     )
 
 
@@ -221,7 +249,9 @@ class CaptionSpec(BaseModel):
     color: str = "#FFFFFF"
     stroke_color: str = "#000000"
     stroke_width: int = Field(default=3, ge=0, le=20)
-    position: CaptionPosition = "center"
+    # "bottom" = the safe zone above platform UI on vertical video (see
+    # caption_render._position_fields); matches the long-standing look.
+    position: CaptionPosition = "bottom"
     animation: CaptionAnimation = "word_by_word"
     chunks: list[CaptionChunk] = Field(default_factory=list)
 
